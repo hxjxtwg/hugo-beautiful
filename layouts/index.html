@@ -6,13 +6,13 @@
         {{/* 原始的 {{ with .Content }} 渲染代码已移除，以防止渲染不必要的内容 */}}
 
         <div class="posts-list">
-          {{ $pag := .Paginate (where site.RegularPages "Type" "in" site.Params.mainSections) }}
-          {{ range $pag.Pages }}
-            {{/* 核心修正：仅渲染那些 URL 不等于网站根 URL 的页面 */}}
-            {{ if ne .Permalink (urls.Abs .Site.BaseURL) }}
-              {{ partial "post_preview" . }}
-            {{ end }}
+        {{ $pag := .Paginate (where site.RegularPages "Type" "in" site.Params.mainSections) }}
+        {{ range $pag.Pages }}
+          {{/* 确保只渲染文章，跳过任何被视为页面的根目录索引 */}}
+          {{ if not .IsHome }}
+            {{ partial "post_preview" . }}
           {{ end }}
+        {{ end }}
         </div>
 
         {{ if or (.Paginator.HasPrev) (.Paginator.HasNext) }}
