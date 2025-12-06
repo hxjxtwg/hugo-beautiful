@@ -14,7 +14,7 @@ tags: ["技术"]
 
 author: "xxsky"
 
-description: ""
+description: "快速搭建节点"
 
 \# cover: /images/default.jpg
 

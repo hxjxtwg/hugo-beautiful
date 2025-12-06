@@ -41,8 +41,8 @@ pygmentsCodefencesGuessSyntax = true   # 自动猜测代码语言（如果你没
 # 主题特定参数 (Theme Params)
 # -----------------------------------------------------------
 [Params]
-#  homeTitle = "Beautiful Hugo Theme"  # 首页的大标题。如果不填，默认使用上面的 title 变量
-  subtitle = "Build a beautiful and simple website in minutes" # 副标题，显示在标题下方
+#  homeTitle = "Beautiful Hugo"  # 首页的大标题。如果不填，默认使用上面的 title 变量
+  subtitle = "beautiful and simple website" # 副标题，显示在标题下方
   
   mainSections = ["post","posts"]      # 指定哪些文件夹里的内容算作“博客文章”
   
