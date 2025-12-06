@@ -87,9 +87,9 @@ pygmentsCodefencesGuessSyntax = true   # 自动猜测代码语言（如果你没
 # 作者社交链接 (Author Social Links)
 # -----------------------------------------------------------
 [Params.author]
-  name = "Some Person"       # 你的名字（用于页脚版权声明）
-  website = "yourwebsite.com" # 你的个人主页链接
-  email = "youremail@domain.com" # 你的邮箱，填了会在页脚显示邮箱图标
+  name = "xxsky"       # 你的名字（用于页脚版权声明）
+  website = "https://nav.hxjx.hidns.co" # 你的个人主页链接
+  email = "xuhxjxhk@gmail.com" # 你的邮箱，填了会在页脚显示邮箱图标
   
   # 下面这些社交账号，有哪个填哪个，没有的直接留空或删除即可，图标会自动显示
   facebook = "username"
