@@ -3,12 +3,15 @@
     <div class="row">
       <div class="col-lg-8 col-lg-offset-2 col-md-10 col-md-offset-1">
         
-        {{/* 这里原来的 .Content 渲染代码被删除了 */}}
+        {{/* 原始的 {{ with .Content }} 渲染代码已移除，以防止渲染不必要的内容 */}}
 
         <div class="posts-list">
           {{ $pag := .Paginate (where site.RegularPages "Type" "in" site.Params.mainSections) }}
           {{ range $pag.Pages }}
-            {{ partial "post_preview" . }}
+            {{/* 核心修正：仅渲染那些 URL 不等于网站根 URL 的页面 */}}
+            {{ if ne .Permalink (urls.Abs .Site.BaseURL) }}
+              {{ partial "post_preview" . }}
+            {{ end }}
           {{ end }}
         </div>
 
