@@ -1,0 +1,236 @@
+<style>
+/* ======================================================= */
+/* 1. 基础重置 */
+/* ======================================================= */
+html, body { height: 100%; margin: 0; padding: 0; }
+body { transition: background-color 0.3s ease, color 0.3s ease; }
+
+/* ======================================================= */
+/* 2. 深色模式 (Dark Mode) - 基础配色 */
+/* ======================================================= */
+body.dark-mode {
+    background-color: #1e1e1e !important;
+    color: #e6e6e6 !important;
+}
+
+/* 链接颜色 (仅正文生效) */
+body.dark-mode a { color: #4daafc; }
+
+/* 标题与文字 */
+body.dark-mode h1, body.dark-mode h2, body.dark-mode h3, 
+body.dark-mode h4, body.dark-mode h5, body.dark-mode h6,
+body.dark-mode .post-title, body.dark-mode .post-heading h1 { color: #fff !important; }
+body.dark-mode .post-meta { color: #858585 !important; }
+
+/* 首页分割线 & 底部线条 */
+body.dark-mode .post-preview { border-bottom: 1px solid #333 !important; }
+body.dark-mode hr { border-color: #333 !important; opacity: 0.6; }
+
+/* 页脚 */
+body.dark-mode footer { background: #1e1e1e !important; color: #777 !important; border-top-color: #333 !important; }
+body.dark-mode .pager li > a, body.dark-mode .pager li > span {
+    background: #252526 !important; border-color: #333 !important; color: #ccc !important;
+}
+
+/* ======================================================= */
+/* 3. 导航栏 (菜单栏) 优化 */
+/* ======================================================= */
+
+/* 背景：深灰 */
+body.dark-mode .navbar-custom {
+    background-color: #252526 !important; 
+    border-bottom: 1px solid #333 !important;
+}
+
+/* 【关键修改】字体颜色：提亮到 #e0e0e0 (亮灰白)，解决看不清的问题 */
+body.dark-mode .navbar-custom .navbar-brand,
+body.dark-mode .navbar-custom .nav > li > a {
+    color: #e0e0e0 !important; 
+}
+
+/* 鼠标悬停：变纯白 */
+body.dark-mode .navbar-custom .navbar-brand:hover,
+body.dark-mode .navbar-custom .nav > li > a:hover {
+    color: #ffffff !important;
+}
+
+/* ======================================================= */
+/* 4. 切换按钮 (黑白字符版) */
+/* ======================================================= */
+.theme-toggle-btn {
+    display: flex; align-items: center; justify-content: center; height: 100%; padding: 15px; 
+    cursor: pointer; color: #666; transition: color 0.3s;
+    font-size: 20px; line-height: 1;
+}
+.theme-toggle-btn:hover { color: #000; }
+body.dark-mode .theme-toggle-btn { color: #ccc; } /* 图标也稍微提亮一点 */
+body.dark-mode .theme-toggle-btn:hover { color: #fff; }
+
+/* ======================================================= */
+/* 5. 滚动条美化 */
+/* ======================================================= */
+body.dark-mode ::-webkit-scrollbar { height: 10px; width: 10px; background: #1e1e1e; }
+body.dark-mode ::-webkit-scrollbar-thumb { background: #444; border-radius: 5px; }
+body.dark-mode ::-webkit-scrollbar-thumb:hover { background: #555; }
+body.dark-mode ::-webkit-scrollbar-corner { background: #1e1e1e; }
+
+/* ======================================================= */
+/* 6. 代码块逻辑 (完美版：去框 + 红悬停 + 智能折叠) */
+/* ======================================================= */
+/* A. 隐藏旧按钮 */
+.highlight button:not(.c-btn), .copy-to-clipboard, .copy-code-button { display: none !important; }
+/* B. 浅色模式 */
+.highlight { position: relative !important; }
+
+/* C. 深色模式 - 无边框融合 */
+body.dark-mode .highlight {
+    background-color: #1e1e1e !important;
+    border: 1px solid #333 !important; 
+    border-radius: 6px !important;
+}
+body.dark-mode .highlight pre, body.dark-mode .highlight code,
+body.dark-mode .highlight table, body.dark-mode .highlight tr, body.dark-mode .highlight td {
+    background-color: transparent !important; color: #d4d4d4 !important; border: none !important;
+}
+
+/* 语法高亮 */
+body.dark-mode .chroma .k, body.dark-mode .chroma .kd, body.dark-mode .chroma .kt { color: #569cd6 !important; } 
+body.dark-mode .chroma .s, body.dark-mode .chroma .s1 { color: #ce9178 !important; } 
+body.dark-mode .chroma .c, body.dark-mode .chroma .c1 { color: #6a9955 !important; } 
+body.dark-mode .chroma .nf { color: #dcdcaa !important; } 
+body.dark-mode .chroma .lnt { color: #555 !important; }
+
+/* D. 按钮组 */
+.code-tools { 
+    position: absolute; top: 4px; right: 4px; z-index: 20; display: flex;
+    background: transparent !important; opacity: 0; transition: opacity 0.2s;
+}
+.highlight:hover .code-tools { opacity: 1; }
+
+/* 按钮样式 */
+.c-btn { 
+    width: 26px; height: 26px; 
+    border: none !important; background: transparent !important; 
+    cursor: pointer; padding: 0; margin: 0;
+    display:flex; justify-content:center; align-items:center; 
+    transition: color 0.2s ease;
+    color: #999; 
+}
+.c-btn:hover { color: #ff4757 !important; }
+body.dark-mode .c-btn { color: #666; }
+body.dark-mode .c-btn:hover { color: #ff4757 !important; }
+
+/* E. 折叠 */
+.highlight.folded { height: 200px !important; overflow: hidden !important; }
+
+/* ======================================================= */
+/* 7. Halo 赛车动画 */
+/* ======================================================= */
+#halo-racer-loader { 
+    position: fixed !important; top: 0 !important; left: 0 !important; right: 0 !important; bottom: 0 !important;      
+    width: 100% !important; height: 100% !important; z-index: 999999999 !important; 
+    background: #ffffff; display: flex !important; justify-content: center !important; align-items: center !important; 
+    transition: opacity 0.3s ease, visibility 0.3s ease;
+}
+body.dark-mode #halo-racer-loader { background: #1e1e1e !important; }
+#halo-racer-loader.hidden { opacity: 0; visibility: hidden; }
+
+.racer-container { position: relative; width: 80px; height: 20px; }
+.bar { position: absolute; top: 0; left: 0; width: 12px; height: 20px; border-radius: 0; }
+.p1 { background: rgba(255,71,87,0.2); z-index:1; animation: run 1.5s cubic-bezier(.4,0,.2,1) infinite 0.15s; }
+.p2 { background: rgba(255,71,87,0.5); z-index:2; animation: run 1.5s cubic-bezier(.4,0,.2,1) infinite 0.08s; }
+.red { background: #ff4757; z-index:10; animation: run 1.5s cubic-bezier(.4,0,.2,1) infinite 0s; }
+@keyframes run { 0%{left:0} 30%{left:68px} 50%{left:68px} 80%{left:0} 100%{left:0} }
+</style>
+
+<script>
+// 1. 注入动画
+(function() {
+  document.write(`<div id="halo-racer-loader"><div class="racer-container"><div class="bar p1"></div><div class="bar p2"></div><div class="bar red"></div></div></div>`);
+  window.addEventListener('load', function() {
+    const loader = document.getElementById('halo-racer-loader');
+    setTimeout(() => { if(loader){ loader.classList.add('hidden'); setTimeout(() => { loader.style.display = 'none'; }, 300); }}, 800); 
+  });
+})();
+
+// 2. 深色模式切换 (黑夜=月亮，白天=太阳)
+(function() {
+    const isDark = localStorage.getItem('theme') === 'dark';
+    if(isDark) document.body.classList.add('dark-mode');
+
+    document.addEventListener('DOMContentLoaded', function() {
+        const navList = document.querySelector('.navbar-nav'); 
+        if(!navList) return;
+
+        const li = document.createElement('li');
+        const link = document.createElement('a');
+        link.className = "theme-toggle-btn";
+        link.title = "Switch Theme";
+        
+        link.innerHTML = isDark ? "☾" : "☀"; 
+        
+        link.onclick = function() {
+            document.body.classList.toggle('dark-mode');
+            const currentMode = document.body.classList.contains('dark-mode') ? 'dark' : 'light';
+            localStorage.setItem('theme', currentMode);
+            link.innerHTML = currentMode === 'dark' ? "☾" : "☀";
+        };
+        li.appendChild(link);
+        navList.appendChild(li);
+    });
+})();
+
+// 3. 代码块工具
+document.addEventListener('DOMContentLoaded', function() {
+    const svgCopy = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+    const svgCheck = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#28a745" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+    const svgFold = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"></polyline></svg>';
+    const svgUnfold = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>';
+
+    document.querySelectorAll('.highlight').forEach(block => {
+        if (block.querySelector('.code-tools')) return;
+        
+        const tools = document.createElement('div');
+        tools.className = 'code-tools';
+
+        let isLongCode = block.offsetHeight > 300;
+        if (isLongCode) {
+            const btnFold = document.createElement('button'); 
+            btnFold.className = 'c-btn';
+            
+            block.classList.add('folded'); 
+            btnFold.innerHTML = svgUnfold; 
+            btnFold.title = "展开"; 
+            
+            btnFold.onclick = () => { 
+                if (block.classList.contains('folded')) {
+                    block.classList.remove('folded');
+                    btnFold.innerHTML = svgFold; 
+                    btnFold.title = "折叠";
+                } else {
+                    block.classList.add('folded');
+                    btnFold.innerHTML = svgUnfold; 
+                    btnFold.title = "展开";
+                    block.scrollIntoView({behavior: "smooth", block: "center"});
+                }
+            };
+            tools.appendChild(btnFold);
+        }
+
+        const btnCopy = document.createElement('button'); 
+        btnCopy.className = 'c-btn'; 
+        btnCopy.innerHTML = svgCopy; 
+        btnCopy.title = "复制";
+        
+        btnCopy.onclick = () => {
+            navigator.clipboard.writeText(block.innerText).then(() => {
+                btnCopy.innerHTML = svgCheck;
+                setTimeout(() => { btnCopy.innerHTML = svgCopy; }, 2000);
+            });
+        };
+        
+        tools.appendChild(btnCopy); 
+        block.appendChild(tools);
+    });
+});
+</script>
