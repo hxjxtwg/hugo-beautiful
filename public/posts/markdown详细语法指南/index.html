@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="zh-cn" dir="auto" data-theme="light">
+
+<head><script src="/livereload.js?mindelay=10&amp;v=2&amp;port=1313&amp;path=livereload" data-no-instant defer></script><meta charset="utf-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+<meta name="robots" content="noindex, nofollow">
+<title>Markdown详细语法指南 | 我的博客</title>
+<meta name="keywords" content="技术">
+<meta name="description" content="整理的Markdown语法，方便参考写博文。">
+<meta name="author" content="xxsky">
+<link rel="canonical" href="http://localhost:1313/posts/markdown%E8%AF%A6%E7%BB%86%E8%AF%AD%E6%B3%95%E6%8C%87%E5%8D%97/">
+<link crossorigin="anonymous" href="/assets/css/stylesheet.fd5566c526ae48aadabd950798a2dc3568536401560eae5caac3765a42a9e7b5.css" integrity="sha256-/VVmxSauSKravZUHmKLcNWhTZAFWDq5cqsN2WkKp57U=" rel="preload stylesheet" as="style">
+<link rel="icon" href="http://localhost:1313/favicon.ico">
+<link rel="icon" type="image/png" sizes="16x16" href="http://localhost:1313/favicon-16x16.png">
+<link rel="icon" type="image/png" sizes="32x32" href="http://localhost:1313/favicon-32x32.png">
+<link rel="apple-touch-icon" href="http://localhost:1313/apple-touch-icon.png">
+<link rel="mask-icon" href="http://localhost:1313/safari-pinned-tab.svg">
+<meta name="theme-color" content="#2e2e33">
+<meta name="msapplication-TileColor" content="#2e2e33">
+<link rel="alternate" hreflang="zh-cn" href="http://localhost:1313/posts/markdown%E8%AF%A6%E7%BB%86%E8%AF%AD%E6%B3%95%E6%8C%87%E5%8D%97/">
+<noscript>
+    <style>
+        #theme-toggle,
+        .top-link {
+            display: none;
+        }
+
+    </style>
+</noscript>
+<script>
+    if (localStorage.getItem("pref-theme") === "dark") {
+        document.querySelector("html").dataset.theme = 'dark';
+    }
+
+</script>
+</head>
+<body id="top">
+    <header class="header">
+    <nav class="nav">
+        <div class="logo">
+            <a href="http://localhost:1313/" accesskey="h" title="我的博客 (Alt + H)">我的博客</a>
+            <div class="logo-switches">
+                <button id="theme-toggle" accesskey="t" title="(Alt + T)" aria-label="Toggle theme">
+                    <svg id="moon" xmlns="http://www.w3.org/2000/svg" width="24" height="18" viewBox="0 0 24 24"
+                        fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round">
+                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                    </svg>
+                    <svg id="sun" xmlns="http://www.w3.org/2000/svg" width="24" height="18" viewBox="0 0 24 24"
+                        fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="5"></circle>
+                        <line x1="12" y1="1" x2="12" y2="3"></line>
+                        <line x1="12" y1="21" x2="12" y2="23"></line>
+                        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                        <line x1="1" y1="12" x2="3" y2="12"></line>
+                        <line x1="21" y1="12" x2="23" y2="12"></line>
+                        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                    </svg>
+                </button>
+            </div>
+        </div>
+        <ul id="menu">
+            <li>
+                <a href="http://localhost:1313/categories/" title="分类">
+                    <span>分类</span>
+                </a>
+            </li>
+            <li>
+                <a href="http://localhost:1313/tags/" title="标签">
+                    <span>标签</span>
+                </a>
+            </li>
+            <li>
+                <a href="http://localhost:1313/archives/" title="归档">
+                    <span>归档</span>
+                </a>
+            </li>
+        </ul>
+    </nav>
+</header>
+<main class="main">
+
+<article class="post-single">
+  <header class="post-header">
+    
+    <h1 class="post-title entry-hint-parent">
+      Markdown详细语法指南
+    </h1>
+    <div class="post-meta"><span title='2025-12-03 21:15:38 +0800 CST'>December 3, 2025</span>&nbsp;·&nbsp;<span>5 min</span>&nbsp;·&nbsp;<span>xxsky</span>
+
+</div>
+  </header> 
+  <div class="post-content"><p>整理的Markdown语法，方便参考写博文。</p>
+<h3 id="1-标题-headings">1. 标题 (Headings)<a hidden class="anchor" aria-hidden="true" href="#1-标题-headings">#</a></h3>
+<p>使用 # 号创建标题，支持一到六级。# 的数量代表标题的级别</p>
+<p>语法：</p>
+<p><code>#</code> 一级标题</p>
+<p><code>##</code> 二级标题</p>
+<p><code>###</code> 三级标题</p>
+<p><code>####</code> 四级标题</p>
+<p><code>#####</code> 五级标题</p>
+<p><code>######</code> 六级标题</p>
+<h3 id="2-段落和换行-paragraphs--line-breaks">2. 段落和换行 (Paragraphs &amp; Line Breaks) <a hidden class="anchor" aria-hidden="true" href="#2-段落和换行-paragraphs--line-breaks">#</a></h3>
+<p>段落：一个或多个连续的文本行构成一个段落。段落之间需要一个或多个空行来分隔</p>
+<p>强制换行：如果您想在段落内强制换行，可以在一行的末尾输入两个或更多的空格，然后按回车</p>
+<h3 id="3-文字格式-text-formatting">3. 文字格式 (Text Formatting)<a hidden class="anchor" aria-hidden="true" href="#3-文字格式-text-formatting">#</a></h3>
+<ul>
+<li>
+<p>粗体 (Bold): <code>**</code>文字<code>**</code> 或 <code>__</code>文字<code>__</code></p>
+</li>
+<li>
+<p>斜体 (Italic): <code>*</code>文字<code>*</code> 或 <code>_</code>文字<code>_</code></p>
+</li>
+<li>
+<p>粗斜体 (Bold &amp; Italic): <code>***</code>文字<code>***</code> 或 <code>___</code>文字<code>___</code></p>
+</li>
+<li>
+<p>删除线 (Strikethrough): <code>~~</code>文字<code>~~</code></p>
+</li>
+<li>
+<p>下划线 (Underline): HTML 标签 <code>&lt;u&gt;</code>文字<code>&lt;/u&gt;</code> (非标准 Markdown)</p>
+<p>语法：</p>
+<p><code>**</code>这是粗体<code>**</code></p>
+<p><code>*</code>这是斜体<code>*</code></p>
+<p><code>***</code>这是粗斜体<code>***</code></p>
+<p><code>~~</code>这是删除线<code>~~</code></p>
+<p><code>&lt;u&gt;</code>这是下划线<code>&lt;/u&gt;</code></p>
+<p>示例：</p>
+<p><strong>这是粗体</strong></p>
+<p><em>这是斜体</em></p>
+<p><em><strong>这是粗斜体</strong></em></p>
+<p><del>这是删除线</del></p>
+<p><!-- raw HTML omitted -->这是下划线<!-- raw HTML omitted --></p>
+</li>
+</ul>
+<h3 id="4-列表-lists">4. 列表 (Lists)<a hidden class="anchor" aria-hidden="true" href="#4-列表-lists">#</a></h3>
+<ul>
+<li>
+<p>无序列表 (Unordered List)</p>
+<p>使用 <code>-</code>, <code>+</code>, 或<code>*</code>标记，符号后需加一个空格。</p>
+<p>语法：</p>
+<p><code>-</code>或<code>*</code> 项目一</p>
+<p><code>-</code>或<code>*</code> 项目二</p>
+<pre><code> -或* 嵌套项目一
+
+ -或* 嵌套项目二
+</code></pre>
+<p>效果：</p>
+<ul>
+<li>
+<p>项目一</p>
+</li>
+<li>
+<p>项目二</p>
+<ul>
+<li>嵌套项目一</li>
+<li>嵌套项目二</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>
+<p>有序列表 (Ordered List)</p>
+<p>使用数字加英文句点<code>.</code>，然后空格接内容，数字顺序不影响最终显示。</p>
+<p>语法：</p>
+<ol>
+<li>第一项</li>
+<li>第二项</li>
+<li>第三项</li>
+</ol>
+</li>
+</ul>
+<h3 id="5-链接-links">5. 链接 (Links)<a hidden class="anchor" aria-hidden="true" href="#5-链接-links">#</a></h3>
+<p>语法：</p>
+<p><code>[链接显示的文字](链接地址 &quot;可选的标题&quot;)</code></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-fallback" data-lang="fallback"><span class="line"><span class="ln">1</span><span class="cl">[访问我的博客](https://bg.363689.xyz &#34;我的个人博客&#34;)
+</span></span></code></pre></div><p>效果： <a href="https://bg.363689.xyz" title="我的个人博客">访问我的博客</a></p>
+<h3 id="6-图片-images">6. 图片 (Images)<a hidden class="anchor" aria-hidden="true" href="#6-图片-images">#</a></h3>
+<ul>
+<li>
+<p>语法与链接类似，但在最前面加一个感叹号 !</p>
+<p>语法：</p>
+<p><code>![图片替代文字](图片地址 &quot;可选的标题&quot;)</code></p>
+<p>示例：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-fallback" data-lang="fallback"><span class="line"><span class="ln">1</span><span class="cl">![Logo](https://placehold.co/150x50/dbeafe/3b82f6?text=Logo)
+</span></span></code></pre></div></li>
+<li>
+<p>HTML <!-- raw HTML omitted --> 标签插入图片（用于更多控制）</p>
+<p>当标准 Markdown 语法不足以满足需求时（例如，需要调整图片大小、浮动、添加边框等），可以回退到使用 HTML 的 <!-- raw HTML omitted --> 标签。这提供了更多的控制，因为它允许你使用 HTML 属性和 CSS 样式。</p>
+<p>语法：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="line"><span class="ln">1</span><span class="cl"><span class="p">&lt;</span><span class="nt">img</span> <span class="na">src</span><span class="o">=</span><span class="s">&#34;图片URL&#34;</span> <span class="na">alt</span><span class="o">=</span><span class="s">&#34;alt text&#34;</span> <span class="na">title</span><span class="o">=</span><span class="s">&#34;可选的标题&#34;</span> <span class="na">width</span><span class="o">=</span><span class="s">&#34;宽度&#34;</span> <span class="na">height</span><span class="o">=</span><span class="s">&#34;高度&#34;</span> <span class="na">style</span><span class="o">=</span><span class="s">&#34;CSS样式&#34;</span><span class="p">&gt;</span>
+</span></span></code></pre></div><p>常用属性：
+src：必需。图片的 URL。
+alt：必需。替代文本，与 Markdown 中的 alt text 相同。
+title：可选的悬停文本，与 Markdown 中的 title 相同。
+width：设置图片的宽度（可以为像素值 px 或百分比 %）。
+height：设置图片的高度（可以为像素值 px 或百分比 %）。
+style：通过 CSS 样式来控制图片，这是最强大的地方，可以设置边框、外边距、浮动、甚至一些高级效果。</p>
+<p>示例（调整大小）：
+这张图片宽度为200像素</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="line"><span class="ln">1</span><span class="cl"><span class="p">&lt;</span><span class="nt">img</span> <span class="na">src</span><span class="o">=</span><span class="s">&#34;https://cdn.pixabay.com/photo/2015/04/23/22/00/tree-736885_960_720.jpg&#34;</span> <span class="na">alt</span><span class="o">=</span><span class="s">&#34;风景图&#34;</span> <span class="na">width</span><span class="o">=</span><span class="s">&#34;200&#34;</span><span class="p">&gt;</span>
+</span></span></code></pre></div><p>效果：</p>
+<!-- raw HTML omitted -->
+<p>示例:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="line"><span class="ln">1</span><span class="cl"> <span class="p">&lt;</span><span class="nt">div</span> <span class="na">style</span><span class="o">=</span><span class="s">&#34;text-align: center;&#34;</span><span class="p">&gt;</span>
+</span></span><span class="line"><span class="ln">2</span><span class="cl"> <span class="p">&lt;</span><span class="nt">img</span> <span class="na">src</span><span class="o">=</span><span class="s">&#34;https://cdn.pixabay.com/photo/2015/04/23/22/00/tree-736885_960_720.jpg&#34;</span> <span class="na">alt</span><span class="o">=</span><span class="s">&#34;风景图&#34;</span> <span class="na">width</span><span class="o">=</span><span class="s">&#34;300&#34;</span> <span class="na">style</span><span class="o">=</span><span class="s">&#34;border: 2px solid blue; border-radius: 5px; margin: 10px;&#34;</span><span class="p">&gt;</span>
+</span></span><span class="line"><span class="ln">3</span><span class="cl"> <span class="p">&lt;</span><span class="nt">p</span> <span class="na">style</span><span class="o">=</span><span class="s">&#34;font-size: 0.9em; color: gray;&#34;</span><span class="p">&gt;</span>这是带蓝色边框的居中图片。<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+</span></span><span class="line"><span class="ln">4</span><span class="cl"> <span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+</span></span></code></pre></div><p>效果：</p>
+<!-- raw HTML omitted -->
+</li>
+</ul>
+<h3 id="7-引用-blockquotes">7. 引用 (Blockquotes)<a hidden class="anchor" aria-hidden="true" href="#7-引用-blockquotes">#</a></h3>
+<p>引用(Blockquote)是一种常用于引述他人话语、文章段落或者突出显示某段文字的格式。它的语法非常简单。</p>
+<ul>
+<li>
+<p>基本用法</p>
+<p>在要引用的文本段落前加上一个大于号 <code>&gt;</code></p>
+<p>语法：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-fallback" data-lang="fallback"><span class="line"><span class="ln">1</span><span class="cl">&gt; 这里是一段引用的文字。它会自动被格式化，通常会以缩进或者左侧边框的形式显示。
+</span></span></code></pre></div><p>渲染效果：</p>
+<blockquote>
+<p>这里是一段引用的文字。它会自动被格式化，通常会以缩进或者左侧边框的形式显示。</p>
+</blockquote>
+</li>
+<li>
+<p>多段落引用
+如果你想引用多个段落，可以在每个段落前都加上 &gt;</p>
+<p>语法：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-fallback" data-lang="fallback"><span class="line"><span class="ln">1</span><span class="cl">&gt; 这是第一个引用的段落。
+</span></span><span class="line"><span class="ln">2</span><span class="cl">&gt;
+</span></span><span class="line"><span class="ln">3</span><span class="cl">&gt; &gt; 这是第二个引用的段落。在段落之间留一个空行，并在新段落前也加上 `&gt;`。
+</span></span></code></pre></div><p>渲染效果：</p>
+<blockquote>
+<p>这是第一个引用的段落。</p>
+<blockquote>
+<p>这是第二个引用的段落。在段落之间留一个空行，并在新段落前也加上 &gt;。</p>
+</blockquote>
+</blockquote>
+</li>
+<li>
+<p>懒加载模式</p>
+<p>对于一个连续的长段落，你也可以只在第一行前面加上 &gt;，后面的行会自动被包含在引用中，直到遇到一个空行。</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-fallback" data-lang="fallback"><span class="line"><span class="ln">1</span><span class="cl">&gt; 这是一个很长的引用段落，为了方便书写，我只在第一行的开头加了大于号。
+</span></span><span class="line"><span class="ln">2</span><span class="cl">接下来的几行文字，即使前面没有大于号，也会被视为同一次引用的一部分。
+</span></span><span class="line"><span class="ln">3</span><span class="cl">直到这里为止。
+</span></span><span class="line"><span class="ln">4</span><span class="cl">
+</span></span><span class="line"><span class="ln">5</span><span class="cl">这一行就不在引用内了。
+</span></span></code></pre></div><p>渲染效果：</p>
+<blockquote>
+<p>这是一个很长的引用段落，为了方便书写，我只在第一行的开头加了大于号。
+接下来的几行文字，即使前面没有大于号，也会被视为同一次引用的一部分。
+直到这里为止。</p>
+</blockquote>
+<p>这一行就不在引用内了。</p>
+</li>
+<li>
+<p>嵌套引用</p>
+<p>引用可以嵌套使用，只需要增加 &gt; 的数量即可。</p>
+<p>语法：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-fallback" data-lang="fallback"><span class="line"><span class="ln">1</span><span class="cl">&gt; 这是第一层引用。
+</span></span><span class="line"><span class="ln">2</span><span class="cl">&gt;
+</span></span><span class="line"><span class="ln">3</span><span class="cl">&gt; &gt; 这是嵌套的第二层引用。
+</span></span><span class="line"><span class="ln">4</span><span class="cl">&gt; &gt;
+</span></span><span class="line"><span class="ln">5</span><span class="cl">&gt; &gt; &gt; 这是更深一层的第三层引用。
+</span></span><span class="line"><span class="ln">6</span><span class="cl">&gt; &gt; &gt;
+</span></span><span class="line"><span class="ln">7</span><span class="cl">&gt; 回到第一层引用。
+</span></span></code></pre></div><p>渲染效果：</p>
+<blockquote>
+<p>这是第一层引用。</p>
+<blockquote>
+<p>这是嵌套的第二层引用。</p>
+<blockquote>
+<p>这是更深一层的第三层引用。</p>
+</blockquote>
+</blockquote>
+<p>回到第一层引用。</p>
+</blockquote>
+</li>
+<li>
+<p>在引用中使用其他 Markdown 语法</p>
+<p>引用块内几乎可以包含所有其他的 Markdown 元素，比如标题、列表、粗体、代码块等。</p>
+<p>语法：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-fallback" data-lang="fallback"><span class="line"><span class="ln"> 1</span><span class="cl">&gt; ### 这是一个在引用中的三级标题
+</span></span><span class="line"><span class="ln"> 2</span><span class="cl">
+</span></span><span class="line"><span class="ln"> 3</span><span class="cl">&gt; 1. 这是引用中的一个 **有序列表** 项。
+</span></span><span class="line"><span class="ln"> 4</span><span class="cl">&gt; 2. 这是列表的第二项，包含一些 `行内代码`。
+</span></span><span class="line"><span class="ln"> 5</span><span class="cl">&gt; - 这是一个 *无序列表* 项。
+</span></span><span class="line"><span class="ln"> 6</span><span class="cl">
+</span></span><span class="line"><span class="ln"> 7</span><span class="cl">&gt; ```python
+</span></span><span class="line"><span class="ln"> 8</span><span class="cl">&gt; # 这是一个代码块
+</span></span><span class="line"><span class="ln"> 9</span><span class="cl">&gt; print(&#34;Hello, Markdown!&#34;)
+</span></span><span class="line"><span class="ln">10</span><span class="cl">  ```
+</span></span></code></pre></div><p>渲染效果：</p>
+<blockquote>
+<h3 id="这是一个在引用中的三级标题">这是一个在引用中的三级标题<a hidden class="anchor" aria-hidden="true" href="#这是一个在引用中的三级标题">#</a></h3>
+</blockquote>
+<blockquote>
+<ol>
+<li>这是引用中的一个 有序列表 项。</li>
+<li>这是列表的第二项，包含一些<code>行内代码</code>。</li>
+</ol>
+<ul>
+<li>这是一个 无序列表 项。</li>
+</ul>
+</blockquote>
+<blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-python" data-lang="python"><span class="line"><span class="ln">1</span><span class="cl"><span class="c1"># 这是一个代码块</span>
+</span></span><span class="line"><span class="ln">2</span><span class="cl"><span class="nb">print</span><span class="p">(</span><span class="s2">&#34;Hello, Markdown!&#34;</span><span class="p">)</span>
+</span></span></code></pre></div></blockquote>
+</li>
+</ul>
+<h3 id="8-代码-code">8. 代码 (Code)<a hidden class="anchor" aria-hidden="true" href="#8-代码-code">#</a></h3>
+<p>行内代码 (Inline Code)</p>
+<p>使用一对反引号` 包裹</p>
+<p>语法： 这行代码是 let name = &ldquo;Markdown&rdquo;;</p>
+<p>代码块 (Code Block)</p>
+<p>使用三对反引号 包裹，并可以在第一组反引号后指定语言（如 javascript, python, bash）以实现语法高亮。</p>
+<p>示例：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-fallback" data-lang="fallback"><span class="line"><span class="ln"> 1</span><span class="cl">JavaScript 示例：
+</span></span><span class="line"><span class="ln"> 2</span><span class="cl">
+</span></span><span class="line"><span class="ln"> 3</span><span class="cl">
+</span></span><span class="line"><span class="ln"> 4</span><span class="cl">  ```javascript
+</span></span><span class="line"><span class="ln"> 5</span><span class="cl">  function sayHello() {
+</span></span><span class="line"><span class="ln"> 6</span><span class="cl">
+</span></span><span class="line"><span class="ln"> 7</span><span class="cl">
+</span></span><span class="line"><span class="ln"> 8</span><span class="cl">    console.log(&#34;Hello, world!&#34;);
+</span></span><span class="line"><span class="ln"> 9</span><span class="cl">
+</span></span><span class="line"><span class="ln">10</span><span class="cl">
+</span></span><span class="line"><span class="ln">11</span><span class="cl">  }
+</span></span><span class="line"><span class="ln">12</span><span class="cl">  ```
+</span></span></code></pre></div><p>JavaScript 效果：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-javascript" data-lang="javascript"><span class="line"><span class="ln">1</span><span class="cl"><span class="kd">function</span> <span class="nx">sayHello</span><span class="p">()</span> <span class="p">{</span>
+</span></span><span class="line"><span class="ln">2</span><span class="cl">
+</span></span><span class="line"><span class="ln">3</span><span class="cl">  <span class="nx">console</span><span class="p">.</span><span class="nx">log</span><span class="p">(</span><span class="s2">&#34;Hello, world!&#34;</span><span class="p">);</span>
+</span></span><span class="line"><span class="ln">4</span><span class="cl">
+</span></span><span class="line"><span class="ln">5</span><span class="cl"><span class="p">}</span>
+</span></span></code></pre></div><p>示例：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-fallback" data-lang="fallback"><span class="line"><span class="ln"> 1</span><span class="cl">```bash
+</span></span><span class="line"><span class="ln"> 2</span><span class="cl"># 列出当前目录的文件和文件夹
+</span></span><span class="line"><span class="ln"> 3</span><span class="cl">
+</span></span><span class="line"><span class="ln"> 4</span><span class="cl">ls -la
+</span></span><span class="line"><span class="ln"> 5</span><span class="cl">
+</span></span><span class="line"><span class="ln"> 6</span><span class="cl"># 输出一条消息到终端
+</span></span><span class="line"><span class="ln"> 7</span><span class="cl">
+</span></span><span class="line"><span class="ln"> 8</span><span class="cl">echo &#34;这是一个 Bash 脚本示例&#34;
+</span></span><span class="line"><span class="ln"> 9</span><span class="cl">
+</span></span><span class="line"><span class="ln">10</span><span class="cl"># 进入 &#39;documents&#39; 文件夹
+</span></span><span class="line"><span class="ln">11</span><span class="cl">
+</span></span><span class="line"><span class="ln">12</span><span class="cl">cd documents
+</span></span><span class="line"><span class="ln">13</span><span class="cl">```
+</span></span></code></pre></div><p>Bash/Shell 效果：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="ln"> 1</span><span class="cl"><span class="c1"># 列出当前目录的文件和文件夹</span>
+</span></span><span class="line"><span class="ln"> 2</span><span class="cl">
+</span></span><span class="line"><span class="ln"> 3</span><span class="cl">ls -la
+</span></span><span class="line"><span class="ln"> 4</span><span class="cl">
+</span></span><span class="line"><span class="ln"> 5</span><span class="cl"><span class="c1"># 输出一条消息到终端</span>
+</span></span><span class="line"><span class="ln"> 6</span><span class="cl">
+</span></span><span class="line"><span class="ln"> 7</span><span class="cl"><span class="nb">echo</span> <span class="s2">&#34;这是一个 Bash 脚本示例&#34;</span>
+</span></span><span class="line"><span class="ln"> 8</span><span class="cl">
+</span></span><span class="line"><span class="ln"> 9</span><span class="cl"><span class="c1"># 进入 &#39;documents&#39; 文件夹</span>
+</span></span><span class="line"><span class="ln">10</span><span class="cl">
+</span></span><span class="line"><span class="ln">11</span><span class="cl"><span class="nb">cd</span> documents/
+</span></span></code></pre></div><h3 id="9-表格-tables">9. 表格 (Tables)<a hidden class="anchor" aria-hidden="true" href="#9-表格-tables">#</a></h3>
+<p>基本语法</p>
+<p>Markdown 表格使用管道符 | 来定义单元格和列，使用连字符 - 来分隔表头和表格主体。</p>
+<p>基本结构：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-fallback" data-lang="fallback"><span class="line"><span class="ln">1</span><span class="cl">| 表头 1 | 表头 2 | 表头 3 |
+</span></span><span class="line"><span class="ln">2</span><span class="cl">|---|---|---|
+</span></span><span class="line"><span class="ln">3</span><span class="cl">| 内容 1 | 内容 2 | 内容 3 |
+</span></span><span class="line"><span class="ln">4</span><span class="cl">| 内容 4 | 内容 5 | 内容 6 |
+</span></span></code></pre></div><p>渲染效果：</p>
+<table>
+  <thead>
+      <tr>
+          <th>表头 1</th>
+          <th>表头 2</th>
+          <th>表头 3</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td>内容 1</td>
+          <td>内容 2</td>
+          <td>内容 3</td>
+      </tr>
+      <tr>
+          <td>内容 4</td>
+          <td>内容 5</td>
+          <td>内容 6</td>
+      </tr>
+  </tbody>
+</table>
+<p>关键点：</p>
+<p>第一行是表头，第二行是分隔符行，用于将表头和表格内容分开。</p>
+<p>第三行及以后是表格的每一行数据。</p>
+<p>每一行都由管道符 | 分隔单元格。</p>
+<p>最外侧的管道符 | 是可选的，但为了美观和清晰，建议加上。</p>
+<p>分隔符行中的连字符 - 数量至少需要一个，但为了对齐美观，可以增加多个。</p>
+<p>对齐方式</p>
+<p>您可以在分隔符行中使用冒号 : 来控制列的对齐方式。</p>
+<p>:&mdash; 或 &mdash;左对齐（默认）</p>
+<p>:&ndash;: 居中对齐</p>
+<p>&mdash;: 右对齐</p>
+<p>示例：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-fallback" data-lang="fallback"><span class="line"><span class="ln">1</span><span class="cl">| 左对齐 | 居中 | 右对齐 |
+</span></span><span class="line"><span class="ln">2</span><span class="cl">| :--- | :--: | ---: |
+</span></span><span class="line"><span class="ln">3</span><span class="cl">| 文本 | 文本 | 文本 |
+</span></span><span class="line"><span class="ln">4</span><span class="cl">| 更多内容 | 更多内容 | 更多内容 |
+</span></span></code></pre></div><p>渲染效果：</p>
+<table>
+  <thead>
+      <tr>
+          <th style="text-align: left">左对齐</th>
+          <th style="text-align: center">居中</th>
+          <th style="text-align: right">右对齐</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td style="text-align: left">文本</td>
+          <td style="text-align: center">文本</td>
+          <td style="text-align: right">文本</td>
+      </tr>
+      <tr>
+          <td style="text-align: left">更多内容</td>
+          <td style="text-align: center">更多内容</td>
+          <td style="text-align: right">更多内容</td>
+      </tr>
+  </tbody>
+</table>
+<p>在单元格内使用其他 Markdown 语法
+表格的单元格内可以包含几乎所有的行内 Markdown 格式，例如链接、粗体、斜体、删除线、代码等。</p>
+<p>示例：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-fallback" data-lang="fallback"><span class="line"><span class="ln">1</span><span class="cl">| 格式 | 示例 | 描述 |
+</span></span><span class="line"><span class="ln">2</span><span class="cl">|---|---|---|
+</span></span><span class="line"><span class="ln">3</span><span class="cl">| **粗体** | `**Bold Text**` | 使文本加粗。 |
+</span></span><span class="line"><span class="ln">4</span><span class="cl">| *斜体* | `*Italic Text*` | 使文本倾斜。 |
+</span></span><span class="line"><span class="ln">5</span><span class="cl">| `代码` | `` `code()` `` | 用于显示简短的代码片段。 |
+</span></span><span class="line"><span class="ln">6</span><span class="cl">| [链接](https://www.google.com) | `[链接](https://www.google.com)` | 创建一个超链接。 |
+</span></span><span class="line"><span class="ln">7</span><span class="cl">| ~~删除线~~ | `~~Strikethrough~~` | 给文本添加删除线。 |
+</span></span><span class="line"><span class="ln">8</span><span class="cl">| 换行 | 使用 `&lt;br&gt;` 标签 | 可以在单元格内强制换行。 |
+</span></span></code></pre></div><p>渲染效果：</p>
+<table>
+  <thead>
+      <tr>
+          <th>格式</th>
+          <th>示例</th>
+          <th>描述</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td><strong>粗体</strong></td>
+          <td><strong>Bold Text</strong></td>
+          <td>使文本加粗。</td>
+      </tr>
+      <tr>
+          <td><em>斜体</em></td>
+          <td><em>Italic Text</em></td>
+          <td>使文本倾斜。</td>
+      </tr>
+      <tr>
+          <td><code>代码</code></td>
+          <td><code>code()</code></td>
+          <td>用于显示简短的代码片段。</td>
+      </tr>
+      <tr>
+          <td><a href="https://www.google.com">链接</a></td>
+          <td><a href="https://www.google.com">链接</a></td>
+          <td>创建一个超链接。</td>
+      </tr>
+      <tr>
+          <td><del>删除线</del></td>
+          <td><del>Strikethrough</del></td>
+          <td>给文本添加删除线。</td>
+      </tr>
+      <tr>
+          <td>换行</td>
+          <td>使用 <code>&lt;br&gt;</code> 标签</td>
+          <td>可以在单元格内强制换行。</td>
+      </tr>
+  </tbody>
+</table>
+<p>包含管道符 |
+如果你的单元格内容本身就包含管道符 |，你需要使用它的 HTML 实体编码 <code>&amp;#124;</code> 来代替。</p>
+<p>示例：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-fallback" data-lang="fallback"><span class="line"><span class="ln">1</span><span class="cl">| 名称 | 描述 |
+</span></span><span class="line"><span class="ln">2</span><span class="cl">|---|---|
+</span></span><span class="line"><span class="ln">3</span><span class="cl">| 管道符 | 这是 &amp;#124; 字符的示例。 |
+</span></span></code></pre></div><p>渲染效果：</p>
+<table>
+  <thead>
+      <tr>
+          <th>名称</th>
+          <th>描述</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td>管道符</td>
+          <td>这是| 字符的示例。</td>
+      </tr>
+  </tbody>
+</table>
+<ol start="10">
+<li>
+<h3 id="分割线-horizontal-rule">分割线 (Horizontal Rule)<a hidden class="anchor" aria-hidden="true" href="#分割线-horizontal-rule">#</a></h3>
+<p>在一行中使用三个或更多的 *, -, 或 _</p>
+<p>语法：</p>
+<p><code>---</code></p>
+<p><code>***</code></p>
+<p><code>___</code></p>
+</li>
+<li>
+<h3 id="字体颜色">字体颜色<a hidden class="anchor" aria-hidden="true" href="#字体颜色">#</a></h3>
+<p><em>需要明确一点：纯粹的、标准的 Markdown 语法本身并不支持设置字体颜色。 Markdown 的设计初衷是为了简化内容创作，专注于文本的结构（如标题、列表、粗体），而不是外观样式（如颜色、字体大小）。不过，由于大多数 Markdown 解析器都兼容 HTML，我们可以通过内联 HTML 的方式来给文本添加颜色。最常用的方法是使用 <!-- raw HTML omitted --> 标签配合 style 属性，或者使用已经不被推荐但仍然有效的 <!-- raw HTML omitted --> 标签。</em></p>
+</li>
+</ol>
+<ul>
+<li>
+<p>使用 <!-- raw HTML omitted --> 标签（推荐）
+这是最现代、最灵活的方法，符合当前的网页标准 (CSS)。</p>
+<p>语法：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="line"><span class="ln">1</span><span class="cl"><span class="p">&lt;</span><span class="nt">span</span> <span class="na">style</span><span class="o">=</span><span class="s">&#34;color:颜色名或十六进制代码&#34;</span><span class="p">&gt;</span>你的文本<span class="p">&lt;/</span><span class="nt">span</span><span class="p">&gt;</span> 
+</span></span></code></pre></div><p>示例：</p>
+<p>我想把这段文字设置成</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="line"><span class="ln">1</span><span class="cl"><span class="p">&lt;</span><span class="nt">span</span> <span class="na">style</span><span class="o">=</span><span class="s">&#34;color:red&#34;</span><span class="p">&gt;</span>红色<span class="p">&lt;/</span><span class="nt">span</span><span class="p">&gt;</span>
+</span></span></code></pre></div></li>
+<li>
+<p>也可以使用十六进制颜色代码，比如</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="line"><span class="ln">1</span><span class="cl"><span class="p">&lt;</span><span class="nt">span</span> <span class="na">style</span><span class="o">=</span><span class="s">&#34;color:#008000&#34;</span><span class="p">&gt;</span>绿色<span class="p">&lt;/</span><span class="nt">span</span><span class="p">&gt;</span>
+</span></span></code></pre></div><p>或者设置为</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="line"><span class="ln">1</span><span class="cl"><span class="p">&lt;</span><span class="nt">span</span> <span class="na">style</span><span class="o">=</span><span class="s">&#34;color:rgb(0, 0, 255)&#34;</span><span class="p">&gt;</span>蓝色<span class="p">&lt;/</span><span class="nt">span</span><span class="p">&gt;</span>
+</span></span></code></pre></div></li>
+<li>
+<p>使用 <code>&lt;font&gt;</code> 标签（不推荐）</p>
+<p><code>&lt;font&gt;</code> 标签在旧的 HTML 标准 (HTML4) 中使用，现在已经被废弃，不推荐在新的项目中使用。但因为简单直观，在很多 Markdown 环境中仍然有效。</p>
+<p>语法：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="line"><span class="ln">1</span><span class="cl"><span class="p">&lt;</span><span class="nt">font</span> <span class="na">color</span><span class="o">=</span><span class="s">&#34;颜色名或十六进制代码&#34;</span><span class="p">&gt;</span>你的文本<span class="p">&lt;/</span><span class="nt">font</span><span class="p">&gt;</span>
+</span></span></code></pre></div></li>
+</ul>
+<ol start="12">
+<li>
+<h3 id="任务列表task-list">任务列表（Task List）<a hidden class="anchor" aria-hidden="true" href="#任务列表task-list">#</a></h3>
+</li>
+</ol>
+<p>语法:</p>
+<p>任务列表的语法是在标准的无序列表项（使用 -, *, 或 +）后面加上一个方括号 <code>[]</code>。</p>
+<p>[ ]：表示一个未完成的任务。注意：[ 和 ] 之间必须有一个空格。</p>
+<p>[x]：表示一个已完成的任务。注意：x 可以是小写也可以是大写，但小写更常见。</p>
+<p>基本结构：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-fallback" data-lang="fallback"><span class="line"><span class="ln">1</span><span class="cl">- [x] 完成报告的第一部分
+</span></span><span class="line"><span class="ln">2</span><span class="cl">- [ ] 撰写邮件通知团队
+</span></span><span class="line"><span class="ln">3</span><span class="cl">- [ ] 安排下周的会议
+</span></span></code></pre></div><p>渲染效果：</p>
+<ul>
+<li><input checked="" disabled="" type="checkbox"> 完成报告的第一部分</li>
+<li><input disabled="" type="checkbox"> 撰写邮件通知团队</li>
+<li><input disabled="" type="checkbox"> 安排下周的会议</li>
+</ul>
+<p>如何使用</p>
+<ul>
+<li>
+<p>创建列表：</p>
+<p>就像创建普通的无序列表一样，以 -, *, 或 + 开头。</p>
+</li>
+<li>
+<p>添加复选框：</p>
+<p>在列表项的文本前，加上 [ ] (未完成) 或 [x] (已完成)。</p>
+</li>
+</ul>
+<p>示例：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-fallback" data-lang="fallback"><span class="line"><span class="ln"> 1</span><span class="cl">#### 项目A的待办事项
+</span></span><span class="line"><span class="ln"> 2</span><span class="cl">
+</span></span><span class="line"><span class="ln"> 3</span><span class="cl">- [x] 需求分析和文档编写
+</span></span><span class="line"><span class="ln"> 4</span><span class="cl">- [x] UI/UX 设计初稿
+</span></span><span class="line"><span class="ln"> 5</span><span class="cl">- [ ] 前端开发
+</span></span><span class="line"><span class="ln"> 6</span><span class="cl">    - [x] 搭建项目框架
+</span></span><span class="line"><span class="ln"> 7</span><span class="cl">    - [ ] 实现登录页面
+</span></span><span class="line"><span class="ln"> 8</span><span class="cl">    - [ ] 对接用户数据API
+</span></span><span class="line"><span class="ln"> 9</span><span class="cl">- [ ] 后端开发
+</span></span><span class="line"><span class="ln">10</span><span class="cl">    - [ ] 数据库设计
+</span></span><span class="line"><span class="ln">11</span><span class="cl">    - [ ] 编写用户认证接口
+</span></span><span class="line"><span class="ln">12</span><span class="cl">- [ ] 测试和部署
+</span></span><span class="line"><span class="ln">13</span><span class="cl">
+</span></span><span class="line"><span class="ln">14</span><span class="cl">#### 购物清单
+</span></span><span class="line"><span class="ln">15</span><span class="cl">
+</span></span><span class="line"><span class="ln">16</span><span class="cl">* [ ] 牛奶
+</span></span><span class="line"><span class="ln">17</span><span class="cl">* [x] 面包
+</span></span><span class="line"><span class="ln">18</span><span class="cl">* [ ] 鸡蛋
+</span></span></code></pre></div><p>渲染效果：</p>
+<h4 id="项目a的待办事项">项目A的待办事项<a hidden class="anchor" aria-hidden="true" href="#项目a的待办事项">#</a></h4>
+<ul>
+<li><input checked="" disabled="" type="checkbox"> 需求分析和文档编写</li>
+<li><input checked="" disabled="" type="checkbox"> UI/UX 设计初稿</li>
+<li><input disabled="" type="checkbox"> 前端开发
+<ul>
+<li><input checked="" disabled="" type="checkbox"> 搭建项目框架</li>
+<li><input disabled="" type="checkbox"> 实现登录页面</li>
+<li><input disabled="" type="checkbox"> 对接用户数据API</li>
+</ul>
+</li>
+<li><input disabled="" type="checkbox"> 后端开发
+<ul>
+<li><input disabled="" type="checkbox"> 数据库设计</li>
+<li><input disabled="" type="checkbox"> 编写用户认证接口</li>
+</ul>
+</li>
+<li><input disabled="" type="checkbox"> 测试和部署</li>
+</ul>
+<h4 id="购物清单">购物清单<a hidden class="anchor" aria-hidden="true" href="#购物清单">#</a></h4>
+<ul>
+<li><input disabled="" type="checkbox"> 牛奶</li>
+<li><input checked="" disabled="" type="checkbox"> 面包</li>
+<li><input disabled="" type="checkbox"> 鸡蛋</li>
+</ul>
+<p>交互性
+一个重要的特性是，在许多支持任务列表的 Markdown 渲染器（如 GitHub 的评论区、Typora 编辑器）中，这些复选框是可以点击的。当你点击一个复选框时，它会自动在 [ ] 和 [x] 之间切换，并保存更改。</p>
+<p>总结
+任务列表是 Markdown 一个非常实用和直观的扩展功能，它结合了列表的结构化和任务管理的功能性。记住核心语法 - [ ] 和 - [x] 就可以了。</p>
+
+  </div>
+
+  <footer class="post-footer">
+    <ul class="post-tags">
+      <li><a href="http://localhost:1313/tags/%E6%8A%80%E6%9C%AF/">技术</a></li>
+    </ul>
+
+<ul class="share-buttons">
+    <li>
+        <a target="_blank" rel="noopener noreferrer" aria-label="share Markdown详细语法指南 on x"
+            href="https://x.com/intent/tweet/?text=Markdown%e8%af%a6%e7%bb%86%e8%af%ad%e6%b3%95%e6%8c%87%e5%8d%97&amp;url=http%3a%2f%2flocalhost%3a1313%2fposts%2fmarkdown%25E8%25AF%25A6%25E7%25BB%2586%25E8%25AF%25AD%25E6%25B3%2595%25E6%258C%2587%25E5%258D%2597%2f&amp;hashtags=%e6%8a%80%e6%9c%af">
+            <svg version="1.1" viewBox="0 0 512 512" xml:space="preserve" height="30px" width="30px" fill="currentColor">
+                <path
+                    d="M512 62.554 L 512 449.446 C 512 483.97 483.97 512 449.446 512 L 62.554 512 C 28.03 512 0 483.97 0 449.446 L 0 62.554 C 0 28.03 28.029 0 62.554 0 L 449.446 0 C 483.971 0 512 28.03 512 62.554 Z M 269.951 190.75 L 182.567 75.216 L 56 75.216 L 207.216 272.95 L 63.9 436.783 L 125.266 436.783 L 235.9 310.383 L 332.567 436.783 L 456 436.783 L 298.367 228.367 L 432.367 75.216 L 371.033 75.216 Z M 127.633 110 L 164.101 110 L 383.481 400.065 L 349.5 400.065 Z" />
+            </svg>
+        </a>
+    </li>
+    <li>
+        <a target="_blank" rel="noopener noreferrer" aria-label="share Markdown详细语法指南 on linkedin"
+            href="https://www.linkedin.com/shareArticle?mini=true&amp;url=http%3a%2f%2flocalhost%3a1313%2fposts%2fmarkdown%25E8%25AF%25A6%25E7%25BB%2586%25E8%25AF%25AD%25E6%25B3%2595%25E6%258C%2587%25E5%258D%2597%2f&amp;title=Markdown%e8%af%a6%e7%bb%86%e8%af%ad%e6%b3%95%e6%8c%87%e5%8d%97&amp;summary=Markdown%e8%af%a6%e7%bb%86%e8%af%ad%e6%b3%95%e6%8c%87%e5%8d%97&amp;source=http%3a%2f%2flocalhost%3a1313%2fposts%2fmarkdown%25E8%25AF%25A6%25E7%25BB%2586%25E8%25AF%25AD%25E6%25B3%2595%25E6%258C%2587%25E5%258D%2597%2f">
+            <svg version="1.1" viewBox="0 0 512 512" xml:space="preserve" height="30px" width="30px" fill="currentColor">
+                <path
+                    d="M449.446,0c34.525,0 62.554,28.03 62.554,62.554l0,386.892c0,34.524 -28.03,62.554 -62.554,62.554l-386.892,0c-34.524,0 -62.554,-28.03 -62.554,-62.554l0,-386.892c0,-34.524 28.029,-62.554 62.554,-62.554l386.892,0Zm-288.985,423.278l0,-225.717l-75.04,0l0,225.717l75.04,0Zm270.539,0l0,-129.439c0,-69.333 -37.018,-101.586 -86.381,-101.586c-39.804,0 -57.634,21.891 -67.617,37.266l0,-31.958l-75.021,0c0.995,21.181 0,225.717 0,225.717l75.02,0l0,-126.056c0,-6.748 0.486,-13.492 2.474,-18.315c5.414,-13.475 17.767,-27.434 38.494,-27.434c27.135,0 38.007,20.707 38.007,51.037l0,120.768l75.024,0Zm-307.552,-334.556c-25.674,0 -42.448,16.879 -42.448,39.002c0,21.658 16.264,39.002 41.455,39.002l0.484,0c26.165,0 42.452,-17.344 42.452,-39.002c-0.485,-22.092 -16.241,-38.954 -41.943,-39.002Z" />
+            </svg>
+        </a>
+    </li>
+    <li>
+        <a target="_blank" rel="noopener noreferrer" aria-label="share Markdown详细语法指南 on reddit"
+            href="https://reddit.com/submit?url=http%3a%2f%2flocalhost%3a1313%2fposts%2fmarkdown%25E8%25AF%25A6%25E7%25BB%2586%25E8%25AF%25AD%25E6%25B3%2595%25E6%258C%2587%25E5%258D%2597%2f&title=Markdown%e8%af%a6%e7%bb%86%e8%af%ad%e6%b3%95%e6%8c%87%e5%8d%97">
+            <svg version="1.1" viewBox="0 0 512 512" xml:space="preserve" height="30px" width="30px" fill="currentColor">
+                <path
+                    d="M449.446,0c34.525,0 62.554,28.03 62.554,62.554l0,386.892c0,34.524 -28.03,62.554 -62.554,62.554l-386.892,0c-34.524,0 -62.554,-28.03 -62.554,-62.554l0,-386.892c0,-34.524 28.029,-62.554 62.554,-62.554l386.892,0Zm-3.446,265.638c0,-22.964 -18.616,-41.58 -41.58,-41.58c-11.211,0 -21.361,4.457 -28.841,11.666c-28.424,-20.508 -67.586,-33.757 -111.204,-35.278l18.941,-89.121l61.884,13.157c0.756,15.734 13.642,28.29 29.56,28.29c16.407,0 29.706,-13.299 29.706,-29.701c0,-16.403 -13.299,-29.702 -29.706,-29.702c-11.666,0 -21.657,6.792 -26.515,16.578l-69.105,-14.69c-1.922,-0.418 -3.939,-0.042 -5.585,1.036c-1.658,1.073 -2.811,2.761 -3.224,4.686l-21.152,99.438c-44.258,1.228 -84.046,14.494 -112.837,35.232c-7.468,-7.164 -17.589,-11.591 -28.757,-11.591c-22.965,0 -41.585,18.616 -41.585,41.58c0,16.896 10.095,31.41 24.568,37.918c-0.639,4.135 -0.99,8.328 -0.99,12.576c0,63.977 74.469,115.836 166.33,115.836c91.861,0 166.334,-51.859 166.334,-115.836c0,-4.218 -0.347,-8.387 -0.977,-12.493c14.564,-6.47 24.735,-21.034 24.735,-38.001Zm-119.474,108.193c-20.27,20.241 -59.115,21.816 -70.534,21.816c-11.428,0 -50.277,-1.575 -70.522,-21.82c-3.007,-3.008 -3.007,-7.882 0,-10.889c3.003,-2.999 7.882,-3.003 10.885,0c12.777,12.781 40.11,17.317 59.637,17.317c19.522,0 46.86,-4.536 59.657,-17.321c3.016,-2.999 7.886,-2.995 10.885,0.008c3.008,3.011 3.003,7.882 -0.008,10.889Zm-5.23,-48.781c-16.373,0 -29.701,-13.324 -29.701,-29.698c0,-16.381 13.328,-29.714 29.701,-29.714c16.378,0 29.706,13.333 29.706,29.714c0,16.374 -13.328,29.698 -29.706,29.698Zm-160.386,-29.702c0,-16.381 13.328,-29.71 29.714,-29.71c16.369,0 29.689,13.329 29.689,29.71c0,16.373 -13.32,29.693 -29.689,29.693c-16.386,0 -29.714,-13.32 -29.714,-29.693Z" />
+            </svg>
+        </a>
+    </li>
+    <li>
+        <a target="_blank" rel="noopener noreferrer" aria-label="share Markdown详细语法指南 on facebook"
+            href="https://facebook.com/sharer/sharer.php?u=http%3a%2f%2flocalhost%3a1313%2fposts%2fmarkdown%25E8%25AF%25A6%25E7%25BB%2586%25E8%25AF%25AD%25E6%25B3%2595%25E6%258C%2587%25E5%258D%2597%2f">
+            <svg version="1.1" viewBox="0 0 512 512" xml:space="preserve" height="30px" width="30px" fill="currentColor">
+                <path
+                    d="M449.446,0c34.525,0 62.554,28.03 62.554,62.554l0,386.892c0,34.524 -28.03,62.554 -62.554,62.554l-106.468,0l0,-192.915l66.6,0l12.672,-82.621l-79.272,0l0,-53.617c0,-22.603 11.073,-44.636 46.58,-44.636l36.042,0l0,-70.34c0,0 -32.71,-5.582 -63.982,-5.582c-65.288,0 -107.96,39.569 -107.96,111.204l0,62.971l-72.573,0l0,82.621l72.573,0l0,192.915l-191.104,0c-34.524,0 -62.554,-28.03 -62.554,-62.554l0,-386.892c0,-34.524 28.029,-62.554 62.554,-62.554l386.892,0Z" />
+            </svg>
+        </a>
+    </li>
+    <li>
+        <a target="_blank" rel="noopener noreferrer" aria-label="share Markdown详细语法指南 on whatsapp"
+            href="https://api.whatsapp.com/send?text=Markdown%e8%af%a6%e7%bb%86%e8%af%ad%e6%b3%95%e6%8c%87%e5%8d%97%20-%20http%3a%2f%2flocalhost%3a1313%2fposts%2fmarkdown%25E8%25AF%25A6%25E7%25BB%2586%25E8%25AF%25AD%25E6%25B3%2595%25E6%258C%2587%25E5%258D%2597%2f">
+            <svg version="1.1" viewBox="0 0 512 512" xml:space="preserve" height="30px" width="30px" fill="currentColor">
+                <path
+                    d="M449.446,0c34.525,0 62.554,28.03 62.554,62.554l0,386.892c0,34.524 -28.03,62.554 -62.554,62.554l-386.892,0c-34.524,0 -62.554,-28.03 -62.554,-62.554l0,-386.892c0,-34.524 28.029,-62.554 62.554,-62.554l386.892,0Zm-58.673,127.703c-33.842,-33.881 -78.847,-52.548 -126.798,-52.568c-98.799,0 -179.21,80.405 -179.249,179.234c-0.013,31.593 8.241,62.428 23.927,89.612l-25.429,92.884l95.021,-24.925c26.181,14.28 55.659,21.807 85.658,21.816l0.074,0c98.789,0 179.206,-80.413 179.247,-179.243c0.018,-47.895 -18.61,-92.93 -52.451,-126.81Zm-126.797,275.782l-0.06,0c-26.734,-0.01 -52.954,-7.193 -75.828,-20.767l-5.441,-3.229l-56.386,14.792l15.05,-54.977l-3.542,-5.637c-14.913,-23.72 -22.791,-51.136 -22.779,-79.287c0.033,-82.142 66.867,-148.971 149.046,-148.971c39.793,0.014 77.199,15.531 105.329,43.692c28.128,28.16 43.609,65.592 43.594,105.4c-0.034,82.149 -66.866,148.983 -148.983,148.984Zm81.721,-111.581c-4.479,-2.242 -26.499,-13.075 -30.604,-14.571c-4.105,-1.495 -7.091,-2.241 -10.077,2.241c-2.986,4.483 -11.569,14.572 -14.182,17.562c-2.612,2.988 -5.225,3.364 -9.703,1.12c-4.479,-2.241 -18.91,-6.97 -36.017,-22.23c-13.314,-11.876 -22.304,-26.542 -24.916,-31.026c-2.612,-4.484 -0.279,-6.908 1.963,-9.14c2.016,-2.007 4.48,-5.232 6.719,-7.847c2.24,-2.615 2.986,-4.484 4.479,-7.472c1.493,-2.99 0.747,-5.604 -0.374,-7.846c-1.119,-2.241 -10.077,-24.288 -13.809,-33.256c-3.635,-8.733 -7.327,-7.55 -10.077,-7.688c-2.609,-0.13 -5.598,-0.158 -8.583,-0.158c-2.986,0 -7.839,1.121 -11.944,5.604c-4.105,4.484 -15.675,15.32 -15.675,37.364c0,22.046 16.048,43.342 18.287,46.332c2.24,2.99 31.582,48.227 76.511,67.627c10.685,4.615 19.028,7.371 25.533,9.434c10.728,3.41 20.492,2.929 28.209,1.775c8.605,-1.285 26.499,-10.833 30.231,-21.295c3.732,-10.464 3.732,-19.431 2.612,-21.298c-1.119,-1.869 -4.105,-2.99 -8.583,-5.232Z" />
+            </svg>
+        </a>
+    </li>
+    <li>
+        <a target="_blank" rel="noopener noreferrer" aria-label="share Markdown详细语法指南 on telegram"
+            href="https://telegram.me/share/url?text=Markdown%e8%af%a6%e7%bb%86%e8%af%ad%e6%b3%95%e6%8c%87%e5%8d%97&amp;url=http%3a%2f%2flocalhost%3a1313%2fposts%2fmarkdown%25E8%25AF%25A6%25E7%25BB%2586%25E8%25AF%25AD%25E6%25B3%2595%25E6%258C%2587%25E5%258D%2597%2f">
+            <svg version="1.1" xml:space="preserve" viewBox="2 2 28 28" height="30px" width="30px" fill="currentColor">
+                <path
+                    d="M26.49,29.86H5.5a3.37,3.37,0,0,1-2.47-1,3.35,3.35,0,0,1-1-2.47V5.48A3.36,3.36,0,0,1,3,3,3.37,3.37,0,0,1,5.5,2h21A3.38,3.38,0,0,1,29,3a3.36,3.36,0,0,1,1,2.46V26.37a3.35,3.35,0,0,1-1,2.47A3.38,3.38,0,0,1,26.49,29.86Zm-5.38-6.71a.79.79,0,0,0,.85-.66L24.73,9.24a.55.55,0,0,0-.18-.46.62.62,0,0,0-.41-.17q-.08,0-16.53,6.11a.59.59,0,0,0-.41.59.57.57,0,0,0,.43.52l4,1.24,1.61,4.83a.62.62,0,0,0,.63.43.56.56,0,0,0,.4-.17L16.54,20l4.09,3A.9.9,0,0,0,21.11,23.15ZM13.8,20.71l-1.21-4q8.72-5.55,8.78-5.55c.15,0,.23,0,.23.16a.18.18,0,0,1,0,.06s-2.51,2.3-7.52,6.8Z" />
+            </svg>
+        </a>
+    </li>
+    <li>
+        <a target="_blank" rel="noopener noreferrer" aria-label="share Markdown详细语法指南 on ycombinator"
+            href="https://news.ycombinator.com/submitlink?t=Markdown%e8%af%a6%e7%bb%86%e8%af%ad%e6%b3%95%e6%8c%87%e5%8d%97&u=http%3a%2f%2flocalhost%3a1313%2fposts%2fmarkdown%25E8%25AF%25A6%25E7%25BB%2586%25E8%25AF%25AD%25E6%25B3%2595%25E6%258C%2587%25E5%258D%2597%2f">
+            <svg version="1.1" xml:space="preserve" width="30px" height="30px" viewBox="0 0 512 512" fill="currentColor"
+                xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape">
+                <path
+                    d="M449.446 0C483.971 0 512 28.03 512 62.554L512 449.446C512 483.97 483.97 512 449.446 512L62.554 512C28.03 512 0 483.97 0 449.446L0 62.554C0 28.03 28.029 0 62.554 0L449.446 0ZM183.8767 87.9921H121.8427L230.6673 292.4508V424.0079H281.3328V292.4508L390.1575 87.9921H328.1233L256 238.2489z" />
+            </svg>
+        </a>
+    </li>
+</ul>
+
+  </footer>
+</article>
+    </main>
+    
+<footer class="footer">
+        <span>&copy; 2025 <a href="http://localhost:1313/">我的博客</a></span> · 
+
+    <span>
+        Powered by
+        <a href="https://gohugo.io/" rel="noopener noreferrer" target="_blank">Hugo</a> &
+        <a href="https://github.com/adityatelange/hugo-PaperMod/" rel="noopener" target="_blank">PaperMod</a>
+    </span>
+</footer>
+<a href="#top" aria-label="go to top" title="Go to Top (Alt + G)" class="top-link" id="top-link" accesskey="g">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 6" fill="currentColor">
+        <path d="M12 6H0l6-6z" />
+    </svg>
+</a>
+
+<script>
+    let menu = document.getElementById('menu');
+    if (menu) {
+        
+        const scrollPosition = localStorage.getItem("menu-scroll-position");
+        if (scrollPosition) {
+            menu.scrollLeft = parseInt(scrollPosition, 10);
+        }
+        
+        menu.onscroll = function () {
+            localStorage.setItem("menu-scroll-position", menu.scrollLeft);
+        }
+    }
+
+    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+        anchor.addEventListener("click", function (e) {
+            e.preventDefault();
+            var id = this.getAttribute("href").substr(1);
+            if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                document.querySelector(`[id='${decodeURIComponent(id)}']`).scrollIntoView({
+                    behavior: "smooth"
+                });
+            } else {
+                document.querySelector(`[id='${decodeURIComponent(id)}']`).scrollIntoView();
+            }
+            if (id === "top") {
+                history.replaceState(null, null, " ");
+            } else {
+                history.pushState(null, null, `#${id}`);
+            }
+        });
+    });
+
+</script>
+<script>
+    var mybutton = document.getElementById("top-link");
+    window.onscroll = function () {
+        if (document.body.scrollTop > 800 || document.documentElement.scrollTop > 800) {
+            mybutton.style.visibility = "visible";
+            mybutton.style.opacity = "1";
+        } else {
+            mybutton.style.visibility = "hidden";
+            mybutton.style.opacity = "0";
+        }
+    };
+
+</script>
+<script>
+    document.getElementById("theme-toggle").addEventListener("click", () => {
+        const html = document.querySelector("html");
+        if (html.dataset.theme === "dark") {
+            html.dataset.theme = 'light';
+            localStorage.setItem("pref-theme", 'light');
+        } else {
+            html.dataset.theme = 'dark';
+            localStorage.setItem("pref-theme", 'dark');
+        }
+    })
+
+</script>
+</body>
+
+</html>
