@@ -3,7 +3,7 @@
 # -----------------------------------------------------------
 
 # 你的网站完整域名。在本地运行(hugo server)时这里不起作用，但部署到 GitHub Pages 时必须填对
-baseurl = "/" 
+baseurl = "" 
 
 # 网站默认语言。如果你主要写中文，建议改成 "zh-cn"
 DefaultContentLanguage = "zh-cn" 

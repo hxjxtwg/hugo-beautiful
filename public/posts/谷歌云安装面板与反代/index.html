@@ -1,0 +1,846 @@
+
+
+<!DOCTYPE html>
+<html lang="zh-cn" itemscope itemtype="http://schema.org/WebPage">
+  <head><script src="/livereload.js?mindelay=10&amp;v=2&amp;port=1313&amp;path=livereload" data-no-instant defer></script>
+    
+
+  <meta charset="utf-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+
+ 
+
+
+      <title>谷歌云安装面板与反代 - </title>
+
+  <meta name="author" content="Some Person"/><script type="application/ld+json">
+{
+    "@context": "http://schema.org",
+    "@type": "WebSite",
+    "name": "Beautiful Hugo",
+    
+    "url": "\/\/localhost:1313\/"
+}
+</script><script type="application/ld+json">
+{
+  "@context": "http://schema.org",
+  "@type": "Organization",
+  "name": "",
+  "url": "\/\/localhost:1313\/"
+  
+  
+  
+  
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "http://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [{
+        "@type": "ListItem",
+        "position": 1,
+        "item": {
+          "@id": "\/\/localhost:1313\/",
+          "name": "home"
+        }
+    },{
+        "@type": "ListItem",
+        "position": 3,
+        "item": {
+          "@id": "\/\/localhost:1313\/posts\/%E8%B0%B7%E6%AD%8C%E4%BA%91%E5%AE%89%E8%A3%85%E9%9D%A2%E6%9D%BF%E4%B8%8E%E5%8F%8D%E4%BB%A3\/",
+          "name": "谷歌云安装面板与反代"
+        }
+    }]
+}
+</script><script type="application/ld+json">
+{
+  "@context": "http://schema.org",
+  "@type": "Article",
+  "author": {
+    "name" : "xxsky"
+  },
+  "headline": "谷歌云安装面板与反代",
+  "description" : "",
+  "inLanguage" : "zh-cn",
+  "wordCount":  321 ,
+  "datePublished" : "2025-12-04T00:48:14\u002b08:00",
+  "dateModified" : "2025-12-04T00:48:14\u002b08:00",
+  "image" : "\/\/localhost:1313\/img\/avatar.png",
+  "keywords" : [ "技术" ],
+  "mainEntityOfPage" : "\/\/localhost:1313\/posts\/%E8%B0%B7%E6%AD%8C%E4%BA%91%E5%AE%89%E8%A3%85%E9%9D%A2%E6%9D%BF%E4%B8%8E%E5%8F%8D%E4%BB%A3\/",
+  "publisher" : {
+    "@type": "Organization",
+    "name" : "\/\/localhost:1313\/",
+    "logo" : {
+        "@type" : "ImageObject",
+        "url" : "\/\/localhost:1313\/img\/avatar.png",
+        "height" :  60 ,
+        "width" :  60
+    }
+  }
+}
+</script>
+
+
+<meta property="og:title" content="谷歌云安装面板与反代" />
+<meta property="og:image" content="//localhost:1313/img/avatar.png" />
+<meta property="og:url" content="//localhost:1313/posts/%E8%B0%B7%E6%AD%8C%E4%BA%91%E5%AE%89%E8%A3%85%E9%9D%A2%E6%9D%BF%E4%B8%8E%E5%8F%8D%E4%BB%A3/" />
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="Beautiful Hugo" />
+
+  <meta name="twitter:title" content="谷歌云安装面板与反代" />
+  <meta name="twitter:image" content="//localhost:1313/img/avatar.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <link href='//localhost:1313/img/favicon.svg' rel='icon' type='image/x-icon'/>
+  <meta name="generator" content="Hugo 0.152.2">
+  <link rel="alternate" href="//localhost:1313/index.xml" type="application/rss+xml" title="Beautiful Hugo"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.css" integrity="sha384-5TcZemv2l/9On385z///+d7MSYlvIEw9FuZTIdZ14vJLqWphw7e7ZPuOiCHJcFCP" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://use.fontawesome.com/releases/v7.0.1/css/brands.css" integrity="sha384-+eXGm6TmVoCZR1gX03US+L++L2mJIfOvp2X0+luTuEktXaF5F+e3zn0sO0HBvOyT" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://use.fontawesome.com/releases/v7.0.1/css/fontawesome.css" integrity="sha384-B5nyPZa7e84uCJEYHtevCdVYtQosWsbDSRtq3cy/jeSVtQW05GL8CKXO7waXsjPK" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://use.fontawesome.com/releases/v7.0.1/css/regular.css" integrity="sha384-V71z/A/p/DGaZAryHhiSXRQj8HdQmK2nBgL2bX23MGD+h6ZKpyxOO76f5eSXmIaj" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://use.fontawesome.com/releases/v7.0.1/css/solid.css" integrity="sha384-1IIShlrK5iYgvS7OAgIH3prz4RAFP7hHZ2MaLIb9l3+trFwwnw/NdCWcUHlymZDU" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://use.fontawesome.com/releases/v7.0.1/css/svg.css" integrity="sha384-iBa7uugTOHXqQ2ngvDYJyKrPPQbd9n2P3EQe+o/0+HZe5TNvV+LO5X0lLLUrXLHP" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://use.fontawesome.com/releases/v7.0.1/css/svg-with-js.css" integrity="sha384-STWnS5AGz6M2YxsnGAd536EqcE2y+ktGovMMuhtXLsCBtl7lujeQj2eN4eDxa57x" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://use.fontawesome.com/releases/v7.0.1/css/v4-font-face.css" integrity="sha384-fH83IkgQi7kturzlxpXfNdsR8aUOcqj5HUORRVnSvJgObZkIw6aqKAaQx20IWyB/" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://use.fontawesome.com/releases/v7.0.1/css/v4-shims.css" integrity="sha384-cCODJHSivNBsaHei/8LC0HUD58kToSbDU+xT7Rs51BO1v/IvgT/uM0W6xMoUqKfn" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://use.fontawesome.com/releases/v7.0.1/css/v5-font-face.css" integrity="sha384-atSdF89mIn15dv+o2LKkDM6mCh3hwh6A7mwZ6F2it/kenqZbMu+QW/ye1OG4XSWV" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@3.4.1/dist/css/bootstrap.min.css" integrity="sha384-HSMxcRTRxnN+Bdg0JdbxYKrThecOKuH5zCYotlSAcp1+c8xmyTe9GYg1l9a69psu" crossorigin="anonymous"><link rel="stylesheet" href="//localhost:1313/css/main.css" /><link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Lora:400,700,400italic,700italic" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Open+Sans:300italic,400italic,600italic,700italic,800italic,400,300,600,700,800" />
+  <link rel="stylesheet" href="//localhost:1313/css/highlight.min.css" /><link rel="stylesheet" href="//localhost:1313/css/codeblock.css" /><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/photoswipe/4.1.2/photoswipe.min.css" integrity="sha384-h/L2W9KefUClHWaty3SLE5F/qvc4djlyR4qY3NUV5HGQBBW7stbcfff1+I/vmsHh" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/photoswipe/4.1.2/default-skin/default-skin.min.css" integrity="sha384-iD0dNku6PYSIQLyfTOpB06F2KCZJAKLOThS5HRe8b3ibhdEQ6eKsFf/EeFxdOt5R" crossorigin="anonymous"><style>
+ 
+ 
+ 
+html, body { height: 100%; margin: 0; padding: 0; }
+body { transition: background-color 0.3s ease, color 0.3s ease; }
+
+ 
+ 
+ 
+body.dark-mode {
+    background-color: #1e1e1e !important;
+    color: #e6e6e6 !important;
+}
+
+ 
+body.dark-mode a { color: #4daafc; }
+
+ 
+body.dark-mode h1, body.dark-mode h2, body.dark-mode h3, 
+body.dark-mode h4, body.dark-mode h5, body.dark-mode h6,
+body.dark-mode .post-title, body.dark-mode .post-heading h1 { color: #fff !important; }
+body.dark-mode .post-meta { color: #858585 !important; }
+
+ 
+body.dark-mode .post-preview { border-bottom: 1px solid #333 !important; }
+body.dark-mode hr { border-color: #333 !important; opacity: 0.6; }
+
+ 
+body.dark-mode footer { background: #1e1e1e !important; color: #777 !important; border-top-color: #333 !important; }
+body.dark-mode .pager li > a, body.dark-mode .pager li > span {
+    background: #252526 !important; border-color: #333 !important; color: #ccc !important;
+}
+
+ 
+ 
+ 
+
+ 
+body.dark-mode .navbar-custom {
+    background-color: #252526 !important; 
+    border-bottom: 1px solid #333 !important;
+}
+
+ 
+body.dark-mode .navbar-custom .navbar-brand,
+body.dark-mode .navbar-custom .nav > li > a {
+    color: #e0e0e0 !important; 
+}
+
+ 
+body.dark-mode .navbar-custom .navbar-brand:hover,
+body.dark-mode .navbar-custom .nav > li > a:hover {
+    color: #ffffff !important;
+}
+
+ 
+ 
+ 
+.theme-toggle-btn {
+    display: flex; align-items: center; justify-content: center; height: 100%; padding: 15px; 
+    cursor: pointer; color: #666; transition: color 0.3s;
+    font-size: 20px; line-height: 1;
+}
+.theme-toggle-btn:hover { color: #000; }
+body.dark-mode .theme-toggle-btn { color: #ccc; }  
+body.dark-mode .theme-toggle-btn:hover { color: #fff; }
+
+ 
+ 
+ 
+body.dark-mode ::-webkit-scrollbar { height: 10px; width: 10px; background: #1e1e1e; }
+body.dark-mode ::-webkit-scrollbar-thumb { background: #444; border-radius: 5px; }
+body.dark-mode ::-webkit-scrollbar-thumb:hover { background: #555; }
+body.dark-mode ::-webkit-scrollbar-corner { background: #1e1e1e; }
+
+ 
+ 
+ 
+ 
+.highlight button:not(.c-btn), .copy-to-clipboard, .copy-code-button { display: none !important; }
+ 
+.highlight { position: relative !important; }
+
+ 
+body.dark-mode .highlight {
+    background-color: #1e1e1e !important;
+    border: 1px solid #333 !important; 
+    border-radius: 6px !important;
+}
+body.dark-mode .highlight pre, body.dark-mode .highlight code,
+body.dark-mode .highlight table, body.dark-mode .highlight tr, body.dark-mode .highlight td {
+    background-color: transparent !important; color: #d4d4d4 !important; border: none !important;
+}
+
+ 
+body.dark-mode .chroma .k, body.dark-mode .chroma .kd, body.dark-mode .chroma .kt { color: #569cd6 !important; } 
+body.dark-mode .chroma .s, body.dark-mode .chroma .s1 { color: #ce9178 !important; } 
+body.dark-mode .chroma .c, body.dark-mode .chroma .c1 { color: #6a9955 !important; } 
+body.dark-mode .chroma .nf { color: #dcdcaa !important; } 
+body.dark-mode .chroma .lnt { color: #555 !important; }
+
+ 
+.code-tools { 
+    position: absolute; top: 4px; right: 4px; z-index: 20; display: flex;
+    background: transparent !important; opacity: 0; transition: opacity 0.2s;
+}
+.highlight:hover .code-tools { opacity: 1; }
+
+ 
+.c-btn { 
+    width: 26px; height: 26px; 
+    border: none !important; background: transparent !important; 
+    cursor: pointer; padding: 0; margin: 0;
+    display:flex; justify-content:center; align-items:center; 
+    transition: color 0.2s ease;
+    color: #999; 
+}
+.c-btn:hover { color: #ff4757 !important; }
+body.dark-mode .c-btn { color: #666; }
+body.dark-mode .c-btn:hover { color: #ff4757 !important; }
+
+ 
+.highlight.folded { height: 200px !important; overflow: hidden !important; }
+
+ 
+ 
+ 
+#halo-racer-loader { 
+    position: fixed !important; top: 0 !important; left: 0 !important; right: 0 !important; bottom: 0 !important;      
+    width: 100% !important; height: 100% !important; z-index: 999999999 !important; 
+    background: #ffffff; display: flex !important; justify-content: center !important; align-items: center !important; 
+    transition: opacity 0.3s ease, visibility 0.3s ease;
+}
+body.dark-mode #halo-racer-loader { background: #1e1e1e !important; }
+#halo-racer-loader.hidden { opacity: 0; visibility: hidden; }
+
+.racer-container { position: relative; width: 80px; height: 20px; }
+.bar { position: absolute; top: 0; left: 0; width: 12px; height: 20px; border-radius: 0; }
+.p1 { background: rgba(255,71,87,0.2); z-index:1; animation: run 1.5s cubic-bezier(.4,0,.2,1) infinite 0.15s; }
+.p2 { background: rgba(255,71,87,0.5); z-index:2; animation: run 1.5s cubic-bezier(.4,0,.2,1) infinite 0.08s; }
+.red { background: #ff4757; z-index:10; animation: run 1.5s cubic-bezier(.4,0,.2,1) infinite 0s; }
+@keyframes run { 0%{left:0} 30%{left:68px} 50%{left:68px} 80%{left:0} 100%{left:0} }
+</style>
+
+<script>
+
+(function() {
+  document.write(`<div id="halo-racer-loader"><div class="racer-container"><div class="bar p1"></div><div class="bar p2"></div><div class="bar red"></div></div></div>`);
+  window.addEventListener('load', function() {
+    const loader = document.getElementById('halo-racer-loader');
+    setTimeout(() => { if(loader){ loader.classList.add('hidden'); setTimeout(() => { loader.style.display = 'none'; }, 300); }}, 800); 
+  });
+})();
+
+
+(function() {
+    const isDark = localStorage.getItem('theme') === 'dark';
+    if(isDark) document.body.classList.add('dark-mode');
+
+    document.addEventListener('DOMContentLoaded', function() {
+        const navList = document.querySelector('.navbar-nav'); 
+        if(!navList) return;
+
+        const li = document.createElement('li');
+        const link = document.createElement('a');
+        link.className = "theme-toggle-btn";
+        link.title = "Switch Theme";
+        
+        link.innerHTML = isDark ? "☾" : "☀"; 
+        
+        link.onclick = function() {
+            document.body.classList.toggle('dark-mode');
+            const currentMode = document.body.classList.contains('dark-mode') ? 'dark' : 'light';
+            localStorage.setItem('theme', currentMode);
+            link.innerHTML = currentMode === 'dark' ? "☾" : "☀";
+        };
+        li.appendChild(link);
+        navList.appendChild(li);
+    });
+})();
+
+
+document.addEventListener('DOMContentLoaded', function() {
+    const svgCopy = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+    const svgCheck = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#28a745" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+    const svgFold = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"></polyline></svg>';
+    const svgUnfold = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>';
+
+    document.querySelectorAll('.highlight').forEach(block => {
+        if (block.querySelector('.code-tools')) return;
+        
+        const tools = document.createElement('div');
+        tools.className = 'code-tools';
+
+        let isLongCode = block.offsetHeight > 300;
+        if (isLongCode) {
+            const btnFold = document.createElement('button'); 
+            btnFold.className = 'c-btn';
+            
+            block.classList.add('folded'); 
+            btnFold.innerHTML = svgUnfold; 
+            btnFold.title = "展开"; 
+            
+            btnFold.onclick = () => { 
+                if (block.classList.contains('folded')) {
+                    block.classList.remove('folded');
+                    btnFold.innerHTML = svgFold; 
+                    btnFold.title = "折叠";
+                } else {
+                    block.classList.add('folded');
+                    btnFold.innerHTML = svgUnfold; 
+                    btnFold.title = "展开";
+                    block.scrollIntoView({behavior: "smooth", block: "center"});
+                }
+            };
+            tools.appendChild(btnFold);
+        }
+
+        const btnCopy = document.createElement('button'); 
+        btnCopy.className = 'c-btn'; 
+        btnCopy.innerHTML = svgCopy; 
+        btnCopy.title = "复制";
+        
+        btnCopy.onclick = () => {
+            navigator.clipboard.writeText(block.innerText).then(() => {
+                btnCopy.innerHTML = svgCheck;
+                setTimeout(() => { btnCopy.innerHTML = svgCopy; }, 2000);
+            });
+        };
+        
+        tools.appendChild(btnCopy); 
+        block.appendChild(tools);
+    });
+});
+</script>
+  </head>
+  <body>
+    <nav class="navbar navbar-default navbar-fixed-top navbar-custom">
+  <div class="container-fluid">
+    <div class="navbar-header">
+      <button type="button" class="navbar-toggle" data-toggle="collapse" data-target="#main-navbar">
+        <span class="sr-only">切换导航</span>
+        <span class="icon-bar"></span>
+        <span class="icon-bar"></span>
+        <span class="icon-bar"></span>
+      </button>
+      <a class="navbar-brand" href="//localhost:1313/">Beautiful Hugo</a>
+    </div>
+
+    <div class="collapse navbar-collapse" id="main-navbar">
+      <ul class="nav navbar-nav navbar-right">
+        
+          
+            <li>
+              <a title="Blog" href="/">Blog</a>
+            </li>
+          
+        
+          
+            <li class="navlinks-container">
+              <a class="navlinks-parent" role="button" tabindex="0">Samples</a>
+              <div class="navlinks-children">
+                
+                  <a href="/post/2017-03-07-bigimg-sample">Big Image Sample</a>
+                
+                  <a href="/post/2017-03-05-math-sample">Math Sample</a>
+                
+                  <a href="/post/2016-03-08-code-sample">Code Sample</a>
+                
+              </div>
+            </li>
+          
+        
+          
+            <li>
+              <a title="About" href="/page/about/">About</a>
+            </li>
+          
+        
+          
+            <li>
+              <a title="Tags" href="/tags">Tags</a>
+            </li>
+          
+        
+
+        
+
+        
+      </ul>
+    </div>
+
+    
+      <div class="avatar-container">
+        <div>
+          <a title="Beautiful Hugo" href="//localhost:1313/">
+            <img class="avatar-img" src="//localhost:1313/img/avatar.png" alt="Beautiful Hugo" style="border-radius: 0 !important; border: none !important; clip-path: none !important;" />
+           
+          </a>
+        </div>
+      </div>
+    
+
+  </div>
+</nav>
+
+
+
+
+    
+
+
+<div class="pswp" tabindex="-1" role="dialog" aria-hidden="true">
+
+<div class="pswp__bg"></div>
+
+<div class="pswp__scroll-wrap">
+    
+    <div class="pswp__container">
+      <div class="pswp__item"></div>
+      <div class="pswp__item"></div>
+      <div class="pswp__item"></div>
+    </div>
+    
+    <div class="pswp__ui pswp__ui--hidden">
+    <div class="pswp__top-bar">
+      
+      <div class="pswp__counter"></div>
+      <button class="pswp__button pswp__button--close" title="Close (Esc)"></button>
+      <button class="pswp__button pswp__button--share" title="Share"></button>
+      <button class="pswp__button pswp__button--fs" title="Toggle fullscreen"></button>
+      <button class="pswp__button pswp__button--zoom" title="Zoom in/out"></button>
+      
+      
+      <div class="pswp__preloader">
+        <div class="pswp__preloader__icn">
+          <div class="pswp__preloader__cut">
+            <div class="pswp__preloader__donut"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="pswp__share-modal pswp__share-modal--hidden pswp__single-tap">
+      <div class="pswp__share-tooltip"></div>
+    </div>
+    <button class="pswp__button pswp__button--arrow--left" title="Previous (arrow left)">
+    </button>
+    <button class="pswp__button pswp__button--arrow--right" title="Next (arrow right)">
+    </button>
+    <div class="pswp__caption">
+      <div class="pswp__caption__center"></div>
+    </div>
+    </div>
+    </div>
+</div>
+
+
+  
+  
+  
+
+
+
+
+
+
+  
+
+  <header class="header-section ">
+    
+    
+    <div class="intro-header no-img">
+      <div class="container">
+        <div class="row">
+          <div class="col-lg-8 col-lg-offset-2 col-md-10 col-md-offset-1">
+            <div class="posts-heading">
+              
+                <h1>谷歌云安装面板与反代</h1>
+              
+              
+                <hr class="small">
+              
+              
+              
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  
+  </header>
+
+
+    
+<div class="container" role="main">
+  <div class="row">
+    <div class="col-lg-8 col-lg-offset-2 col-md-10 col-md-offset-1">
+      <article role="main" class="blog-post">
+        <h2 id="1docker环境安装">1.docker环境安装</h2>
+<p>1.1 Docker 官方一键安装脚本:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl">curl -fsSL https://get.docker.com -o get-docker.sh
+</span></span><span class="line"><span class="cl">sudo sh get-docker.sh
+</span></span></code></pre></div><p>1.2 验证安装：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl">docker version
+</span></span></code></pre></div><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl">docker compose version
+</span></span></code></pre></div><h2 id="2安装并配置nezha面板与openlist">2.安装并配置nezha面板与openlist</h2>
+<p>2.1 一键生成docker-compose.yml</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl">cat &gt; docker-compose.yml <span class="s">&lt;&lt;EOF
+</span></span></span><span class="line"><span class="cl"><span class="s">services:
+</span></span></span><span class="line"><span class="cl"><span class="s">  # 哪吒面板服务
+</span></span></span><span class="line"><span class="cl"><span class="s">  nezha:
+</span></span></span><span class="line"><span class="cl"><span class="s">    container_name: nezha
+</span></span></span><span class="line"><span class="cl"><span class="s">    image: ghcr.io/nezhahq/nezha:latest
+</span></span></span><span class="line"><span class="cl"><span class="s">    network_mode: &#34;host&#34;
+</span></span></span><span class="line"><span class="cl"><span class="s">    volumes:
+</span></span></span><span class="line"><span class="cl"><span class="s">      - ./nezha_data:/dashboard/data
+</span></span></span><span class="line"><span class="cl"><span class="s">    restart: unless-stopped
+</span></span></span><span class="line"><span class="cl"><span class="s">
+</span></span></span><span class="line"><span class="cl"><span class="s">  # openlist服务
+</span></span></span><span class="line"><span class="cl"><span class="s">  openlist:
+</span></span></span><span class="line"><span class="cl"><span class="s">    container_name: openlist
+</span></span></span><span class="line"><span class="cl"><span class="s">    image: openlistteam/openlist:latest
+</span></span></span><span class="line"><span class="cl"><span class="s">    network_mode: &#34;host&#34;
+</span></span></span><span class="line"><span class="cl"><span class="s">    environment:
+</span></span></span><span class="line"><span class="cl"><span class="s">      - TZ=Asia/Shanghai
+</span></span></span><span class="line"><span class="cl"><span class="s">      - OPENLIST_ADMIN_PASSWORD=用户密码 # 修改登陆密码
+</span></span></span><span class="line"><span class="cl"><span class="s">    volumes:
+</span></span></span><span class="line"><span class="cl"><span class="s">      - ./oplist_data:/opt/openlist/data
+</span></span></span><span class="line"><span class="cl"><span class="s">    restart: unless-stopped
+</span></span></span><span class="line"><span class="cl"><span class="s">EOF</span>
+</span></span></code></pre></div><p>2.2 设置./oplist_data文件夹的权限，确保 Openlist 容器可以正常读写</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl">sudo chown -R 1001:1001 ./oplist_data
+</span></span></code></pre></div><p>2.3 启动服务</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl">docker compose up -d
+</span></span></code></pre></div><h2 id="3-caddy2反向代理安装">3. Caddy2反向代理安装</h2>
+<p>在 Debian/Ubuntu 系统上安装 Caddy2，可以按照以下步骤操作：</p>
+<p>3.1 安装必要的软件包</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl">sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https
+</span></span></code></pre></div><p>3.2 添加 Caddy 的 GPG 密钥</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl">curl -1sLf <span class="s1">&#39;https://dl.cloudsmith.io/public/caddy/stable/gpg.key&#39;</span> <span class="p">|</span> sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+</span></span></code></pre></div><p>3.3 添加 Caddy 的软件源</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl">curl -1sLf <span class="s1">&#39;https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt&#39;</span> <span class="p">|</span> sudo tee /etc/apt/sources.list.d/caddy-stable.list
+</span></span></code></pre></div><p>3.4 更新软件包列表</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl">sudo apt update
+</span></span></code></pre></div><p>3.5 安装 Caddy</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl">sudo apt install caddy
+</span></span></code></pre></div><p>3.6 检查Caddy版本，确认安装成功</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl">caddy version
+</span></span></code></pre></div><h2 id="4-caddy2配置反向代理">4. Caddy2配置反向代理</h2>
+<p>4.1 编辑 Caddyfile</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl">sudo nano /etc/caddy/Caddyfile
+</span></span></code></pre></div><p>4.2 粘贴配置如下：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl"><span class="c1"># 哪吒面板的反向代理配置</span>
+</span></span><span class="line"><span class="cl">mb.hxjx.hidns.co <span class="o">{</span>
+</span></span><span class="line"><span class="cl">    reverse_proxy localhost:8008
+</span></span><span class="line"><span class="cl"><span class="o">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="c1"># Openlist 的反向代理配置</span>
+</span></span><span class="line"><span class="cl">oplist.hxjx.hidns.co <span class="o">{</span>
+</span></span><span class="line"><span class="cl">    reverse_proxy localhost:5244
+</span></span><span class="line"><span class="cl"><span class="o">}</span>
+</span></span></code></pre></div><p>保存并退出 (Ctrl + X -&gt; Y -&gt; Enter)。mb.hxjx.hidns.co、oplist.hxjx.hidns.co为域名并添加了A记录或AAA记录</p>
+<p>4.3 重载 Caddy 配置使其生效：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl">sudo systemctl reload caddy
+</span></span></code></pre></div><p>4.4 其它相关命令：
+启动 Caddy 服务</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl">systemctl start caddy
+</span></span></code></pre></div><p>设置 Caddy 开机自启</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl">systemctl <span class="nb">enable</span> caddy
+</span></span></code></pre></div><p>重启 Caddy 服务</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl">systemctl restart caddy
+</span></span></code></pre></div><p>停止 Caddy 服务</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl">systemctl stop caddy
+</span></span></code></pre></div><p>修改配置文件后重载配置（不中断服务）</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl">systemctl reload caddy
+</span></span></code></pre></div><p>查看 Caddy 运行状态</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl">systemctl status caddy
+</span></span></code></pre></div><h2 id="5-补充配置">5. 补充配置</h2>
+<p>由于谷歌云关闭了CDN网络，需要配置新的证书发放机构。使用Google自家证书</p>
+<h3 id="51-获取谷歌证书的key">5.1 获取谷歌证书的Key</h3>
+<p>VPS 终端里运行这条命令（这是 GCP 自带的工具）：</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl">gcloud beta publicca external-account-keys create
+</span></span></code></pre></div><p>可能出现的情况：</p>
+<ul>
+<li>
+<p>如果直接成功：它会显示 keyId 和 b64MacKey。请立刻把这两个字符串发给我。</p>
+</li>
+<li>
+<p>如果提示 API 未启用：它会问 API [publicca.googleapis.com] not enabled. Enable it? (y/N)。请输入 y 并回车。</p>
+</li>
+<li>
+<p>如果提示未登录：它会报错让登录。如果遇到这个，请告诉我，我教你另一种简单的方法。</p>
+</li>
+</ul>
+<h3 id="52-写入新的-caddyfile包含你的谷歌密钥">5.2 写入新的 Caddyfile（包含你的谷歌密钥）</h3>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl">cat &gt; /etc/caddy/Caddyfile <span class="s">&lt;&lt;EOF
+</span></span></span><span class="line"><span class="cl"><span class="s">{
+</span></span></span><span class="line"><span class="cl"><span class="s">    # 使用 Google Trust Services (GTS)
+</span></span></span><span class="line"><span class="cl"><span class="s">    acme_ca https://dv.acme-v02.api.pki.goog/directory
+</span></span></span><span class="line"><span class="cl"><span class="s">    acme_eab {
+</span></span></span><span class="line"><span class="cl"><span class="s">        key_id b33a63ed1f543dc24236425112983a84
+</span></span></span><span class="line"><span class="cl"><span class="s">        mac_key EZBbzPPpgbzQt_GDCGNJRSnM1c-xVEqXN18e4Iajrt1G7JDjEvaIA-7BnwBiNu15twNyqMrisHwhRYPqV6B7eA
+</span></span></span><span class="line"><span class="cl"><span class="s">    }
+</span></span></span><span class="line"><span class="cl"><span class="s">    email xuhxjxhk@gmail.com
+</span></span></span><span class="line"><span class="cl"><span class="s">}
+</span></span></span><span class="line"><span class="cl"><span class="s">
+</span></span></span><span class="line"><span class="cl"><span class="s"># Openlist 的反向代理配置
+</span></span></span><span class="line"><span class="cl"><span class="s">oplist.hxjx.hidns.co {
+</span></span></span><span class="line"><span class="cl"><span class="s">    reverse_proxy localhost:5244
+</span></span></span><span class="line"><span class="cl"><span class="s">}
+</span></span></span><span class="line"><span class="cl"><span class="s">
+</span></span></span><span class="line"><span class="cl"><span class="s"># 哪吒面板的反向代理配置
+</span></span></span><span class="line"><span class="cl"><span class="s">mb.hxjx.hidns.co {
+</span></span></span><span class="line"><span class="cl"><span class="s">    reverse_proxy localhost:8008
+</span></span></span><span class="line"><span class="cl"><span class="s">}
+</span></span></span><span class="line"><span class="cl"><span class="s">
+</span></span></span><span class="line"><span class="cl"><span class="s"># Openlist 的反向代理配置2
+</span></span></span><span class="line"><span class="cl"><span class="s">oplist.cc.cd {
+</span></span></span><span class="line"><span class="cl"><span class="s">    reverse_proxy localhost:5244
+</span></span></span><span class="line"><span class="cl"><span class="s">}
+</span></span></span><span class="line"><span class="cl"><span class="s">EOF</span>
+</span></span></code></pre></div><h3 id="53-清理旧缓存非常重要">5.3 清理旧缓存（非常重要）</h3>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl">systemctl stop caddy
+</span></span><span class="line"><span class="cl">rm -rf /var/lib/caddy/.local/share/caddy
+</span></span></code></pre></div><h3 id="54-启动并见证奇迹">5.4 启动并见证奇迹</h3>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl">systemctl start caddy
+</span></span><span class="line"><span class="cl">journalctl -u caddy -n <span class="m">50</span> -f
+</span></span></code></pre></div><p>你会看到 Caddy 飞快地完成注册，日志里会出现 certificate obtained successfully。因为是谷歌自家的线路，这次应该在 1-2 秒内就能搞定。</p>
+
+        
+          <div class="blog-tags">
+            
+              
+              <a href="//localhost:1313/tags/%E6%8A%80%E6%9C%AF/">技术</a>&nbsp;
+            
+          </div>
+        
+
+        
+            <hr/>
+            <section id="social-share">
+              <div class="list-inline footer-links">
+                
+
+<div class="share-box" aria-hidden="true">
+    <ul class="share">
+      
+      <li>
+        <a href="//twitter.com/share?url=%2f%2flocalhost%3a1313%2fposts%2f%25E8%25B0%25B7%25E6%25AD%258C%25E4%25BA%2591%25E5%25AE%2589%25E8%25A3%2585%25E9%259D%25A2%25E6%259D%25BF%25E4%25B8%258E%25E5%258F%258D%25E4%25BB%25A3%2f&amp;text=%e8%b0%b7%e6%ad%8c%e4%ba%91%e5%ae%89%e8%a3%85%e9%9d%a2%e6%9d%bf%e4%b8%8e%e5%8f%8d%e4%bb%a3&amp;via=" target="_blank" title="Share on Twitter">
+          <i class="fab fa-twitter"></i>
+        </a>
+      </li>
+  
+      
+      <li>
+        <a href="//www.facebook.com/sharer/sharer.php?u=%2f%2flocalhost%3a1313%2fposts%2f%25E8%25B0%25B7%25E6%25AD%258C%25E4%25BA%2591%25E5%25AE%2589%25E8%25A3%2585%25E9%259D%25A2%25E6%259D%25BF%25E4%25B8%258E%25E5%258F%258D%25E4%25BB%25A3%2f" target="_blank" title="Share on Facebook">
+          <i class="fab fa-facebook"></i>
+        </a>
+      </li>
+  
+      
+      <li>
+        <a href="//reddit.com/submit?url=%2f%2flocalhost%3a1313%2fposts%2f%25E8%25B0%25B7%25E6%25AD%258C%25E4%25BA%2591%25E5%25AE%2589%25E8%25A3%2585%25E9%259D%25A2%25E6%259D%25BF%25E4%25B8%258E%25E5%258F%258D%25E4%25BB%25A3%2f&amp;title=%e8%b0%b7%e6%ad%8c%e4%ba%91%e5%ae%89%e8%a3%85%e9%9d%a2%e6%9d%bf%e4%b8%8e%e5%8f%8d%e4%bb%a3" target="_blank" title="Share on Reddit">
+          <i class="fab fa-reddit"></i>
+        </a>
+      </li>
+  
+      
+      <li>
+        <a href="//www.linkedin.com/shareArticle?url=%2f%2flocalhost%3a1313%2fposts%2f%25E8%25B0%25B7%25E6%25AD%258C%25E4%25BA%2591%25E5%25AE%2589%25E8%25A3%2585%25E9%259D%25A2%25E6%259D%25BF%25E4%25B8%258E%25E5%258F%258D%25E4%25BB%25A3%2f&amp;title=%e8%b0%b7%e6%ad%8c%e4%ba%91%e5%ae%89%e8%a3%85%e9%9d%a2%e6%9d%bf%e4%b8%8e%e5%8f%8d%e4%bb%a3" target="_blank" title="Share on LinkedIn">
+          <i class="fab fa-linkedin"></i>
+        </a>
+      </li>
+  
+      
+      <li>
+        <a href="//www.stumbleupon.com/submit?url=%2f%2flocalhost%3a1313%2fposts%2f%25E8%25B0%25B7%25E6%25AD%258C%25E4%25BA%2591%25E5%25AE%2589%25E8%25A3%2585%25E9%259D%25A2%25E6%259D%25BF%25E4%25B8%258E%25E5%258F%258D%25E4%25BB%25A3%2f&amp;title=%e8%b0%b7%e6%ad%8c%e4%ba%91%e5%ae%89%e8%a3%85%e9%9d%a2%e6%9d%bf%e4%b8%8e%e5%8f%8d%e4%bb%a3" target="_blank" title="Share on StumbleUpon">
+          <i class="fab fa-stumbleupon"></i>
+        </a>
+      </li>
+  
+      
+      <li>
+        <a href="//www.pinterest.com/pin/create/button/?url=%2f%2flocalhost%3a1313%2fposts%2f%25E8%25B0%25B7%25E6%25AD%258C%25E4%25BA%2591%25E5%25AE%2589%25E8%25A3%2585%25E9%259D%25A2%25E6%259D%25BF%25E4%25B8%258E%25E5%258F%258D%25E4%25BB%25A3%2f&amp;description=%e8%b0%b7%e6%ad%8c%e4%ba%91%e5%ae%89%e8%a3%85%e9%9d%a2%e6%9d%bf%e4%b8%8e%e5%8f%8d%e4%bb%a3" target="_blank" title="Share on Pinterest">
+          <i class="fab fa-pinterest"></i>
+        </a>
+      </li>
+    </ul>
+  </div>
+  
+
+              </div>
+            </section>
+        
+
+        
+          
+            
+          
+
+          
+                  <h4 class="see-also">也可以看看</h4>
+                  <ul>
+                
+                
+                    <li><a href="/posts/vps%E6%8B%BE%E5%BB%BA%E8%8A%82%E7%82%B9%E7%9B%B8%E5%85%B3%E6%80%BB%E7%BB%93/">Vps拾建节点相关总结</a></li>
+                
+                    <li><a href="/posts/docker-compose%E9%83%A8%E7%BD%B2%E6%9C%8D%E5%8A%A1%E4%B8%8Ecaddy%E5%8F%8D%E4%BB%A3/">Docker Compose部署服务与caddy反代</a></li>
+                
+                    <li><a href="/posts/warp%E8%87%AA%E5%8A%A8%E9%87%8D%E8%BF%9E%E8%84%9A%E6%9C%AC%E9%83%A8%E7%BD%B2%E6%8C%87%E5%8D%97/">Warp自动重连脚本部署指南</a></li>
+                
+                    <li><a href="/posts/markdown%E8%AF%A6%E7%BB%86%E8%AF%AD%E6%B3%95%E6%8C%87%E5%8D%97/">Markdown详细语法指南</a></li>
+                
+                    <li><a href="/posts/%E5%85%B3%E4%BA%8Eopenlist%E6%96%87%E4%BB%B6%E5%91%BD%E5%90%8D/">关于openlist文件命名</a></li>
+                
+              </ul>
+
+          
+        
+      </article>
+
+      
+        <ul class="pager blog-pager">
+          
+            <li class="previous">
+              <a href="//localhost:1313/posts/vps%E6%8B%BE%E5%BB%BA%E8%8A%82%E7%82%B9%E7%9B%B8%E5%85%B3%E6%80%BB%E7%BB%93/" data-toggle="tooltip" data-placement="top" title="Vps拾建节点相关总结">&larr; 上一篇</a>
+            </li>
+          
+          
+        </ul>
+      
+
+
+      
+      
+      
+      
+      
+        
+      
+
+    </div>
+  </div>
+</div>
+
+      <footer>
+  <div class="container">
+    
+    <div class="row">
+      <div class="col-lg-8 col-lg-offset-2 col-md-10 col-md-offset-1">
+        <ul class="list-inline text-center footer-links">
+          
+              <li>
+		
+		  <a href="mailto:youremail@domain.com" title="Email me">
+		
+                  <span class="fa-stack fa-lg">
+                    <i class="fas fa-circle fa-stack-2x"></i>
+                    <i class="fas fa-envelope fa-stack-1x fa-inverse"></i>
+                  </span>
+                </a>
+              </li>
+              <li>
+		
+		  <a href="https://www.facebook.com/username" title="Facebook">
+		
+                  <span class="fa-stack fa-lg">
+                    <i class="fas fa-circle fa-stack-2x"></i>
+                    <i class="fab fa-facebook fa-stack-1x fa-inverse"></i>
+                  </span>
+                </a>
+              </li>
+              <li>
+		
+		  <a href="https://github.com/username" title="GitHub">
+		
+                  <span class="fa-stack fa-lg">
+                    <i class="fas fa-circle fa-stack-2x"></i>
+                    <i class="fab fa-github fa-stack-1x fa-inverse"></i>
+                  </span>
+                </a>
+              </li>
+          
+          
+          
+        </ul>
+        <p class="credits copyright text-muted">
+          
+            
+              <a href="yourwebsite.com">Some Person</a>
+            
+          
+
+          &nbsp;&bull;&nbsp;&copy;
+          
+            2025
+          
+
+          
+            &nbsp;&bull;&nbsp;
+            <a href="//localhost:1313/">Beautiful Hugo</a>
+          
+        </p>
+        
+        <p class="credits theme-by text-muted">
+          由 <a href="https://gohugo.io">Hugo v0.152.2</a> 强力驱动 &nbsp;&bull;&nbsp; 主题 <a href="https://github.com/halogenica/beautifulhugo">Beautiful Hugo</a> 移植自 <a href="https://deanattali.com/beautiful-jekyll/">Beautiful Jekyll</a>
+          
+        </p>
+      </div>
+    </div>
+  </div>
+</footer><script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.js" integrity="sha384-cMkvdD8LoxVzGF/RPUKAcvmm49FQ0oxwDF3BGKtDXcEc+T1b2N+teh/OJfpU0jr6" crossorigin="anonymous"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/contrib/auto-render.min.js" integrity="sha384-hCXGrW6PitJEwbkoStFjeJxv+fSOOQKOPbJxSfM6G5sWZjAyWhXiTIIAmQqnlLlh" crossorigin="anonymous" onload="renderMathInElement(document.body);"></script>
+<script src="https://code.jquery.com/jquery-3.7.0.slim.min.js" integrity="sha384-w5y/xIeYixWvfM+A1cEbmHPURnvyqmVg5eVENruEdDjcyRLUSNej7512JQGspFUr" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@3.4.1/dist/js/bootstrap.min.js" integrity="sha384-aJ21OjlMXNL5UyIl/XNwTMqvzeRMZH2w8c5cRVpzpU8Y5bApTppSuUkhZXN0VxHd" crossorigin="anonymous"></script>
+
+<script src="//localhost:1313/js/main.js"></script>
+<script src="//localhost:1313/js/highlight.min.js"></script>
+<script> hljs.initHighlightingOnLoad(); </script>
+<script> $(document).ready(function() {$("pre.chroma").css("padding","0");}); </script><script src="https://cdnjs.cloudflare.com/ajax/libs/photoswipe/4.1.2/photoswipe.min.js" integrity="sha384-QELNnmcmU8IR9ZAykt67vGr9/rZJdHbiWi64V88fCPaOohUlHCqUD/unNN0BXSqy" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/photoswipe/4.1.2/photoswipe-ui-default.min.js" integrity="sha384-m67o7SkQ1ALzKZIFh4CiTA8tmadaujiTa9Vu+nqPSwDOqHrDmxLezTdFln8077+q" crossorigin="anonymous"></script><script src="//localhost:1313/js/load-photoswipe.js"></script>
+
+
+
+
+
+
+
+
+
+
+    
+  </body>
+</html>
+
