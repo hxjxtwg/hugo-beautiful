@@ -4,7 +4,7 @@ title: "{{ replace .Name "-" " " | title }}"
 
 author: "xxsky"
 
-type: "教程"
+type: "posts"
 
 date: {{ .Date }}
 

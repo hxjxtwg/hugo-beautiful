@@ -4,7 +4,7 @@ title: "Hugo建站、主题修改与Cloudflare部署全流程手册"
 
 author: "xxsky"
 
-type: "教程"
+type: "posts"
 
 date: 2025-12-07T16:49:26+08:00
 
@@ -270,6 +270,37 @@ pygmentsCodefencesGuessSyntax = true   # 自动猜测代码语言（如果你没
 <p class="credits theme-by text-muted">
   Copyright &copy; {{ now.Format "2006" }} {{ .Site.Params.author.name }}
 </p>
+```
+也可以直接删掉p段
+
+5.5 修改文章元信息
+目的： 文章标题下不显示“By [作者名]”，只显示日期。 操作： 复制主题文件到 layouts/partials/post_meta.html，然后修改：
+```bash
+{{ if .Params.author }}
+  {{ i18n "postedBy" }} <span class="post-meta-user">{{ .Params.author }}</span>
+{{ end }}
+```
+5.6 网站头像
+位置：layouts/partials/nav.html
+去掉头像圆圈，替换成下面字段
+```bash
+<a class="navbar-brand" href="{{ "" | absLangURL }}">{{ .Site.Title }}</a>
+```
+或强制指向首页
+```bash
+<a class="navbar-brand" href="/">
+```
+5.7 日期显示
+位置：layouts/partials/post_meta.html
+```bash
+  {{ $lastmodstr := .Lastmod | time.Format ":2006-1-2" }}
+  {{ $datestr := .Date | time.Format ":2006-1-2" }}
+```
+或文章标题下不显示作者名字，删除作者判断逻辑
+```bash
+{{ if .Params.author }}
+  {{ i18n "postedBy" }} <span class="post-meta-user">{{ .Params.author }}</span>
+{{ end }}
 ```
 
 ### 6. 创建内容与本地测试
