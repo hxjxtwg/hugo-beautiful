@@ -52,15 +52,18 @@ body.dark-mode .navbar-custom .nav > li > a:hover {
 }
 
 /* ======================================================= */
-/* 4. 切换按钮 (黑白字符版) */
+/* 4. 切换按钮 (半黑半白圆圈版) */
 /* ======================================================= */
 .theme-toggle-btn {
     display: flex; align-items: center; justify-content: center; height: 100%; padding: 15px; 
-    cursor: pointer; color: #666; transition: color 0.3s;
-    font-size: 20px; line-height: 1;
+    cursor: pointer; 
+    color: #555; /* 浅色模式下的圆圈颜色 */
+    transition: color 0.3s, transform 0.3s; /* 加入旋转动画过渡 */
+    font-size: 22px; /* 圆圈稍微大一点更好看 */
+    line-height: 1;
 }
 .theme-toggle-btn:hover { color: #000; }
-body.dark-mode .theme-toggle-btn { color: #ccc; } 
+body.dark-mode .theme-toggle-btn { color: #ddd; } /* 深色模式下的圆圈颜色 */
 body.dark-mode .theme-toggle-btn:hover { color: #fff; }
 
 /* ======================================================= */
@@ -138,46 +141,26 @@ body.dark-mode #halo-racer-loader { background: #1e1e1e !important; }
 @keyframes run { 0%{left:0} 30%{left:68px} 50%{left:68px} 80%{left:0} 100%{left:0} }
 
 /* ======================================================= */
-/* 8. 去除手机端菜单框 & 上下篇边框 (新增修正) */
+/* 8. 去除手机端菜单框 & 上下篇边框 */
 /* ======================================================= */
-
 /* A. 手机端导航栏按钮 (三横杠) 去框 */
-.navbar-toggle {
-    border: none !important;           /* 去掉外边框 */
-    background: transparent !important; /* 去掉背景色 */
-}
-.navbar-toggle:hover, .navbar-toggle:focus {
-    background: transparent !important; /* 去掉点击/悬停时的灰色背景 */
-}
-/* 修正三横杠的颜色 (确保在浅色/深色下都可见) */
+.navbar-toggle { border: none !important; background: transparent !important; }
+.navbar-toggle:hover, .navbar-toggle:focus { background: transparent !important; }
 .navbar-default .navbar-toggle .icon-bar { background-color: #888 !important; }
 body.dark-mode .navbar-toggle .icon-bar { background-color: #e0e0e0 !important; }
 
-
 /* B. 上一篇/下一篇 (Pager) 去框 */
-.pager li > a, 
-.pager li > span {
-    border: none !important;            /* 去掉边框 */
-    background-color: transparent !important; /* 去掉背景色 */
-    padding: 10px 0 !important;         /* 稍微调整内边距，让它看起来像纯文本链接 */
-    font-weight: bold;                  /* 加粗一点让它显眼 */
+.pager li > a, .pager li > span {
+    border: none !important; background-color: transparent !important; 
+    padding: 10px 0 !important; font-weight: bold;                  
 }
-/* 深色模式下的 Pager 覆盖 */
-body.dark-mode .pager li > a, 
-body.dark-mode .pager li > span {
-    background: transparent !important; 
-    border: none !important; 
-    color: #ccc !important;
+body.dark-mode .pager li > a, body.dark-mode .pager li > span {
+    background: transparent !important; border: none !important; color: #ccc !important;
 }
-/* 鼠标悬停效果 (加个下划线或变色提示即可，不需要框) */
 .pager li > a:hover, .pager li > a:focus {
-    background-color: transparent !important;
-    color: #0085a1 !important; /* 悬停变蓝 */
+    background-color: transparent !important; color: #0085a1 !important; 
 }
-body.dark-mode .pager li > a:hover {
-    color: #fff !important;    /* 深色模式悬停变白 */
-}
-
+body.dark-mode .pager li > a:hover { color: #fff !important; }
 </style>
 
 <script>
@@ -190,7 +173,7 @@ body.dark-mode .pager li > a:hover {
   });
 })();
 
-// 2. 深色模式切换 (黑夜=月亮，白天=太阳)
+// 2. 深色模式切换 (修复：使用半黑半白圆圈)
 (function() {
     const isDark = localStorage.getItem('theme') === 'dark';
     if(isDark) document.body.classList.add('dark-mode');
@@ -204,13 +187,17 @@ body.dark-mode .pager li > a:hover {
         link.className = "theme-toggle-btn";
         link.title = "Switch Theme";
         
-        link.innerHTML = isDark ? "☾" : "☀"; 
+        // 【核心修改】使用 Unicode 几何图形
+        // ◑ (右黑) / ◐ (左黑) 
+        link.innerHTML = isDark ? "◑" : "◐"; 
         
         link.onclick = function() {
             document.body.classList.toggle('dark-mode');
             const currentMode = document.body.classList.contains('dark-mode') ? 'dark' : 'light';
             localStorage.setItem('theme', currentMode);
-            link.innerHTML = currentMode === 'dark' ? "☾" : "☀";
+            
+            // 点击切换时的图标翻转逻辑
+            link.innerHTML = currentMode === 'dark' ? "◑" : "◐";
         };
         li.appendChild(link);
         navList.appendChild(li);
