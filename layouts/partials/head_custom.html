@@ -28,9 +28,6 @@ body.dark-mode hr { border-color: #333 !important; opacity: 0.6; }
 
 /* 页脚 */
 body.dark-mode footer { background: #1e1e1e !important; color: #777 !important; border-top-color: #333 !important; }
-body.dark-mode .pager li > a, body.dark-mode .pager li > span {
-    background: #252526 !important; border-color: #333 !important; color: #ccc !important;
-}
 
 /* ======================================================= */
 /* 3. 导航栏 (菜单栏) 优化 */
@@ -42,7 +39,7 @@ body.dark-mode .navbar-custom {
     border-bottom: 1px solid #333 !important;
 }
 
-/* 【关键修改】字体颜色：提亮到 #e0e0e0 (亮灰白)，解决看不清的问题 */
+/* 字体颜色：提亮到 #e0e0e0 (亮灰白) */
 body.dark-mode .navbar-custom .navbar-brand,
 body.dark-mode .navbar-custom .nav > li > a {
     color: #e0e0e0 !important; 
@@ -63,7 +60,7 @@ body.dark-mode .navbar-custom .nav > li > a:hover {
     font-size: 20px; line-height: 1;
 }
 .theme-toggle-btn:hover { color: #000; }
-body.dark-mode .theme-toggle-btn { color: #ccc; } /* 图标也稍微提亮一点 */
+body.dark-mode .theme-toggle-btn { color: #ccc; } 
 body.dark-mode .theme-toggle-btn:hover { color: #fff; }
 
 /* ======================================================= */
@@ -77,9 +74,7 @@ body.dark-mode ::-webkit-scrollbar-corner { background: #1e1e1e; }
 /* ======================================================= */
 /* 6. 代码块逻辑 (完美版：去框 + 红悬停 + 智能折叠) */
 /* ======================================================= */
-/* A. 隐藏旧按钮 */
 .highlight button:not(.c-btn), .copy-to-clipboard, .copy-code-button { display: none !important; }
-/* B. 浅色模式 */
 .highlight { position: relative !important; }
 
 /* C. 深色模式 - 无边框融合 */
@@ -141,6 +136,48 @@ body.dark-mode #halo-racer-loader { background: #1e1e1e !important; }
 .p2 { background: rgba(255,71,87,0.5); z-index:2; animation: run 1.5s cubic-bezier(.4,0,.2,1) infinite 0.08s; }
 .red { background: #ff4757; z-index:10; animation: run 1.5s cubic-bezier(.4,0,.2,1) infinite 0s; }
 @keyframes run { 0%{left:0} 30%{left:68px} 50%{left:68px} 80%{left:0} 100%{left:0} }
+
+/* ======================================================= */
+/* 8. 去除手机端菜单框 & 上下篇边框 (新增修正) */
+/* ======================================================= */
+
+/* A. 手机端导航栏按钮 (三横杠) 去框 */
+.navbar-toggle {
+    border: none !important;           /* 去掉外边框 */
+    background: transparent !important; /* 去掉背景色 */
+}
+.navbar-toggle:hover, .navbar-toggle:focus {
+    background: transparent !important; /* 去掉点击/悬停时的灰色背景 */
+}
+/* 修正三横杠的颜色 (确保在浅色/深色下都可见) */
+.navbar-default .navbar-toggle .icon-bar { background-color: #888 !important; }
+body.dark-mode .navbar-toggle .icon-bar { background-color: #e0e0e0 !important; }
+
+
+/* B. 上一篇/下一篇 (Pager) 去框 */
+.pager li > a, 
+.pager li > span {
+    border: none !important;            /* 去掉边框 */
+    background-color: transparent !important; /* 去掉背景色 */
+    padding: 10px 0 !important;         /* 稍微调整内边距，让它看起来像纯文本链接 */
+    font-weight: bold;                  /* 加粗一点让它显眼 */
+}
+/* 深色模式下的 Pager 覆盖 */
+body.dark-mode .pager li > a, 
+body.dark-mode .pager li > span {
+    background: transparent !important; 
+    border: none !important; 
+    color: #ccc !important;
+}
+/* 鼠标悬停效果 (加个下划线或变色提示即可，不需要框) */
+.pager li > a:hover, .pager li > a:focus {
+    background-color: transparent !important;
+    color: #0085a1 !important; /* 悬停变蓝 */
+}
+body.dark-mode .pager li > a:hover {
+    color: #fff !important;    /* 深色模式悬停变白 */
+}
+
 </style>
 
 <script>
