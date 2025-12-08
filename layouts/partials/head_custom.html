@@ -13,7 +13,7 @@ body.dark-mode {
     color: #e6e6e6 !important;
 }
 
-/* 链接颜色 (仅正文生效) */
+/* 链接颜色 */
 body.dark-mode a { color: #4daafc; }
 
 /* 标题与文字 */
@@ -22,7 +22,7 @@ body.dark-mode h4, body.dark-mode h5, body.dark-mode h6,
 body.dark-mode .post-title, body.dark-mode .post-heading h1 { color: #fff !important; }
 body.dark-mode .post-meta { color: #858585 !important; }
 
-/* 首页分割线 & 底部线条 */
+/* 分割线 */
 body.dark-mode .post-preview { border-bottom: 1px solid #333 !important; }
 body.dark-mode hr { border-color: #333 !important; opacity: 0.6; }
 
@@ -32,20 +32,14 @@ body.dark-mode footer { background: #1e1e1e !important; color: #777 !important; 
 /* ======================================================= */
 /* 3. 导航栏 (菜单栏) 优化 */
 /* ======================================================= */
-
-/* 背景：深灰 */
 body.dark-mode .navbar-custom {
     background-color: #252526 !important; 
     border-bottom: 1px solid #333 !important;
 }
-
-/* 字体颜色：提亮到 #e0e0e0 (亮灰白) */
 body.dark-mode .navbar-custom .navbar-brand,
 body.dark-mode .navbar-custom .nav > li > a {
     color: #e0e0e0 !important; 
 }
-
-/* 鼠标悬停：变纯白 */
 body.dark-mode .navbar-custom .navbar-brand:hover,
 body.dark-mode .navbar-custom .nav > li > a:hover {
     color: #ffffff !important;
@@ -57,13 +51,13 @@ body.dark-mode .navbar-custom .nav > li > a:hover {
 .theme-toggle-btn {
     display: flex; align-items: center; justify-content: center; height: 100%; padding: 15px; 
     cursor: pointer; 
-    color: #555; /* 浅色模式下的圆圈颜色 */
-    transition: color 0.3s, transform 0.3s; /* 加入旋转动画过渡 */
-    font-size: 22px; /* 圆圈稍微大一点更好看 */
+    color: #555; 
+    transition: color 0.3s, transform 0.3s; 
+    font-size: 22px; 
     line-height: 1;
 }
 .theme-toggle-btn:hover { color: #000; }
-body.dark-mode .theme-toggle-btn { color: #ddd; } /* 深色模式下的圆圈颜色 */
+body.dark-mode .theme-toggle-btn { color: #ddd; } 
 body.dark-mode .theme-toggle-btn:hover { color: #fff; }
 
 /* ======================================================= */
@@ -75,37 +69,59 @@ body.dark-mode ::-webkit-scrollbar-thumb:hover { background: #555; }
 body.dark-mode ::-webkit-scrollbar-corner { background: #1e1e1e; }
 
 /* ======================================================= */
-/* 6. 代码块逻辑 (完美版：去框 + 红悬停 + 智能折叠) */
+/* 6. 代码块逻辑 (修复版：恢复浅色模式背景范围) */
 /* ======================================================= */
+
+/* 通用设置：隐藏多余按钮，设置定位 */
 .highlight button:not(.c-btn), .copy-to-clipboard, .copy-code-button { display: none !important; }
-.highlight { position: relative !important; }
+.highlight { position: relative !important; margin-bottom: 20px; }
 
-/* C. 深色模式 - 无边框融合 */
+/* --- A. 浅色模式 (默认) 修复 --- */
+/* 强制给外层容器加背景和圆角，但不加边框 */
+.highlight {
+    background-color: #f5f5f5 !important; /* 经典的浅灰背景 */
+    border-radius: 6px !important;         /* 圆角 */
+    border: none !important;               /* 再次确认无边框 */
+}
+
+/* 强制撑开内部 pre 标签，恢复“大框”的感觉 */
+.highlight pre {
+    background-color: transparent !important; /* 让外层背景透出来 */
+    border: none !important;
+    padding: 15px !important;                 /* 关键！恢复内边距，让文字不贴边 */
+    margin: 0 !important;
+    width: 100% !important;                   /* 撑满宽度 */
+    overflow-x: auto;                         /* 代码过长显示滚动条 */
+    font-size: 14px;                          /* 确保字体大小合适 */
+    line-height: 1.5;
+}
+
+/* --- B. 深色模式覆盖 --- */
 body.dark-mode .highlight {
-    background-color: #1e1e1e !important;
-    border: 1px solid #333 !important; 
-    border-radius: 6px !important;
+    background-color: #1e1e1e !important;    /* 深色背景 */
+    border: 1px solid #333 !important;        /* 深色模式下稍微有点边框好看些，不要可删 */
 }
-body.dark-mode .highlight pre, body.dark-mode .highlight code,
-body.dark-mode .highlight table, body.dark-mode .highlight tr, body.dark-mode .highlight td {
-    background-color: transparent !important; color: #d4d4d4 !important; border: none !important;
+body.dark-mode .highlight pre, 
+body.dark-mode .highlight code {
+    background-color: transparent !important; 
+    color: #d4d4d4 !important; 
+    border: none !important;
 }
 
-/* 语法高亮 */
+/* 语法高亮适配深色 */
 body.dark-mode .chroma .k, body.dark-mode .chroma .kd, body.dark-mode .chroma .kt { color: #569cd6 !important; } 
 body.dark-mode .chroma .s, body.dark-mode .chroma .s1 { color: #ce9178 !important; } 
 body.dark-mode .chroma .c, body.dark-mode .chroma .c1 { color: #6a9955 !important; } 
 body.dark-mode .chroma .nf { color: #dcdcaa !important; } 
 body.dark-mode .chroma .lnt { color: #555 !important; }
 
-/* D. 按钮组 */
+/* C. 按钮组 */
 .code-tools { 
     position: absolute; top: 4px; right: 4px; z-index: 20; display: flex;
     background: transparent !important; opacity: 0; transition: opacity 0.2s;
 }
 .highlight:hover .code-tools { opacity: 1; }
 
-/* 按钮样式 */
 .c-btn { 
     width: 26px; height: 26px; 
     border: none !important; background: transparent !important; 
@@ -118,7 +134,7 @@ body.dark-mode .chroma .lnt { color: #555 !important; }
 body.dark-mode .c-btn { color: #666; }
 body.dark-mode .c-btn:hover { color: #ff4757 !important; }
 
-/* E. 折叠 */
+/* D. 折叠 */
 .highlight.folded { height: 200px !important; overflow: hidden !important; }
 
 /* ======================================================= */
@@ -187,7 +203,6 @@ body.dark-mode .pager li > a:hover { color: #fff !important; }
         link.className = "theme-toggle-btn";
         link.title = "Switch Theme";
         
-        // 【核心修改】使用 Unicode 几何图形
         // ◑ (右黑) / ◐ (左黑) 
         link.innerHTML = isDark ? "◑" : "◐"; 
         
@@ -195,8 +210,6 @@ body.dark-mode .pager li > a:hover { color: #fff !important; }
             document.body.classList.toggle('dark-mode');
             const currentMode = document.body.classList.contains('dark-mode') ? 'dark' : 'light';
             localStorage.setItem('theme', currentMode);
-            
-            // 点击切换时的图标翻转逻辑
             link.innerHTML = currentMode === 'dark' ? "◑" : "◐";
         };
         li.appendChild(link);
@@ -204,7 +217,7 @@ body.dark-mode .pager li > a:hover { color: #fff !important; }
     });
 })();
 
-// 3. 代码块工具
+// 3. 代码块工具 (逻辑保持不变)
 document.addEventListener('DOMContentLoaded', function() {
     const svgCopy = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
     const svgCheck = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#28a745" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg>';
