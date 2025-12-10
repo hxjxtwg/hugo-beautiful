@@ -1,6 +1,6 @@
 ---
 
-title: "About"
+title: "关于我"
 
 author: "xxsky"
 
