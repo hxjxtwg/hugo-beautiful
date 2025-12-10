@@ -2,19 +2,17 @@
 
 title: "Hugo建站、主题修改与Cloudflare部署全流程手册"
 
-author: "xxsky"
-
-type: "posts"
-
 date: 2025-12-07T16:49:26+08:00
 
-subtitle: ""
+draft: false
 
-image: ""
+categories: ["技术"]
 
-tags:
-  - 技术
-  - 学习
+tags: ["技术"]
+
+author: "xxsky"
+
+description: ""
 
 ---
 

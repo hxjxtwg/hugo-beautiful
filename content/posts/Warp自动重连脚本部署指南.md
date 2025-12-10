@@ -19,8 +19,7 @@ description: ""
 \# cover: /images/default.jpg
 
 ---
-
-
+适合纯ipv6的vps
 
 <!--more-->
 
