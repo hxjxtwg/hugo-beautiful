@@ -117,7 +117,7 @@ pygmentsCodefencesGuessSyntax = true   # 自动猜测代码语言（如果你没
 
 [[menu.main]]
     name = "关于"
-    url = "page/about/"      # 对应 content/page/about.md
+    url = "page/about"      # 对应 content/page/about.md
     weight = 3
 
 # 2. 下拉菜单示例 (父级)
