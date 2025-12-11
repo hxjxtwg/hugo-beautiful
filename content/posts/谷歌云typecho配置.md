@@ -1022,7 +1022,7 @@ function themeFields($layout)
 也可以把logo的功能加进去。
 
 5.2 修改index.php
-在`<?php if ($this->have()): ?>`与`<?php while ($this->next()): ?>`添加如下代码：
+只有首页也就是第1页去重。在`<?php if ($this->have()): ?>`与`<?php while ($this->next()): ?>`添加如下代码：
 ```html
     <?php 
     /** =============================================
@@ -1089,6 +1089,82 @@ function themeFields($layout)
         }
     }
     ?>
+```
+或者都去重，但第1页以后的页面会缺失文章数量。在`<?php if ($this->have()): ?>`与`<?php while ($this->next()): ?>`添加如下代码：
+```html
+<?php 
+/** =============================================
+ * 置顶逻辑 (修复分页重复显示版)
+ * ============================================= */
+$stickyCids = array(); 
+$stickyHTML = ""; // 用于缓存置顶文章的HTML，稍后输出
+
+// 1. 【无条件执行】查询数据库，找出所有置顶文章ID
+// 只要是首页(index)，不管第几页，都要查出来，为了后续过滤
+if ($this->is('index')) {
+    $db = Typecho_Db::get();
+    
+    $sql = $db->select('table.contents.*', 'table.fields.str_value AS sticky_weight')
+        ->from('table.contents')
+        ->join('table.fields', 'table.contents.cid = table.fields.cid', Typecho_Db::INNER_JOIN)
+        ->where('table.fields.name = ?', 'article_weight') 
+        ->where('table.contents.type = ?', 'post')
+        ->where('table.contents.status = ?', 'publish');
+        
+    $rawPosts = $db->fetchAll($sql);
+
+    // 2. 提取数据并排序
+    $validSticky = array();
+    foreach ($rawPosts as $row) {
+        $weight = intval($row['sticky_weight']);
+        if ($weight > 0) {
+            $row['sticky_weight'] = $weight;
+            $validSticky[] = $row;
+            // 【关键】无论第几页，都要把ID记下来，用于下面主循环的去重
+            $stickyCids[] = $row['cid']; 
+        }
+    }
+
+    usort($validSticky, function($a, $b) {
+        return $b['sticky_weight'] - $a['sticky_weight'];
+    });
+
+    // 3. 【有条件输出】只在第一页渲染HTML
+    if ($this->_currentPage == 1 && !empty($validSticky)) {
+        foreach($validSticky as $row) {
+            // 初始化组件
+            $stickyPost = $this->widget('Widget_Abstract_Contents', 'sticky_manual_'.$row['cid']);
+            $stickyPost->push($row);
+            
+            // 下面是输出样式，您可以根据需要微调
+?>
+    <article class="post sticky-post" itemscope itemtype="http://schema.org/BlogPosting" style="border-bottom: 1px solid #f0f0f0; margin-bottom: 25px; padding-bottom: 20px;">
+        <h2 class="post-title" itemprop="name headline">
+            <span style="background:#ff4757; color:#fff; font-size:12px; padding:3px 6px; border-radius:3px; vertical-align:middle; margin-right:6px; font-weight:normal;">
+                TOP <?php echo $row['sticky_weight']; ?>
+            </span>
+            <a itemprop="url" href="<?php $stickyPost->permalink(); ?>"><?php $stickyPost->title(); ?></a>
+        </h2>
+        
+        <ul class="post-meta">
+            <li><?php _e('作者: '); ?><a href="<?php $stickyPost->author->permalink(); ?>"><?php $stickyPost->author(); ?></a></li>
+            <li><?php _e('时间: '); ?><time><?php $stickyPost->date(); ?></time></li>
+            <li><?php _e('分类: '); ?><?php $stickyPost->category(','); ?></li>
+        </ul>
+        
+        <div class="post-content" itemprop="articleBody">
+            <?php $stickyPost->content(_t('阅读剩余部分')); ?>
+        </div>
+    </article>
+<?php
+        } // end foreach
+    } // end if page==1
+} // end if index
+?>
+```
+过滤置顶文章还需在<?php while ($this->next()): ?>下加上代码：
+```html
+<?php if (isset($stickyCids) && in_array($this->cid, $stickyCids)) continue; ?>
 ```
 ### 6.prism.css、prism.js文件
 6.1 prism.css内容：

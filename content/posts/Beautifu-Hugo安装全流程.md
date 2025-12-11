@@ -1,18 +1,20 @@
 ---
 
-title: "Hugo建站、主题修改与Cloudflare部署全流程手册"
-
-date: 2025-12-07T16:49:26+08:00
-
-draft: false
-
-categories: ["技术"]
-
-tags: ["技术"]
+title: "Beautifu Hugo安装全流程"
 
 author: "xxsky"
 
-description: ""
+type: "posts"
+
+date: 2025-12-11T17:57:59+08:00
+
+subtitle: ""
+
+image: ""
+
+tags:
+  - 技术
+  - 学习
 
 ---
 
