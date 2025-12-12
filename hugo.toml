@@ -26,7 +26,7 @@ pygmentsUseClasses = true              # 推荐 true，生成 CSS 类而不是�
 pygmentsCodeFences = true              # 启用 Markdown 的 ``` 代码块语法
 pygmentsCodefencesGuessSyntax = true   # 自动猜测代码语言（如果你没写 ```python 这种标记）
 #pygmentsUseClassic = true             # 是否使用旧版高亮引擎（一般不用开）
-pygmentOptions = "linenos=inline"     # 是否显示行号，去掉注释即可开启
+#pygmentOptions = "linenos=inline"     # 是否显示行号，去掉注释即可开启
 
 # -----------------------------------------------------------
 # 第三方服务 (Services) - 如果不需要可以留空
@@ -46,7 +46,7 @@ pygmentOptions = "linenos=inline"     # 是否显示行号，去掉注释即可�
   
   mainSections = ["post","posts"]      # 指定哪些文件夹里的内容算作“博客文章”
   
-  logo = "img/hugo.png"         # 导航栏左上角的头像/Logo。文件需放在 static/img/ 目录下
+  logo = "img/avatar.png"         # 导航栏左上角的头像/Logo。文件需放在 static/img/ 目录下
   favicon = "img/favicon.ico"          # 浏览器标签页的小图标。文件需放在 static/img/ 目录下
   
   # 日期格式。注意：Go语言必须用 2006-01-02 代表 YYYY-MM-DD，不能乱改数字
