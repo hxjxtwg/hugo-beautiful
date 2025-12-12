@@ -21,6 +21,7 @@ tags:
 beautifulhugo主题配置、修改以及部署过程
 
 <!--more-->
+
 ### 1. 安装Hugo
 1.1 macOS (推荐使用 Homebrew):
 ```bash
