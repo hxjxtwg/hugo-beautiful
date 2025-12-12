@@ -31,6 +31,9 @@ aside:
 ai:
 ---
 
+typecho轻量级博客搭建教程
+<!--more-->
+
 <div class="video-container">
 <iframe width="560" height="315" src="https://www.youtube.com/embed/AHpGphE-XC8?si=stg73B9WBwCKLdby" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
 </div>
