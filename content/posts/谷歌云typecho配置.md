@@ -19,8 +19,8 @@ tags:
 ---
 
 添加加载动画、代码框复制折叠功能、代码高亮、文章置顶权重。
-
 <!--more-->
+
 
 ### 1. 图片、css、js文件上传
 使用谷歌自带的网页SSH上传logo.png、favicon.ico、prism.css、prism.js文件。
@@ -996,6 +996,187 @@ document.addEventListener('DOMContentLoaded', function() {
 </script>
 <script src="<?php $this->options->themeUrl('assets/prism.js'); ?>"></script>
 ```
+或者没有提示词(修正安卓端去背景框)
+```html
+<style>
+    /* 1. 外层包裹容器 */
+    .code-copy-wrapper {
+        position: relative;
+        transition: all 0.3s ease;
+    }
+
+    /* 2. 按钮组通用样式 */
+    .code-btn {
+        position: absolute;
+        top: 6px;
+        padding: 6px;
+        line-height: 1;
+        font-size: 16px; 
+        
+        background: transparent !important;
+        border: none !important;
+        color: #999;
+        
+        cursor: pointer;
+        opacity: 0; 
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        z-index: 20;
+        border-radius: 4px;
+        outline: none !important; 
+
+        /* --- 新增：修复安卓点击背景框 --- */
+        -webkit-tap-highlight-color: transparent;
+    }
+    
+    /* 3. 鼠标悬停交互 */
+    .code-btn:hover {
+        background: transparent !important;
+        color: #409EFF !important; /* 悬停变蓝 */
+        transform: scale(1.1);
+    }
+
+    /* 4. 按钮位置 */
+    .code-copy-btn {
+        right: 8px;
+    }
+    .code-fold-btn {
+        right: 40px; 
+    }
+
+    /* 5. 鼠标移入代码块时显示按钮 */
+    .code-copy-wrapper:hover .code-btn {
+        opacity: 1;
+    }
+
+    /* 6. 复制成功状态 */
+    .code-copy-btn.success {
+        color: #67c23a !important; 
+        transform: scale(1.2);
+    }
+
+    /* 7. 折叠状态核心样式 */
+    .code-collapsed pre {
+        max-height: 300px; 
+        overflow: hidden !important; 
+        mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
+        -webkit-mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
+        border-bottom: 1px dashed rgba(0,0,0,0.1); 
+    }
+    
+    /* 8. 展开状态 */
+    .code-expanded pre {
+        max-height: none;
+        mask-image: none;
+        -webkit-mask-image: none;
+        border-bottom: none;
+        animation: expandAnim 0.5s ease; 
+    }
+
+    @keyframes expandAnim {
+        from { max-height: 300px; }
+        to { max-height: 1000px; } 
+    }
+    
+    /* 9. 【双重保险】强制隐藏所有伪元素提示词 */
+    .code-btn::before, .code-btn::after {
+        display: none !important;
+        content: "" !important;
+    }
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const pres = document.querySelectorAll('pre');
+
+    pres.forEach(pre => {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'code-copy-wrapper';
+        pre.parentNode.replaceChild(wrapper, pre);
+        wrapper.appendChild(pre);
+
+        // --- A. 复制按钮 ---
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'code-btn code-copy-btn';
+        // 这里删除了 data-tooltip 属性
+        copyBtn.innerHTML = '<i class="fa-regular fa-copy"></i>'; 
+        wrapper.appendChild(copyBtn);
+
+        copyBtn.addEventListener('click', () => {
+            const code = pre.querySelector('code');
+            if (!code) return;
+            const text = code.innerText;
+            
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(text).then(() => showSuccess(copyBtn))
+                    .catch(() => copyFallback(text, copyBtn));
+            } else {
+                copyFallback(text, copyBtn);
+            }
+        });
+
+        // --- B. 折叠按钮 ---
+        const codeHeight = pre.offsetHeight;
+        const foldHeightThreshold = 350; 
+
+        if (codeHeight > foldHeightThreshold) {
+            wrapper.classList.add('code-collapsed');
+
+            const foldBtn = document.createElement('button');
+            foldBtn.className = 'code-btn code-fold-btn';
+            // 这里删除了 data-tooltip 属性
+            foldBtn.innerHTML = '<i class="fa-solid fa-angle-down"></i>';
+            wrapper.appendChild(foldBtn);
+
+            foldBtn.addEventListener('click', () => {
+                const isCollapsed = wrapper.classList.contains('code-collapsed');
+                if (isCollapsed) {
+                    wrapper.classList.remove('code-collapsed');
+                    wrapper.classList.add('code-expanded');
+                    foldBtn.innerHTML = '<i class="fa-solid fa-angle-up"></i>';
+                    // 这里删除了 data-tooltip 设置
+                } else {
+                    wrapper.classList.remove('code-expanded');
+                    wrapper.classList.add('code-collapsed');
+                    foldBtn.innerHTML = '<i class="fa-solid fa-angle-down"></i>';
+                    // 这里删除了 data-tooltip 设置
+                    wrapper.scrollIntoView({behavior: "smooth", block: "nearest"});
+                }
+            });
+        }
+    });
+
+    // --- 辅助函数 ---
+    function showSuccess(btn) {
+        const originalIcon = btn.innerHTML;
+        btn.classList.add('success');
+        btn.innerHTML = '<i class="fa-solid fa-check"></i>';
+        // 这里删除了 data-tooltip 更改
+
+        setTimeout(() => {
+            btn.classList.remove('success');
+            btn.innerHTML = originalIcon;
+            // 这里删除了 data-tooltip 恢复
+        }, 2000);
+    }
+
+    function copyFallback(text, btn) {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = 0;
+        document.body.appendChild(textarea);
+        textarea.select();
+        try {
+            if (document.execCommand('copy')) showSuccess(btn);
+        } catch (err) {
+            console.error('Fallback failed', err);
+        }
+        document.body.removeChild(textarea);
+    }
+});
+</script>
+<script src="<?php $this->options->themeUrl('assets/prism.js'); ?>"></script>
+```
 ### 5. 文章置顶功能
 5.1 修改functions.php
 最底添加代码：
@@ -1359,5 +1540,213 @@ Prism.languages.c=Prism.languages.extend("clike",{comment:{pattern:/\/\/(?:[^\r\
 !function(e){function n(e,n){return"___"+e.toUpperCase()+n+"___"}Object.defineProperties(e.languages["markup-templating"]={},{buildPlaceholders:{value:function(t,a,r,o){if(t.language===a){var c=t.tokenStack=[];t.code=t.code.replace(r,(function(e){if("function"==typeof o&&!o(e))return e;for(var r,i=c.length;-1!==t.code.indexOf(r=n(a,i));)++i;return c[i]=e,r})),t.grammar=e.languages.markup}}},tokenizePlaceholders:{value:function(t,a){if(t.language===a&&t.tokenStack){t.grammar=e.languages[a];var r=0,o=Object.keys(t.tokenStack);!function c(i){for(var u=0;u<i.length&&!(r>=o.length);u++){var g=i[u];if("string"==typeof g||g.content&&"string"==typeof g.content){var l=o[r],s=t.tokenStack[l],f="string"==typeof g?g:g.content,p=n(a,l),k=f.indexOf(p);if(k>-1){++r;var m=f.substring(0,k),d=new e.Token(a,e.tokenize(s,t.grammar),"language-"+a,s),h=f.substring(k+p.length),v=[];m&&v.push.apply(v,c([m])),v.push(d),h&&v.push.apply(v,c([h])),"string"==typeof g?i.splice.apply(i,[u,1].concat(v)):g.content=v}}else g.content&&c(g.content)}return i}(t.tokens)}}}})}(Prism);
 !function(e){var n=/\$(?:\w[a-z\d]*(?:_[^\x00-\x1F\s"'\\()$]*)?|\{[^}\s"'\\]+\})/i;e.languages.nginx={comment:{pattern:/(^|[\s{};])#.*/,lookbehind:!0,greedy:!0},directive:{pattern:/(^|\s)\w(?:[^;{}"'\\\s]|\\.|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\s+(?:#.*(?!.)|(?![#\s])))*?(?=\s*[;{])/,lookbehind:!0,greedy:!0,inside:{string:{pattern:/((?:^|[^\\])(?:\\\\)*)(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/,lookbehind:!0,greedy:!0,inside:{escape:{pattern:/\\["'\\nrt]/,alias:"entity"},variable:n}},comment:{pattern:/(\s)#.*/,lookbehind:!0,greedy:!0},keyword:{pattern:/^\S+/,greedy:!0},boolean:{pattern:/(\s)(?:off|on)(?!\S)/,lookbehind:!0},number:{pattern:/(\s)\d+[a-z]*(?!\S)/i,lookbehind:!0},variable:n}},punctuation:/[{};]/}}(Prism);
 !function(e){var a=/\/\*[\s\S]*?\*\/|\/\/.*|#(?!\[).*/,t=[{pattern:/\b(?:false|true)\b/i,alias:"boolean"},{pattern:/(::\s*)\b[a-z_]\w*\b(?!\s*\()/i,greedy:!0,lookbehind:!0},{pattern:/(\b(?:case|const)\s+)\b[a-z_]\w*(?=\s*[;=])/i,greedy:!0,lookbehind:!0},/\b(?:null)\b/i,/\b[A-Z_][A-Z0-9_]*\b(?!\s*\()/],i=/\b0b[01]+(?:_[01]+)*\b|\b0o[0-7]+(?:_[0-7]+)*\b|\b0x[\da-f]+(?:_[\da-f]+)*\b|(?:\b\d+(?:_\d+)*\.?(?:\d+(?:_\d+)*)?|\B\.\d+)(?:e[+-]?\d+)?/i,n=/<?=>|\?\?=?|\.{3}|\??->|[!=]=?=?|::|\*\*=?|--|\+\+|&&|\|\||<<|>>|[?~]|[/^|%*&<>.+-]=?/,s=/[{}\[\](),:;]/;e.languages.php={delimiter:{pattern:/\?>$|^<\?(?:php(?=\s)|=)?/i,alias:"important"},comment:a,variable:/\$+(?:\w+\b|(?=\{))/,package:{pattern:/(namespace\s+|use\s+(?:function\s+)?)(?:\\?\b[a-z_]\w*)+\b(?!\\)/i,lookbehind:!0,inside:{punctuation:/\\/}},"class-name-definition":{pattern:/(\b(?:class|enum|interface|trait)\s+)\b[a-z_]\w*(?!\\)\b/i,lookbehind:!0,alias:"class-name"},"function-definition":{pattern:/(\bfunction\s+)[a-z_]\w*(?=\s*\()/i,lookbehind:!0,alias:"function"},keyword:[{pattern:/(\(\s*)\b(?:array|bool|boolean|float|int|integer|object|string)\b(?=\s*\))/i,alias:"type-casting",greedy:!0,lookbehind:!0},{pattern:/([(,?]\s*)\b(?:array(?!\s*\()|bool|callable|(?:false|null)(?=\s*\|)|float|int|iterable|mixed|object|self|static|string)\b(?=\s*\$)/i,alias:"type-hint",greedy:!0,lookbehind:!0},{pattern:/(\)\s*:\s*(?:\?\s*)?)\b(?:array(?!\s*\()|bool|callable|(?:false|null)(?=\s*\|)|float|int|iterable|mixed|never|object|self|static|string|void)\b/i,alias:"return-type",greedy:!0,lookbehind:!0},{pattern:/\b(?:array(?!\s*\()|bool|float|int|iterable|mixed|object|string|void)\b/i,alias:"type-declaration",greedy:!0},{pattern:/(\|\s*)(?:false|null)\b|\b(?:false|null)(?=\s*\|)/i,alias:"type-declaration",greedy:!0,lookbehind:!0},{pattern:/\b(?:parent|self|static)(?=\s*::)/i,alias:"static-context",greedy:!0},{pattern:/(\byield\s+)from\b/i,lookbehind:!0},/\bclass\b/i,{pattern:/((?:^|[^\s>:]|(?:^|[^-])>|(?:^|[^:]):)\s*)\b(?:abstract|and|array|as|break|callable|case|catch|clone|const|continue|declare|default|die|do|echo|else|elseif|empty|enddeclare|endfor|endforeach|endif|endswitch|endwhile|enum|eval|exit|extends|final|finally|fn|for|foreach|function|global|goto|if|implements|include|include_once|instanceof|insteadof|interface|isset|list|match|namespace|never|new|or|parent|print|private|protected|public|readonly|require|require_once|return|self|static|switch|throw|trait|try|unset|use|var|while|xor|yield|__halt_compiler)\b/i,lookbehind:!0}],"argument-name":{pattern:/([(,]\s*)\b[a-z_]\w*(?=\s*:(?!:))/i,lookbehind:!0},"class-name":[{pattern:/(\b(?:extends|implements|instanceof|new(?!\s+self|\s+static))\s+|\bcatch\s*\()\b[a-z_]\w*(?!\\)\b/i,greedy:!0,lookbehind:!0},{pattern:/(\|\s*)\b[a-z_]\w*(?!\\)\b/i,greedy:!0,lookbehind:!0},{pattern:/\b[a-z_]\w*(?!\\)\b(?=\s*\|)/i,greedy:!0},{pattern:/(\|\s*)(?:\\?\b[a-z_]\w*)+\b/i,alias:"class-name-fully-qualified",greedy:!0,lookbehind:!0,inside:{punctuation:/\\/}},{pattern:/(?:\\?\b[a-z_]\w*)+\b(?=\s*\|)/i,alias:"class-name-fully-qualified",greedy:!0,inside:{punctuation:/\\/}},{pattern:/(\b(?:extends|implements|instanceof|new(?!\s+self\b|\s+static\b))\s+|\bcatch\s*\()(?:\\?\b[a-z_]\w*)+\b(?!\\)/i,alias:"class-name-fully-qualified",greedy:!0,lookbehind:!0,inside:{punctuation:/\\/}},{pattern:/\b[a-z_]\w*(?=\s*\$)/i,alias:"type-declaration",greedy:!0},{pattern:/(?:\\?\b[a-z_]\w*)+(?=\s*\$)/i,alias:["class-name-fully-qualified","type-declaration"],greedy:!0,inside:{punctuation:/\\/}},{pattern:/\b[a-z_]\w*(?=\s*::)/i,alias:"static-context",greedy:!0},{pattern:/(?:\\?\b[a-z_]\w*)+(?=\s*::)/i,alias:["class-name-fully-qualified","static-context"],greedy:!0,inside:{punctuation:/\\/}},{pattern:/([(,?]\s*)[a-z_]\w*(?=\s*\$)/i,alias:"type-hint",greedy:!0,lookbehind:!0},{pattern:/([(,?]\s*)(?:\\?\b[a-z_]\w*)+(?=\s*\$)/i,alias:["class-name-fully-qualified","type-hint"],greedy:!0,lookbehind:!0,inside:{punctuation:/\\/}},{pattern:/(\)\s*:\s*(?:\?\s*)?)\b[a-z_]\w*(?!\\)\b/i,alias:"return-type",greedy:!0,lookbehind:!0},{pattern:/(\)\s*:\s*(?:\?\s*)?)(?:\\?\b[a-z_]\w*)+\b(?!\\)/i,alias:["class-name-fully-qualified","return-type"],greedy:!0,lookbehind:!0,inside:{punctuation:/\\/}}],constant:t,function:{pattern:/(^|[^\\\w])\\?[a-z_](?:[\w\\]*\w)?(?=\s*\()/i,lookbehind:!0,inside:{punctuation:/\\/}},property:{pattern:/(->\s*)\w+/,lookbehind:!0},number:i,operator:n,punctuation:s};var l={pattern:/\{\$(?:\{(?:\{[^{}]+\}|[^{}]+)\}|[^{}])+\}|(^|[^\\{])\$+(?:\w+(?:\[[^\r\n\[\]]+\]|->\w+)?)/,lookbehind:!0,inside:e.languages.php},r=[{pattern:/<<<'([^']+)'[\r\n](?:.*[\r\n])*?\1;/,alias:"nowdoc-string",greedy:!0,inside:{delimiter:{pattern:/^<<<'[^']+'|[a-z_]\w*;$/i,alias:"symbol",inside:{punctuation:/^<<<'?|[';]$/}}}},{pattern:/<<<(?:"([^"]+)"[\r\n](?:.*[\r\n])*?\1;|([a-z_]\w*)[\r\n](?:.*[\r\n])*?\2;)/i,alias:"heredoc-string",greedy:!0,inside:{delimiter:{pattern:/^<<<(?:"[^"]+"|[a-z_]\w*)|[a-z_]\w*;$/i,alias:"symbol",inside:{punctuation:/^<<<"?|[";]$/}},interpolation:l}},{pattern:/`(?:\\[\s\S]|[^\\`])*`/,alias:"backtick-quoted-string",greedy:!0},{pattern:/'(?:\\[\s\S]|[^\\'])*'/,alias:"single-quoted-string",greedy:!0},{pattern:/"(?:\\[\s\S]|[^\\"])*"/,alias:"double-quoted-string",greedy:!0,inside:{interpolation:l}}];e.languages.insertBefore("php","variable",{string:r,attribute:{pattern:/#\[(?:[^"'\/#]|\/(?![*/])|\/\/.*$|#(?!\[).*$|\/\*(?:[^*]|\*(?!\/))*\*\/|"(?:\\[\s\S]|[^\\"])*"|'(?:\\[\s\S]|[^\\'])*')+\](?=\s*[a-z$#])/im,greedy:!0,inside:{"attribute-content":{pattern:/^(#\[)[\s\S]+(?=\]$)/,lookbehind:!0,inside:{comment:a,string:r,"attribute-class-name":[{pattern:/([^:]|^)\b[a-z_]\w*(?!\\)\b/i,alias:"class-name",greedy:!0,lookbehind:!0},{pattern:/([^:]|^)(?:\\?\b[a-z_]\w*)+/i,alias:["class-name","class-name-fully-qualified"],greedy:!0,lookbehind:!0,inside:{punctuation:/\\/}}],constant:t,number:i,operator:n,punctuation:s}},delimiter:{pattern:/^#\[|\]$/,alias:"punctuation"}}}}),e.hooks.add("before-tokenize",(function(a){/<\?/.test(a.code)&&e.languages["markup-templating"].buildPlaceholders(a,"php",/<\?(?:[^"'/#]|\/(?![*/])|("|')(?:\\[\s\S]|(?!\1)[^\\])*\1|(?:\/\/|#(?!\[))(?:[^?\n\r]|\?(?!>))*(?=$|\?>|[\r\n])|#\[|\/\*(?:[^*]|\*(?!\/))*(?:\*\/|$))*?(?:\?>|$)/g)})),e.hooks.add("after-tokenize",(function(a){e.languages["markup-templating"].tokenizePlaceholders(a,"php")}))}(Prism);
+```
+6.3 prism.css隐藏横向滚动条内容：
+```CSS
+/* ====================================================== */
+/* 第一部分：PrismJS 高亮样式 (保持不变) */
+/* ====================================================== */
+
+/* PrismJS 1.30.0 (Clean Version) */
+code[class*="language-"],
+pre[class*="language-"] {
+    color: #000;
+    font-family: Consolas, Monaco, 'Andale Mono', 'Ubuntu Mono', monospace;
+    font-size: 1em;
+    text-align: left;
+    white-space: pre;
+    word-spacing: normal;
+    word-break: normal;
+    word-wrap: normal;
+    line-height: 1.5;
+
+    -moz-tab-size: 4;
+    -o-tab-size: 4;
+    tab-size: 4;
+
+    -webkit-hyphens: none;
+    -moz-hyphens: none;
+    -ms-hyphens: none;
+    hyphens: none;
+}
+
+pre[class*="language-"] {
+    overflow: auto;
+}
+
+/* ====================================================== */
+/* 新增：滚动条自动隐藏样式 (仿 Mac/移动端体验) */
+/* ====================================================== */
+
+/* 1. 设置滚动条整体大小 */
+pre[class*="language-"]::-webkit-scrollbar {
+    height: 6px;       /* 横向滚动条的高度，设细一点更美观 */
+    width: 6px;        /* 纵向滚动条的宽度 */
+    background-color: transparent;
+}
+
+/* 2. 滚动条轨道（背景）永远透明 */
+pre[class*="language-"]::-webkit-scrollbar-track {
+    background-color: transparent;
+}
+
+/* 3. 滚动条滑块（移动部分）- 默认透明（即隐藏状态） */
+pre[class*="language-"]::-webkit-scrollbar-thumb {
+    background-color: transparent; 
+    border-radius: 3px;
+}
+
+/* 4. 只有当鼠标悬停在代码块上时，滑块才变色显示 */
+pre[class*="language-"]:hover::-webkit-scrollbar-thumb {
+    background-color: rgba(0, 0, 0, 0.2); /* 浅灰色，你可以改成 0.4 加深 */
+}
+
+/* 5. 鼠标抓取滑块时，颜色加深，反馈更明显 */
+pre[class*="language-"]::-webkit-scrollbar-thumb:active {
+    background-color: rgba(0, 0, 0, 0.4);
+}
+
+/* --- Selection & Print --- */
+code[class*="language-"]::-moz-selection, code[class*="language-"] ::-moz-selection,
+pre[class*="language-"]::-moz-selection, pre[class*="language-"] ::-moz-selection {
+    text-shadow: none;
+    background: #b3d4fc;
+}
+code[class*="language-"]::selection, code[class*="language-"] ::selection,
+pre[class*="language-"]::selection, pre[class*="language-"] ::selection {
+    text-shadow: none;
+    background: #b3d4fc;
+}
+@media print {
+    code[class*="language-"],
+    pre[class*="language-"] {
+        text-shadow: none;
+    }
+}
+
+/* --- ALL TOKEN COLOR RULES --- */
+.token.comment, .token.prolog, .token.doctype, .token.cdata { color: #708090; }
+.token.punctuation { color: #999; }
+.token.namespace { opacity: .7; }
+.token.property, .token.tag, .token.boolean, .token.number, .token.constant, .token.symbol, .token.deleted { color: #905; }
+.token.selector, .token.attr-name, .token.string, .token.char, .token.builtin, .token.inserted { color: #690; }
+.token.operator, .token.entity, .token.url, .language-css .token.string, .style .token.string { color: #9a6e3a; background: hsla(0, 0%, 100%, .5); }
+.token.atrule, .token.attr-value, .token.keyword { color: #07a; }
+.token.function, .token.class-name { color: #dd4a68; }
+.token.regex, .token.important, .token.variable { color: #e90; }
+.token.important, .token.bold { font-weight: bold; }
+.token.italic { font-style: italic; }
+.token.entity { cursor: help; }
+
+
+/* ====================================================== */
+/* 第二部分：提示词样式 (无背景、蓝色文字) */
+/* ====================================================== */
+
+/* 必须显式定义，否则会被下面的清除样式影响 */
+.code-btn[data-tooltip]:hover::before {
+    content: attr(data-tooltip) !important; /* 强制显示内容 */
+    display: block !important;              /* 强制显示区块 */
+    visibility: visible !important;
+    opacity: 1 !important;
+    
+    position: absolute;
+    bottom: 100%;        
+    right: 50%;          
+    transform: translateX(50%);
+    margin-bottom: 2px;
+    
+    /* 无背景风格 */
+    background: transparent !important; 
+    color: #409EFF !important;      
+    padding: 0;          
+    box-shadow: none;
+    border: none !important;
+    
+    font-size: 13px;     
+    font-weight: bold;   
+    white-space: nowrap; 
+    pointer-events: none; 
+    z-index: 100;
+}
+
+
+/* ====================================================== */
+/* 第三部分：超细图标样式 (SVG 替换 FontAwesome) */
+/* ====================================================== */
+
+/* 1. 图标基础重置 (注意：删除了对 .code-btn::before 的误伤) */
+.fa-solid, [class*="fa-"], .fa-regular {
+    font-family: sans-serif !important;
+    font-style: normal;
+    display: inline-block !important;
+    width: 18px !important;    
+    height: 18px !important;
+    background-repeat: no-repeat !important;
+    background-position: center !important;
+    background-size: contain !important;
+    vertical-align: middle;
+    color: transparent !important; /* 让原来的字体图标透明 */
+    transition: all 0.2s ease;
+}
+
+/* 清空 FontAwesome 自身的伪元素，但不清空按钮的伪元素 */
+.fa-solid::before, [class*="fa-"]::before,
+.fa-solid::after, [class*="fa-"]::after {
+    content: "" !important;
+    display: none !important;
+}
+
+/* --------------------------------------------------- */
+/* 2. 定义图标 (SVG stroke-width=1.2 超细线条) */
+/* --------------------------------------------------- */
+
+/* [复制图标] 灰色超细线条 */
+.fa-copy, .fa-clipboard, .fa-clone {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23666' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='9' y='9' width='13' height='13' rx='2' ry='2'/%3E%3Cpath d='M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1'/%3E%3C/svg%3E") !important;
+    opacity: 0.8;
+}
+
+/* 悬停时变蓝 */
+.code-btn:hover .fa-copy, .code-btn:hover .fa-clipboard {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23409EFF' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='9' y='9' width='13' height='13' rx='2' ry='2'/%3E%3Cpath d='M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1'/%3E%3C/svg%3E") !important;
+    opacity: 1;
+    transform: scale(1.05);
+}
+
+/* [复制成功] 绿色超细对勾 */
+.fa-check {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2367c23a' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='20 6 9 17 4 12'/%3E%3C/svg%3E") !important;
+    opacity: 1;
+    animation: bounce 0.3s;
+}
+
+/* [折叠/收起] 向上超细 V 型 */
+.fa-angles-up, .fa-angle-up, .fa-chevron-up {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23666' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='18 15 12 9 6 15'/%3E%3C/svg%3E") !important;
+    opacity: 0.8;
+}
+.code-btn:hover .fa-angles-up, .code-btn:hover .fa-angle-up {
+    opacity: 1;
+    /* 悬停变蓝，保持一致 */
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23409EFF' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='18 15 12 9 6 15'/%3E%3C/svg%3E") !important; 
+}
+
+/* [展开/向下] 向下超细 V 型 */
+.fa-angles-down, .fa-angle-down, .fa-chevron-down {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23666' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E") !important;
+    opacity: 0.8;
+}
+
+/* 展开图标悬停变蓝 */
+.code-btn:hover .fa-angles-down, .code-btn:hover .fa-angle-down {
+     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23409EFF' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E") !important;
+}
+
+@keyframes bounce {
+    0% { transform: scale(0.8); }
+    50% { transform: scale(1.2); }
+    100% { transform: scale(1); }
+}
 ```
 
