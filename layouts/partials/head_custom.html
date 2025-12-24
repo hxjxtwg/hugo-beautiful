@@ -61,12 +61,13 @@ body.dark-mode .theme-toggle-btn { color: #ddd; }
 body.dark-mode .theme-toggle-btn:hover { color: #fff; }
 
 /* ======================================================= */
-/* 5. 滚动条美化 */
+/* 5. 全局滚动条美化 (页面整体，不包含代码块) */
 /* ======================================================= */
-body.dark-mode ::-webkit-scrollbar { height: 10px; width: 10px; background: #1e1e1e; }
-body.dark-mode ::-webkit-scrollbar-thumb { background: #444; border-radius: 5px; }
-body.dark-mode ::-webkit-scrollbar-thumb:hover { background: #555; }
-body.dark-mode ::-webkit-scrollbar-corner { background: #1e1e1e; }
+/* 注意：这里只针对 body，避免污染代码块 */
+body.dark-mode::-webkit-scrollbar { height: 10px; width: 10px; background: #1e1e1e; }
+body.dark-mode::-webkit-scrollbar-thumb { background: #444; border-radius: 5px; }
+body.dark-mode::-webkit-scrollbar-thumb:hover { background: #555; }
+body.dark-mode::-webkit-scrollbar-corner { background: #1e1e1e; }
 
 /* ======================================================= */
 /* 6. 代码块逻辑 (修复版：恢复浅色模式背景范围) */
@@ -77,29 +78,27 @@ body.dark-mode ::-webkit-scrollbar-corner { background: #1e1e1e; }
 .highlight { position: relative !important; margin-bottom: 20px; }
 
 /* --- A. 浅色模式 (默认) 修复 --- */
-/* 强制给外层容器加背景和圆角，但不加边框 */
 .highlight {
-    background-color: #f8f8f8 !important; /* 经典的浅灰背景 */
-    border-radius: 6px !important;         /* 圆角 */
-    border: none !important;               /* 再次确认无边框 */
+    background-color: #f8f8f8 !important; 
+    border-radius: 6px !important;       
+    border: none !important;             
 }
 
-/* 强制撑开内部 pre 标签，恢复“大框”的感觉 */
 .highlight pre {
-    background-color: transparent !important; /* 让外层背景透出来 */
+    background-color: transparent !important; 
     border: none !important;
-    padding: 15px !important;                 /* 关键！恢复内边距，让文字不贴边 */
+    padding: 15px !important;               
     margin: 0 !important;
-    width: 100% !important;                   /* 撑满宽度 */
-    overflow-x: auto;                         /* 代码过长显示滚动条 */
-    font-size: 14px;                          /* 确保字体大小合适 */
+    width: 100% !important;                 
+    overflow-x: auto;                       
+    font-size: 14px;                      
     line-height: 1.5;
 }
 
 /* --- B. 深色模式覆盖 --- */
 body.dark-mode .highlight {
-    background-color: #1e1e1e !important;    /* 深色背景 */
-    border: 1px solid #333 !important;        /* 深色模式下稍微有点边框好看些，不要可删 */
+    background-color: #1e1e1e !important;    
+    border: 1px solid #333 !important;        
 }
 body.dark-mode .highlight pre, 
 body.dark-mode .highlight code {
@@ -159,13 +158,11 @@ body.dark-mode #halo-racer-loader { background: #1e1e1e !important; }
 /* ======================================================= */
 /* 8. 去除手机端菜单框 & 上下篇边框 */
 /* ======================================================= */
-/* A. 手机端导航栏按钮 (三横杠) 去框 */
 .navbar-toggle { border: none !important; background: transparent !important; }
 .navbar-toggle:hover, .navbar-toggle:focus { background: transparent !important; }
 .navbar-default .navbar-toggle .icon-bar { background-color: #888 !important; }
 body.dark-mode .navbar-toggle .icon-bar { background-color: #e0e0e0 !important; }
 
-/* B. 上一篇/下一篇 (Pager) 去框 */
 .pager li > a, .pager li > span {
     border: none !important; background-color: transparent !important; 
     padding: 10px 0 !important; font-weight: bold;                  
@@ -179,80 +176,73 @@ body.dark-mode .pager li > a, body.dark-mode .pager li > span {
 body.dark-mode .pager li > a:hover { color: #fff !important; }
 
 /* ====================================================== */
-    /* 代码块滚动条终极方案 (PC自动隐藏 + 移动端彻底隐藏) */
-    /* ====================================================== */
+/* 9. 代码块滚动条终极方案 (PC自动隐藏 + 移动端彻底隐藏) */
+/* ====================================================== */
 
-    /* --- 第一部分：全局默认样式（即 PC 端效果） --- */
-    /* 逻辑：默认透明，鼠标放上去才显示 */
-
-    /* 1. WebKit内核 (Chrome, Edge, Safari) */
+/* --- 桌面端 (PC) --- */
+@media (min-width: 769px) {
+    /* 1. 设置大小和透明背景 */
     .highlight pre::-webkit-scrollbar,
     pre::-webkit-scrollbar {
-        height: 8px;       /* 稍微粗一点，方便鼠标抓取 */
+        height: 8px;      
         width: 8px;
-        background-color: transparent;
+        background-color: transparent !important; /* 强制背景透明 */
     }
-
-    /* 轨道背景：永远透明 */
+    
     .highlight pre::-webkit-scrollbar-track,
     pre::-webkit-scrollbar-track {
-        background-color: transparent;
+        background-color: transparent !important;
     }
 
-    /* 滑块：默认透明 (看不见) */
+    /* 2. 核心：默认状态下滑块透明（看不见） */
     .highlight pre::-webkit-scrollbar-thumb,
     pre::-webkit-scrollbar-thumb {
-        background-color: transparent; 
+        background-color: transparent !important; /* 加 !important 防止被全局深色模式覆盖 */
         border-radius: 4px;
     }
 
-    /* 【核心】鼠标悬停在代码块上时：滑块变色 */
+    /* 3. 核心：鼠标悬停在代码块时，滑块变色 */
     .highlight pre:hover::-webkit-scrollbar-thumb,
     pre:hover::-webkit-scrollbar-thumb {
-        background-color: rgba(0, 0, 0, 0.2) !important; /* 加 !important 防止被覆盖 */
+        background-color: rgba(0, 0, 0, 0.2) !important; 
     }
     
-    /* 鼠标抓取滑块时：颜色加深 */
+    /* 4. 鼠标抓取时加深 */
     .highlight pre::-webkit-scrollbar-thumb:active,
     pre::-webkit-scrollbar-thumb:active {
         background-color: rgba(0, 0, 0, 0.4) !important;
     }
 
-    /* 2. Firefox (火狐) PC端支持 */
+    /* Firefox 兼容 */
     .highlight pre, pre {
         scrollbar-width: thin;
-        scrollbar-color: transparent transparent; /* 默认：滑块透明 轨道透明 */
-        transition: scrollbar-color 0.3s; /* 尝试让火狐过渡平滑点 */
+        scrollbar-color: transparent transparent; 
+        transition: scrollbar-color 0.3s; 
     }
-    
     .highlight pre:hover, pre:hover {
-        scrollbar-color: rgba(0, 0, 0, 0.2) transparent; /* 悬停：滑块变灰 */
+        scrollbar-color: rgba(0, 0, 0, 0.2) transparent; 
+    }
+}
+
+/* --- 移动端 (手机) --- */
+@media (max-width: 768px) {
+    /* 暴力隐藏：将滚动条宽高设为0，但保留滑动功能 */
+    .highlight pre::-webkit-scrollbar,
+    pre::-webkit-scrollbar {
+        height: 0px !important;
+        width: 0px !important;
+        background: transparent !important;
+        -webkit-appearance: none !important;
     }
 
-
-    /* --- 第二部分：移动端强制覆盖（彻底隐藏） --- */
-    @media (max-width: 768px) {
-        /* WebKit内核：暴力隐藏滚动条元素 */
-        .highlight pre::-webkit-scrollbar,
-        pre::-webkit-scrollbar {
-            display: none !important;
-            width: 0 !important;
-            height: 0 !important;
-            -webkit-appearance: none !important;
-            background: transparent !important;
-        }
-
-        /* 容器本身设置 */
-        .highlight pre, pre {
-            /* 保证可以触摸滑动 */
-            overflow-x: auto !important; 
-            -webkit-overflow-scrolling: touch !important; 
-            
-            /* Firefox / IE 移动端隐藏 */
-            scrollbar-width: none !important; 
-            -ms-overflow-style: none !important; 
-        }
+    /* 容器设置 */
+    .highlight pre, pre {
+        overflow-x: auto !important; 
+        -webkit-overflow-scrolling: touch !important; 
+        scrollbar-width: none !important; /* Firefox Mobile */
+        -ms-overflow-style: none !important; /* IE/Edge Mobile */
     }
+}
 </style>
 
 <script>

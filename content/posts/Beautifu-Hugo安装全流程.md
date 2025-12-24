@@ -668,83 +668,347 @@ body.dark-mode .c-btn:hover { color: #ff4757 !important; }
 ```
 这样可以自定义背景色。
 
-代码框自动隐藏横向滚动条，在`<style>`标签插入以下代码:
+代码框自动隐藏横向滚动条，完整head_custom.html:
 ```html
+<style>
+/* ======================================================= */
+/* 1. 基础重置 */
+/* ======================================================= */
+html, body { height: 100%; margin: 0; padding: 0; }
+body { transition: background-color 0.3s ease, color 0.3s ease; }
+
+/* ======================================================= */
+/* 2. 深色模式 (Dark Mode) - 基础配色 */
+/* ======================================================= */
+body.dark-mode {
+    background-color: #1e1e1e !important;
+    color: #e6e6e6 !important;
+}
+
+/* 链接颜色 */
+body.dark-mode a { color: #4daafc; }
+
+/* 标题与文字 */
+body.dark-mode h1, body.dark-mode h2, body.dark-mode h3, 
+body.dark-mode h4, body.dark-mode h5, body.dark-mode h6,
+body.dark-mode .post-title, body.dark-mode .post-heading h1 { color: #fff !important; }
+body.dark-mode .post-meta { color: #858585 !important; }
+
+/* 分割线 */
+body.dark-mode .post-preview { border-bottom: 1px solid #333 !important; }
+body.dark-mode hr { border-color: #333 !important; opacity: 0.6; }
+
+/* 页脚 */
+body.dark-mode footer { background: #1e1e1e !important; color: #777 !important; border-top-color: #333 !important; }
+
+/* ======================================================= */
+/* 3. 导航栏 (菜单栏) 优化 */
+/* ======================================================= */
+body.dark-mode .navbar-custom {
+    background-color: #252526 !important; 
+    border-bottom: 1px solid #333 !important;
+}
+body.dark-mode .navbar-custom .navbar-brand,
+body.dark-mode .navbar-custom .nav > li > a {
+    color: #e0e0e0 !important; 
+}
+body.dark-mode .navbar-custom .navbar-brand:hover,
+body.dark-mode .navbar-custom .nav > li > a:hover {
+    color: #ffffff !important;
+}
+
+/* ======================================================= */
+/* 4. 切换按钮 (半黑半白圆圈版) */
+/* ======================================================= */
+.theme-toggle-btn {
+    display: flex; align-items: center; justify-content: center; height: 100%; padding: 15px; 
+    cursor: pointer; 
+    color: #555; 
+    transition: color 0.3s, transform 0.3s; 
+    font-size: 22px; 
+    line-height: 1;
+}
+.theme-toggle-btn:hover { color: #000; }
+body.dark-mode .theme-toggle-btn { color: #ddd; } 
+body.dark-mode .theme-toggle-btn:hover { color: #fff; }
+
+/* ======================================================= */
+/* 5. 全局滚动条美化 (页面整体，不包含代码块) */
+/* ======================================================= */
+/* 注意：这里只针对 body，避免污染代码块 */
+body.dark-mode::-webkit-scrollbar { height: 10px; width: 10px; background: #1e1e1e; }
+body.dark-mode::-webkit-scrollbar-thumb { background: #444; border-radius: 5px; }
+body.dark-mode::-webkit-scrollbar-thumb:hover { background: #555; }
+body.dark-mode::-webkit-scrollbar-corner { background: #1e1e1e; }
+
+/* ======================================================= */
+/* 6. 代码块逻辑 (修复版：恢复浅色模式背景范围) */
+/* ======================================================= */
+
+/* 通用设置：隐藏多余按钮，设置定位 */
+.highlight button:not(.c-btn), .copy-to-clipboard, .copy-code-button { display: none !important; }
+.highlight { position: relative !important; margin-bottom: 20px; }
+
+/* --- A. 浅色模式 (默认) 修复 --- */
+.highlight {
+    background-color: #f8f8f8 !important; 
+    border-radius: 6px !important;       
+    border: none !important;             
+}
+
+.highlight pre {
+    background-color: transparent !important; 
+    border: none !important;
+    padding: 15px !important;               
+    margin: 0 !important;
+    width: 100% !important;                 
+    overflow-x: auto;                       
+    font-size: 14px;                      
+    line-height: 1.5;
+}
+
+/* --- B. 深色模式覆盖 --- */
+body.dark-mode .highlight {
+    background-color: #1e1e1e !important;    
+    border: 1px solid #333 !important;        
+}
+body.dark-mode .highlight pre, 
+body.dark-mode .highlight code {
+    background-color: transparent !important; 
+    color: #d4d4d4 !important; 
+    border: none !important;
+}
+
+/* 语法高亮适配深色 */
+body.dark-mode .chroma .k, body.dark-mode .chroma .kd, body.dark-mode .chroma .kt { color: #569cd6 !important; } 
+body.dark-mode .chroma .s, body.dark-mode .chroma .s1 { color: #ce9178 !important; } 
+body.dark-mode .chroma .c, body.dark-mode .chroma .c1 { color: #6a9955 !important; } 
+body.dark-mode .chroma .nf { color: #dcdcaa !important; } 
+body.dark-mode .chroma .lnt { color: #555 !important; }
+
+/* C. 按钮组 */
+.code-tools { 
+    position: absolute; top: 4px; right: 4px; z-index: 20; display: flex;
+    background: transparent !important; opacity: 0; transition: opacity 0.2s;
+}
+.highlight:hover .code-tools { opacity: 1; }
+
+.c-btn { 
+    width: 26px; height: 26px; 
+    border: none !important; background: transparent !important; 
+    cursor: pointer; padding: 0; margin: 0;
+    display:flex; justify-content:center; align-items:center; 
+    transition: color 0.2s ease;
+    color: #999; 
+}
+.c-btn:hover { color: #ff4757 !important; }
+body.dark-mode .c-btn { color: #666; }
+body.dark-mode .c-btn:hover { color: #ff4757 !important; }
+
+/* D. 折叠 */
+.highlight.folded { height: 200px !important; overflow: hidden !important; }
+
+/* ======================================================= */
+/* 7. Halo 赛车动画 */
+/* ======================================================= */
+#halo-racer-loader { 
+    position: fixed !important; top: 0 !important; left: 0 !important; right: 0 !important; bottom: 0 !important;      
+    width: 100% !important; height: 100% !important; z-index: 999999999 !important; 
+    background: #ffffff; display: flex !important; justify-content: center !important; align-items: center !important; 
+    transition: opacity 0.3s ease, visibility 0.3s ease;
+}
+body.dark-mode #halo-racer-loader { background: #1e1e1e !important; }
+#halo-racer-loader.hidden { opacity: 0; visibility: hidden; }
+
+.racer-container { position: relative; width: 80px; height: 20px; }
+.bar { position: absolute; top: 0; left: 0; width: 12px; height: 20px; border-radius: 0; }
+.p1 { background: rgba(255,71,87,0.2); z-index:1; animation: run 1.5s cubic-bezier(.4,0,.2,1) infinite 0.15s; }
+.p2 { background: rgba(255,71,87,0.5); z-index:2; animation: run 1.5s cubic-bezier(.4,0,.2,1) infinite 0.08s; }
+.red { background: #ff4757; z-index:10; animation: run 1.5s cubic-bezier(.4,0,.2,1) infinite 0s; }
+@keyframes run { 0%{left:0} 30%{left:68px} 50%{left:68px} 80%{left:0} 100%{left:0} }
+
+/* ======================================================= */
+/* 8. 去除手机端菜单框 & 上下篇边框 */
+/* ======================================================= */
+.navbar-toggle { border: none !important; background: transparent !important; }
+.navbar-toggle:hover, .navbar-toggle:focus { background: transparent !important; }
+.navbar-default .navbar-toggle .icon-bar { background-color: #888 !important; }
+body.dark-mode .navbar-toggle .icon-bar { background-color: #e0e0e0 !important; }
+
+.pager li > a, .pager li > span {
+    border: none !important; background-color: transparent !important; 
+    padding: 10px 0 !important; font-weight: bold;                  
+}
+body.dark-mode .pager li > a, body.dark-mode .pager li > span {
+    background: transparent !important; border: none !important; color: #ccc !important;
+}
+.pager li > a:hover, .pager li > a:focus {
+    background-color: transparent !important; color: #0085a1 !important; 
+}
+body.dark-mode .pager li > a:hover { color: #fff !important; }
+
 /* ====================================================== */
-    /* 代码块滚动条终极方案 (PC自动隐藏 + 移动端彻底隐藏) */
-    /* ====================================================== */
+/* 9. 代码块滚动条终极方案 (PC自动隐藏 + 移动端彻底隐藏) */
+/* ====================================================== */
 
-    /* --- 第一部分：全局默认样式（即 PC 端效果） --- */
-    /* 逻辑：默认透明，鼠标放上去才显示 */
-
-    /* 1. WebKit内核 (Chrome, Edge, Safari) */
+/* --- 桌面端 (PC) --- */
+@media (min-width: 769px) {
+    /* 1. 设置大小和透明背景 */
     .highlight pre::-webkit-scrollbar,
     pre::-webkit-scrollbar {
-        height: 8px;       /* 稍微粗一点，方便鼠标抓取 */
+        height: 8px;      
         width: 8px;
-        background-color: transparent;
+        background-color: transparent !important; /* 强制背景透明 */
     }
-
-    /* 轨道背景：永远透明 */
+    
     .highlight pre::-webkit-scrollbar-track,
     pre::-webkit-scrollbar-track {
-        background-color: transparent;
+        background-color: transparent !important;
     }
 
-    /* 滑块：默认透明 (看不见) */
+    /* 2. 核心：默认状态下滑块透明（看不见） */
     .highlight pre::-webkit-scrollbar-thumb,
     pre::-webkit-scrollbar-thumb {
-        background-color: transparent; 
+        background-color: transparent !important; /* 加 !important 防止被全局深色模式覆盖 */
         border-radius: 4px;
     }
 
-    /* 【核心】鼠标悬停在代码块上时：滑块变色 */
+    /* 3. 核心：鼠标悬停在代码块时，滑块变色 */
     .highlight pre:hover::-webkit-scrollbar-thumb,
     pre:hover::-webkit-scrollbar-thumb {
-        background-color: rgba(0, 0, 0, 0.2) !important; /* 加 !important 防止被覆盖 */
+        background-color: rgba(0, 0, 0, 0.2) !important; 
     }
     
-    /* 鼠标抓取滑块时：颜色加深 */
+    /* 4. 鼠标抓取时加深 */
     .highlight pre::-webkit-scrollbar-thumb:active,
     pre::-webkit-scrollbar-thumb:active {
         background-color: rgba(0, 0, 0, 0.4) !important;
     }
 
-    /* 2. Firefox (火狐) PC端支持 */
+    /* Firefox 兼容 */
     .highlight pre, pre {
         scrollbar-width: thin;
-        scrollbar-color: transparent transparent; /* 默认：滑块透明 轨道透明 */
-        transition: scrollbar-color 0.3s; /* 尝试让火狐过渡平滑点 */
+        scrollbar-color: transparent transparent; 
+        transition: scrollbar-color 0.3s; 
     }
-    
     .highlight pre:hover, pre:hover {
-        scrollbar-color: rgba(0, 0, 0, 0.2) transparent; /* 悬停：滑块变灰 */
+        scrollbar-color: rgba(0, 0, 0, 0.2) transparent; 
+    }
+}
+
+/* --- 移动端 (手机) --- */
+@media (max-width: 768px) {
+    /* 暴力隐藏：将滚动条宽高设为0，但保留滑动功能 */
+    .highlight pre::-webkit-scrollbar,
+    pre::-webkit-scrollbar {
+        height: 0px !important;
+        width: 0px !important;
+        background: transparent !important;
+        -webkit-appearance: none !important;
     }
 
+    /* 容器设置 */
+    .highlight pre, pre {
+        overflow-x: auto !important; 
+        -webkit-overflow-scrolling: touch !important; 
+        scrollbar-width: none !important; /* Firefox Mobile */
+        -ms-overflow-style: none !important; /* IE/Edge Mobile */
+    }
+}
+</style>
 
-    /* --- 第二部分：移动端强制覆盖（彻底隐藏） --- */
-    @media (max-width: 768px) {
-        /* WebKit内核：暴力隐藏滚动条元素 */
-        .highlight pre::-webkit-scrollbar,
-        pre::-webkit-scrollbar {
-            display: none !important;
-            width: 0 !important;
-            height: 0 !important;
-            -webkit-appearance: none !important;
-            background: transparent !important;
-        }
+<script>
+// 1. 注入动画
+(function() {
+  document.write(`<div id="halo-racer-loader"><div class="racer-container"><div class="bar p1"></div><div class="bar p2"></div><div class="bar red"></div></div></div>`);
+  window.addEventListener('load', function() {
+    const loader = document.getElementById('halo-racer-loader');
+    setTimeout(() => { if(loader){ loader.classList.add('hidden'); setTimeout(() => { loader.style.display = 'none'; }, 300); }}, 800); 
+  });
+})();
 
-        /* 容器本身设置 */
-        .highlight pre, pre {
-            /* 保证可以触摸滑动 */
-            overflow-x: auto !important; 
-            -webkit-overflow-scrolling: touch !important; 
+// 2. 深色模式切换 (修复：使用半黑半白圆圈)
+(function() {
+    const isDark = localStorage.getItem('theme') === 'dark';
+    if(isDark) document.body.classList.add('dark-mode');
+
+    document.addEventListener('DOMContentLoaded', function() {
+        const navList = document.querySelector('.navbar-nav'); 
+        if(!navList) return;
+
+        const li = document.createElement('li');
+        const link = document.createElement('a');
+        link.className = "theme-toggle-btn";
+        link.title = "Switch Theme";
+        
+        // ◑ (右黑) / ◐ (左黑) 
+        link.innerHTML = isDark ? "◑" : "◐"; 
+        
+        link.onclick = function() {
+            document.body.classList.toggle('dark-mode');
+            const currentMode = document.body.classList.contains('dark-mode') ? 'dark' : 'light';
+            localStorage.setItem('theme', currentMode);
+            link.innerHTML = currentMode === 'dark' ? "◑" : "◐";
+        };
+        li.appendChild(link);
+        navList.appendChild(li);
+    });
+})();
+
+// 3. 代码块工具 (逻辑保持不变)
+document.addEventListener('DOMContentLoaded', function() {
+    const svgCopy = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+    const svgCheck = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#28a745" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+    const svgFold = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"></polyline></svg>';
+    const svgUnfold = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>';
+
+    document.querySelectorAll('.highlight').forEach(block => {
+        if (block.querySelector('.code-tools')) return;
+        
+        const tools = document.createElement('div');
+        tools.className = 'code-tools';
+
+        let isLongCode = block.offsetHeight > 300;
+        if (isLongCode) {
+            const btnFold = document.createElement('button'); 
+            btnFold.className = 'c-btn';
             
-            /* Firefox / IE 移动端隐藏 */
-            scrollbar-width: none !important; 
-            -ms-overflow-style: none !important; 
+            block.classList.add('folded'); 
+            btnFold.innerHTML = svgUnfold; 
+            btnFold.title = "展开"; 
+            
+            btnFold.onclick = () => { 
+                if (block.classList.contains('folded')) {
+                    block.classList.remove('folded');
+                    btnFold.innerHTML = svgFold; 
+                    btnFold.title = "折叠";
+                } else {
+                    block.classList.add('folded');
+                    btnFold.innerHTML = svgUnfold; 
+                    btnFold.title = "展开";
+                    block.scrollIntoView({behavior: "smooth", block: "center"});
+                }
+            };
+            tools.appendChild(btnFold);
         }
-    }
+
+        const btnCopy = document.createElement('button'); 
+        btnCopy.className = 'c-btn'; 
+        btnCopy.innerHTML = svgCopy; 
+        btnCopy.title = "复制";
+        
+        btnCopy.onclick = () => {
+            navigator.clipboard.writeText(block.innerText).then(() => {
+                btnCopy.innerHTML = svgCheck;
+                setTimeout(() => { btnCopy.innerHTML = svgCopy; }, 2000);
+            });
+        };
+        
+        tools.appendChild(btnCopy); 
+        block.appendChild(tools);
+    });
+});
+</script>
 ```
 
 5.9 汉化修正
