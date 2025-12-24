@@ -179,50 +179,65 @@ body.dark-mode .pager li > a, body.dark-mode .pager li > span {
 body.dark-mode .pager li > a:hover { color: #fff !important; }
 
 /* ====================================================== */
-    /* 代码块滚动条自动隐藏 (适配 Beautiful Hugo) */
+    /* 代码块滚动条优化 (Beautiful Hugo 移动端修复版) */
     /* ====================================================== */
 
-    /* 1. 设置滚动条整体大小 (针对 WebKit 内核: Chrome, Edge, Safari, 安卓浏览器) */
-    .highlight pre::-webkit-scrollbar,
-    pre::-webkit-scrollbar {
-        height: 4px;       /* 横向滚动条高度，移动端建议设细一点 */
-        width: 4px;        /* 纵向滚动条宽度 */
-        background-color: transparent;
-    }
-
-    /* 2. 轨道背景永远透明 */
-    .highlight pre::-webkit-scrollbar-track,
-    pre::-webkit-scrollbar-track {
-        background-color: transparent;
-    }
-
-    /* 3. 滑块默认透明（隐藏状态） */
-    .highlight pre::-webkit-scrollbar-thumb,
-    pre::-webkit-scrollbar-thumb {
-        background-color: transparent; 
-        border-radius: 2px;
-    }
-
-    /* 4. 仅在鼠标悬停(桌面端)时显示滑块 */
-    .highlight pre:hover::-webkit-scrollbar-thumb,
-    pre:hover::-webkit-scrollbar-thumb {
-        background-color: rgba(0, 0, 0, 0.2); /* 浅灰色 */
-    }
-
-    /* 5. 兼容性设置 & Firefox 支持 */
-    .highlight pre, pre {
-        /* iOS 顺滑滚动支持 */
-        -webkit-overflow-scrolling: touch; 
+    /* --- 1. PC端逻辑 (保持你满意的效果：平时隐藏，悬停显示) --- */
+    @media (min-width: 769px) {
+        .highlight pre::-webkit-scrollbar,
+        pre::-webkit-scrollbar {
+            height: 6px;       /* PC端稍微粗一点点，方便鼠标拖动 */
+            width: 6px;
+            background-color: transparent;
+        }
         
-        /* Firefox 滚动条变细 */
-        scrollbar-width: thin;             
-        /* Firefox 默认隐藏颜色 (滑块颜色 轨道颜色) */
-        scrollbar-color: transparent transparent; 
+        .highlight pre::-webkit-scrollbar-track,
+        pre::-webkit-scrollbar-track {
+            background-color: transparent;
+        }
+
+        .highlight pre::-webkit-scrollbar-thumb,
+        pre::-webkit-scrollbar-thumb {
+            background-color: transparent; /* 平时透明 */
+            border-radius: 3px;
+        }
+
+        /* 鼠标悬停时显示 */
+        .highlight pre:hover::-webkit-scrollbar-thumb,
+        pre:hover::-webkit-scrollbar-thumb {
+            background-color: rgba(0, 0, 0, 0.2); 
+        }
+        
+        /* Firefox PC端悬停支持 */
+        .highlight pre:hover, pre:hover {
+            scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+            scrollbar-width: thin;
+        }
     }
 
-    /* Firefox 鼠标悬停时显示 */
-    .highlight pre:hover, pre:hover {
-        scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+    /* --- 2. 移动端逻辑 (强制彻底隐藏，保持触摸滑动) --- */
+    @media (max-width: 768px) {
+        /* Webkit内核 (Chrome/Safari/安卓) 强制不显示滚动条元素 */
+        .highlight pre::-webkit-scrollbar,
+        pre::-webkit-scrollbar {
+            display: none !important; /* 核心代码：直接不渲染滚动条 */
+            width: 0 !important;
+            height: 0 !important;
+            background: transparent !important;
+        }
+
+        /* 容器本身设置 (兼容 Firefox 和部分安卓) */
+        .highlight pre, pre {
+            /* 允许触摸滑动 */
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch; 
+            
+            /* Firefox 移动端隐藏 */
+            scrollbar-width: none !important; 
+            
+            /* IE/Edge 移动端隐藏 */
+            -ms-overflow-style: none !important; 
+        }
     }
 </style>
 
