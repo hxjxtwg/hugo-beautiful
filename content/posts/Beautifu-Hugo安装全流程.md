@@ -303,7 +303,7 @@ pygmentsCodefencesGuessSyntax = true   # 自动猜测代码语言（如果你没
   {{ i18n "postedBy" }} <span class="post-meta-user">{{ .Params.author }}</span>
 {{ end }}
 ```
-5.7 加载动画、深浅模式、样式更改
+5.8 加载动画、深浅模式、样式更改
 位置：layouts\partials\head_custom.html
 ```html
 <style>
@@ -666,9 +666,59 @@ body.dark-mode .c-btn:hover { color: #ff4757 !important; }
 /* 5. 折叠 */
 .highlight.folded { height: 200px !important; overflow: hidden !important; }
 ```
-这样可以自定义背景色
+这样可以自定义背景色。
 
-5.8 汉化修正
+代码框自动隐藏横向滚动条，在`<style>`标签插入以下代码:
+```html
+/* ====================================================== */
+    /* 代码块滚动条自动隐藏 (适配 Beautiful Hugo) */
+    /* ====================================================== */
+
+    /* 1. 设置滚动条整体大小 (针对 WebKit 内核: Chrome, Edge, Safari, 安卓浏览器) */
+    .highlight pre::-webkit-scrollbar,
+    pre::-webkit-scrollbar {
+        height: 4px;       /* 横向滚动条高度，移动端建议设细一点 */
+        width: 4px;        /* 纵向滚动条宽度 */
+        background-color: transparent;
+    }
+
+    /* 2. 轨道背景永远透明 */
+    .highlight pre::-webkit-scrollbar-track,
+    pre::-webkit-scrollbar-track {
+        background-color: transparent;
+    }
+
+    /* 3. 滑块默认透明（隐藏状态） */
+    .highlight pre::-webkit-scrollbar-thumb,
+    pre::-webkit-scrollbar-thumb {
+        background-color: transparent; 
+        border-radius: 2px;
+    }
+
+    /* 4. 仅在鼠标悬停(桌面端)时显示滑块 */
+    .highlight pre:hover::-webkit-scrollbar-thumb,
+    pre:hover::-webkit-scrollbar-thumb {
+        background-color: rgba(0, 0, 0, 0.2); /* 浅灰色 */
+    }
+
+    /* 5. 兼容性设置 & Firefox 支持 */
+    .highlight pre, pre {
+        /* iOS 顺滑滚动支持 */
+        -webkit-overflow-scrolling: touch; 
+        
+        /* Firefox 滚动条变细 */
+        scrollbar-width: thin;             
+        /* Firefox 默认隐藏颜色 (滑块颜色 轨道颜色) */
+        scrollbar-color: transparent transparent; 
+    }
+
+    /* Firefox 鼠标悬停时显示 */
+    .highlight pre:hover, pre:hover {
+        scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+    }
+```
+
+5.9 汉化修正
 位置：themes\beautifulhugo\i18n\zh-CN.yaml
 
 ### 6. 创建内容与本地测试
