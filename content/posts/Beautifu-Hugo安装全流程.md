@@ -668,7 +668,7 @@ body.dark-mode .c-btn:hover { color: #ff4757 !important; }
 ```
 这样可以自定义背景色。
 
-代码框自动隐藏横向滚动条，完整head_custom.html:
+加上代码框自动隐藏横向滚动条，完整head_custom.html:
 ```html
 <style>
 /* ======================================================= */
