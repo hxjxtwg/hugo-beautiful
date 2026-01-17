@@ -50,7 +50,7 @@ npx cap init
 
 * web asset directory? -> public
 
-###4. 创建“欺骗”用的文件夹和文件：
+### 4. 创建“欺骗”用的文件夹和文件：
 
 * （npx cap init 不会创建 public 文件夹，我们必须手动创建）
 
@@ -246,7 +246,7 @@ public class MainActivity extends BridgeActivity {
 
 * 请回到您的 Android Studio（确保 D:\Tools\LunaTV\android 项目是打开的）。
 
-* 在左上角的**“项目”文件浏览器**中（您之前找 MainActivity.java 的地方）。
+* 在左上角的“项目”文件浏览器中（您之前找 MainActivity.java 的地方）。
 
 * 右键点击最顶层的那个 app 文件夹（它有一个蓝色的“a”图标）。
 
@@ -262,7 +262,7 @@ public class MainActivity extends BridgeActivity {
 
 * Source Asset (源资产)：
 
- * 在 Path (路径) 这一行，点击它最右边的**“文件夹”图标**。
+ * 在 Path (路径) 这一行，点击它最右边的“文件夹”图标。
 
  * 在弹出的文件选择器中，找到并选择您在步骤 1 中准备好的那张 .png 图标文件。
 
@@ -294,7 +294,7 @@ public class MainActivity extends BridgeActivity {
 ### 4. 生成图标
 * 当您对预览满意后，点击右下角的 "Next" (下一步) 按钮。
 
-* 它会弹出一个新窗口，显示它将要**“覆盖”**（Overwrite）一大堆旧的 ic_launcher.png 文件。
+* 它会弹出一个新窗口，显示它将要“覆盖”（Overwrite）一大堆旧的 ic_launcher.png 文件。
 
 * 这是正常的，这正是我们想要的。
 
