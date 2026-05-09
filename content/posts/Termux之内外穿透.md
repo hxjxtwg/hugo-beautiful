@@ -95,6 +95,14 @@ jobs
 ```
 pm2 start cloudflared --name "cloudflared" -- tunnel --protocol http2 --config /data/data/com.termux/files/home/.cloudflared/config.yml run emby_tunnel
 ```
+锁定IPV4、tcp、配置文件启动
+```
+pm2 start cloudflared --name "cloudflared" -- tunnel --edge-ip-version 4 --protocol http2 --config /data/data/com.termux/files/home/.cloudflared/config.yml run emby_tunnel
+```
+锁定IPV4、tcp、Zero Trust 控制台管理启动
+```
+pm2 start cloudflared --name "cloudflared" -- tunnel --edge-ip-version 4 --protocol http2 run <你的超长Token>
+```
 
 ### 二、FRP
 ### VPS部署服务端 frps

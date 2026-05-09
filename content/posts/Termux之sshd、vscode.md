@@ -139,9 +139,13 @@ pkg install code-server -y
 第三步：重新开启 NekoBox
 等屏幕上跑完一堆代码，不再报错并回到 ~ $ 提示符后，就说明安装大功告成了。此时你再去把 NekoBox 重新打开，恢复咱们之前布下的路由大阵。
 
-用“绝对路径”让 PM2 接管
+让 PM2 接管
 ```
-pm2 start /data/data/com.termux/files/usr/bin/code-server --name "vscode" -- --bind-addr 0.0.0.0:8088 --auth none
+pm2 start code-server --name vscode --interpreter bash -- --bind-addr 0.0.0.0:8080
+```
+如果启动后日志有错误改成下面的带双引号
+```
+pm2 start "code-server --bind-addr 0.0.0.0:8088 --auth none" --name "vscode"
 ```
 ```
 pm2 save

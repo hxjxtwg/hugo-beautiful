@@ -144,6 +144,17 @@ termux-wake-lock
 ```
 6.3.按 Ctrl + O 保存，Enter 确认，CTRL+X -> Y -> 回车。 退出。
 
+6.4.在vscode终端有提示：
+```
+The program crond is not installed. Install it by executing:
+ pkg install cronie
+```
+可以直接选择安装：
+```
+pkg install cronie -y
+```
+
+
 7.日常维护常用指令
 
 既然用了“正规军”管理，这几个指令建议记一下，排查问题非常方便：
