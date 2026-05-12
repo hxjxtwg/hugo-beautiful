@@ -92,6 +92,11 @@ pip install beautifulsoup4 lxml
 ```
 注：在 Termux 中安装 cryptography 或 lxml 可能会花费较长时间（几分钟），因为它正在调用 clang 进行本地编译，请耐心等待，不要中断。
 
+# 3.拼音库
+```
+pip install pypinyin
+```
+
 ### 二、自动转存auto_189
 
 1.建立专属工作台与配置文件
