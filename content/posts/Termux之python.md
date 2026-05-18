@@ -1,6 +1,6 @@
 ---
 
-title: "Termux之python"
+title: "Termux之auto189.py、casplay.py"
 
 author: "xxsky"
 
@@ -97,14 +97,14 @@ pip install beautifulsoup4 lxml
 pip install pypinyin
 ```
 
-### 二、自动转存auto_189
+### 二、自动转存auto189
 
 1.建立专属工作台与配置文件
 ```
 # 1. 创建专属文件夹并进去
 
-mkdir -p ~/tcloud/db
-cd ~/tcloud
+mkdir -p ~/189py/db
+cd ~/189py
 
 # 2. 创建环境变量文件并编辑
 nano sys.env
@@ -112,18 +112,20 @@ nano sys.env
 执行完 nano sys.env 后，屏幕会变成黑底白字的编辑器。把下面这段内容修改成你自己的真实信息后，粘贴进去（注意等号两边不要有空格）：
 ```
 # 你的天翼云盘账号和密码
-ENV_189_CLIENT_ID=13800138000
-ENV_189_CLIENT_SECRET=你的天翼密码
-
+ENV_189_CLIENT_ID=17707372266
+ENV_189_CLIENT_SECRET=1127&xxskY
 # 你的 TG 机器人配置
-ENV_TG_BOT_TOKEN=123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ
-ENV_TG_ADMIN_USER_ID=你的TG数字ID
+ENV_TG_BOT_TOKEN=7548615667:AAHn0ls4aBPKBPI2-gpwykwVdEKd0ywOlsc
+ENV_TG_ADMIN_USER_ID=-1002906711199
+
+# 新增这行
+ENV_TMDB_API_KEY=9c88e18e43543c8ff195c631aaa0d2fa
 ```
 填完后，按 Ctrl + O（字母O），回车保存；然后按 Ctrl + X 退出。
 
-3.auto_189.py脚本
+3.auto189.py脚本
 
-3.1在电脑中新建文件auto_189.py内容如下：
+3.1在电脑中新建文件auto189.py内容如下：
 ```
 import os
 import json
@@ -140,11 +142,15 @@ import logging
 import schedule
 from dotenv import load_dotenv
 from datetime import datetime
+from pypinyin import pinyin, Style
 
-# 🛡️ 强制锁死 IPv4
 old_getaddrinfo = socket.getaddrinfo
-def new_getaddrinfo(*args, **kwargs):
-    responses = old_getaddrinfo(*args, **kwargs)
+def new_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    responses = old_getaddrinfo(host, port, family, type, proto, flags)
+    # 🌟 智能放行：如果 Flask 试图监听所有 IPv6 通配符，直接放行
+    if host == '::':
+        return responses
+    # 🛡️ 强制锁定：外部请求（天翼云等）全部强杀 IPv6，只保留 IPv4 (AF_INET)
     return [res for res in responses if res[0] == socket.AF_INET]
 socket.getaddrinfo = new_getaddrinfo
 
@@ -179,6 +185,78 @@ TG_BOT_TOKEN = os.getenv("ENV_TG_BOT_TOKEN", "")
 TG_ADMIN_USER_ID = os.getenv("ENV_TG_ADMIN_USER_ID", "")
 
 # ==========================================
+# 🎬 新增：TMDB 终极翻译与扩搜引擎 (带拼音与英文反查)
+# ==========================================
+TMDB_API_KEY = os.getenv("ENV_TMDB_API_KEY", "")
+
+def get_tmdb_info(keyword):
+    """输入中文，自动反查英文名、TMDB ID 和拼音特征"""
+    if not TMDB_API_KEY: return None
+    
+    info = {
+        "id": "",
+        "cn_name": "",
+        "en_name": "",
+        "pinyin_full": "",
+        "pinyin_initial": ""
+    }
+    
+    # 1. 尝试生成拼音特征 (兼容没装 pypinyin 的情况)
+    try:
+        from pypinyin import pinyin, Style
+        info["pinyin_full"] = "".join([p[0] for p in pinyin(keyword, style=Style.NORMAL)])
+        info["pinyin_initial"] = "".join([p[0][0] for p in pinyin(keyword, style=Style.FIRST_LETTER)])
+    except ImportError:
+        pass # 如果没装库就不强求拼音
+
+    # 2. 第一次请求：用中文去查，拿到正确的 ID
+    url_cn = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&language=zh-CN&query={parse.quote(keyword)}&page=1"
+    try:
+        res_cn = requests.get(url_cn, timeout=5).json()
+        if res_cn.get("results"):
+            top = res_cn["results"][0]
+            media_type = top.get("media_type", "tv") # 判断是电影还是剧集
+            tmdb_id = str(top.get("id"))
+            info["id"] = tmdb_id
+            info["cn_name"] = top.get("name") or top.get("title", "")
+            
+            # 3. 第二次请求：用拿到的 ID，伪装成英文环境再去问一次，榨出官方英文名！
+            url_en = f"https://api.themoviedb.org/3/{media_type}/{tmdb_id}?api_key={TMDB_API_KEY}&language=en-US"
+            res_en = requests.get(url_en, timeout=5).json()
+            # 提取英文环境下的剧名
+            info["en_name"] = res_en.get("name") or res_en.get("title") or top.get("original_name") or ""
+            
+            return info
+    except Exception as e:
+        logger.error(f"TMDB检索与反查异常: {e}")
+        
+    # 如果 TMDB 彻底没查到，把拼音特征传回去保底
+    return info if (info["pinyin_full"] or info["pinyin_initial"]) else None
+
+def translate_folder_name(folder_name):
+    """提取文件夹名中的TMDB ID，翻译成人话(中文剧名)"""
+    if not TMDB_API_KEY: return folder_name
+    match = re.search(r'(?i)tmdb[-_]?(\d+)', folder_name)
+    if not match: return folder_name
+    
+    tmdb_id = match.group(1)
+    try:
+        # 先按剧集查
+        res_tv = requests.get(f"https://api.themoviedb.org/3/tv/{tmdb_id}?api_key={TMDB_API_KEY}&language=zh-CN", timeout=3).json()
+        if "name" in res_tv:
+            cn_name = res_tv["name"]
+            s_match = re.search(r'(?i)(S\d+|Season\s*\d+)', folder_name)
+            s_tag = f" {s_match.group(1)}" if s_match else ""
+            return f"📺 {cn_name}{s_tag} (TMDB-{tmdb_id})"
+            
+        # 查不到再按电影查
+        res_movie = requests.get(f"https://api.themoviedb.org/3/movie/{tmdb_id}?api_key={TMDB_API_KEY}&language=zh-CN", timeout=3).json()
+        if "title" in res_movie:
+            return f"🎬 {res_movie['title']} (TMDB-{tmdb_id})"
+    except: pass
+    return folder_name
+
+# ==========================================
 # 📁 核心目录与挂载配置
 # ==========================================
 DIR_CAS_ROOT = "/177-秒传"
@@ -189,6 +267,7 @@ OPENLIST_MOUNT_POINT = "177"
 SUBS_FILE = os.path.join(DB_DIR, "subscriptions.json")
 HISTORY_FILE = os.path.join(DB_DIR, "history.json")
 COOKIES_FILE = os.path.join(DB_DIR, "cookies.json")
+SETTINGS_FILE = os.path.join(DB_DIR, "settings.json") # 🌟 新增配置保存
 
 last_login_time = 0
 
@@ -214,6 +293,9 @@ def load_json(filepath):
 def save_json(filepath, data):
     with open(filepath, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+if not os.path.exists(SETTINGS_FILE):
+    save_json(SETTINGS_FILE, {"auto_scan_cas": False, "auto_check_subs": True})
 
 def get_openlist_path(cloud189_path):
     clean_path = cloud189_path.strip("/")
@@ -262,7 +344,8 @@ def generate_smart_name(original_filename, sub_path):
     if re.search(r'(?i)\bDV\b', original_filename): tags.append("DV")
     tag_str = "." + ".".join(tags) if tags else ""
 
-    if "电影" in sub_path or "movie" in sub_path.lower():
+    # 🌟 修复电影/演唱会等加 S01E01 的逻辑
+    if any(k in sub_path for k in ["电影", "movie", "演唱会", "纪录片"]):
         part_match = re.search(r'(?i)(part\d+|cd\d+)', original_filename)
         part_str = f".{part_match.group(1).lower()}" if part_match else ""
         year_part = f".{year_str}" if year_str else ""
@@ -530,7 +613,266 @@ def auto_relogin(client_obj):
         logger.error(f"❌ [系统] 重新登录失败: {e}")
         return False
 
-def check_subscriptions(client_obj, force_target_id=None, is_first_run=False):
+# 🌟 独立新增的 CAS 收割模块 (终极暴力认亲 + 整季合并极速批次处理版)
+def process_cas_via_olist_api():
+    OLIST_URL = "http://127.0.0.1:5244"  
+    OLIST_USER = "admin"      
+    OLIST_PASS = "xxsky1127"   
+    WATCH_DIRS = ["/family/177_cas", "/local_cas"]
+    processed_names = []
+
+    try:
+        r_log = requests.post(f"{OLIST_URL}/api/auth/login", json={"username": OLIST_USER, "password": OLIST_PASS}, timeout=10)
+        login_res = r_log.json()
+        r_log.close()
+        if login_res.get("code") != 200: return processed_names
+        token = login_res["data"]["token"]
+        headers = {"Authorization": token, "Content-Type": "application/json"}
+    except Exception: return processed_names
+
+    def scan_olist_dir(path):
+        files = []
+        try:
+            r = requests.post(f"{OLIST_URL}/api/fs/list", json={"path": path, "password": "", "page": 1, "per_page": 3000, "refresh": True}, headers=headers, timeout=45)
+            res = r.json()
+            r.close()
+            if res.get("code") != 200: return files
+            
+            content = (res.get("data") or {}).get("content") or []
+            for item in content:
+                item_path = f"{path}/{item['name']}".replace("//", "/")
+                if item["is_dir"]: 
+                    files.extend(scan_olist_dir(item_path))
+                else:
+                    if item["name"].lower().endswith(".cas"):
+                        files.append({"name": item["name"], "dir": path, "full_path": item_path})
+        except Exception as e:
+            logger.warning(f"⚠️ [警告] 扫描目录 {path} 时 OpenList 接口超时无响应: {e}")
+        return files
+
+    cas_files = []
+    for watch_dir in WATCH_DIRS:
+        logger.info(f"🌾 [收割] 正在巡逻云端目录: {watch_dir}")
+        cas_files.extend(scan_olist_dir(watch_dir))
+
+    if not cas_files: return processed_names
+
+    subs = load_json(SUBS_FILE)
+    current_ym = datetime.now().strftime("%Y%m")
+    updated_paths = set()
+    created_dirs = set()
+    
+    def get_match_key(text): 
+        clean = re.sub(r'[（\(\[\{]?\d{4}[）\)\]\}]?', '', text)
+        clean = re.sub(r'(?i)\b(4k|1080p|2160p|web-dl|sdr|hdr)\b', '', clean)
+        clean = re.sub(r'(完结|连载中|全\d+集|打包|修正)', '', clean)
+        clean = re.sub(r'[^\w\u4e00-\u9fa5]', '', clean)
+        return clean.lower()
+
+    # =================================================================
+    # 🚀 效率跃迁步骤 1：先不急着改名移动，把属于同一个家(目录)的文件合并编组
+    # =================================================================
+    batch_groups = {}  # 结构: { (原目录, 目标目录): [文件信息字典1, 文件信息字典2] }
+
+    for cas in cas_files:
+        filename = cas["name"]
+        raw_dir = cas["dir"]
+        active_watch_dir = next((wd for wd in WATCH_DIRS if raw_dir.startswith(wd)), WATCH_DIRS[0])
+        rel_dir = raw_dir.replace(active_watch_dir, "").strip("/")
+        parts = rel_dir.split("/") if rel_dir else []
+        
+        category_key = None
+        show_folder_name = parts[0] if parts else "未分类手动入库"
+        if len(parts) > 1 and parts[0] in CAT_ROUTER:
+            category_key, show_folder_name = parts[0], parts[1]
+        elif "#" in show_folder_name:
+            for cat in CAT_ROUTER.keys():
+                if f"#{cat}" in show_folder_name:
+                    category_key = cat
+                    show_folder_name = show_folder_name.replace(f"#{cat}", "").strip()
+                    break
+
+        # 季数双向决策逻辑 (保留上一轮修复成果)
+        raw_season_match = re.search(r'(?i)Season\s*(\d+)|S(\d+)(?!\d)', raw_dir.split('/')[-1])
+        if raw_season_match: true_season_num = int(raw_season_match.group(1) or raw_season_match.group(2))
+        else:
+            file_s_match = re.search(r'(?i)S0*(\d+)', filename)
+            true_season_num = int(file_s_match.group(1)) if file_s_match else 1
+            
+        temp_ep_num = int(re.search(r'(?i)E(?:P)?\s*(\d+)', filename).group(1)) if re.search(r'(?i)E(?:P)?\s*(\d+)', filename) else 1
+        
+        search_key = get_match_key(show_folder_name)
+        target_cloud_path = None
+        is_tv_show = False
+        
+        ignore_words = {get_match_key(DIR_CAS_ROOT), get_match_key(DIR_VIDEO_ROOT), "season", "s"}
+        for cat_key, (large_cat, sub_cat) in CAT_ROUTER.items():
+            ignore_words.add(get_match_key(cat_key))
+            ignore_words.add(get_match_key(large_cat))
+            if sub_cat: ignore_words.add(get_match_key(sub_cat))
+
+        best_match_path = None
+
+        # 查本地库
+        for sid, info_dict in subs.items():
+            if isinstance(info_dict, dict):
+                db_path = info_dict.get("path", "")
+                if DIR_CAS_ROOT not in db_path: continue 
+                db_folders = db_path.split('/')
+                for idx, f_name in enumerate(db_folders):
+                    pure_f = get_match_key(f_name)
+                    if not pure_f or len(pure_f) < 2: continue
+                    if re.match(r'^\d{4,6}$', pure_f) or pure_f in ignore_words: continue
+                    if search_key == pure_f: best_match_path = "/".join(db_folders[:idx+1]); break
+            if best_match_path: break
+
+        # 查雷达
+        if not best_match_path:
+            try:
+                search_roots = []
+                if category_key:
+                    b_large, b_sub = CAT_ROUTER[category_key]
+                    search_roots.append(get_openlist_path(f"{DIR_CAS_ROOT}/{b_large}/{b_sub}".strip("/").replace("//", "/")))
+                else: search_roots = [get_openlist_path(f"{DIR_CAS_ROOT}/动漫/0-动漫"), get_openlist_path(f"{DIR_CAS_ROOT}/电视剧/0-电视剧")]
+                for root_path in search_roots:
+                    r = requests.post(f"{OLIST_URL}/api/fs/list", json={"path": root_path, "password": "", "page": 1, "per_page": 1000, "refresh": True}, headers=headers, timeout=20)
+                    if r.json().get("code") == 200:
+                        ym_nodes = [item["name"] for item in (r.json().get("data") or {}).get("content", []) if item["is_dir"] and re.match(r'^\d{4,6}$', item["name"])]
+                        ym_nodes.sort(reverse=True)
+                        for ym in ym_nodes:
+                            ym_path = f"{root_path}/{ym}"
+                            r2 = requests.post(f"{OLIST_URL}/api/fs/list", json={"path": ym_path, "password": "", "page": 1, "per_page": 1000, "refresh": True}, headers=headers, timeout=20)
+                            if r2.json().get("code") == 200:
+                                for item in (r2.json().get("data") or {}).get("content", []):
+                                    if item["is_dir"] and search_key == get_match_key(item["name"]):
+                                        best_match_path = f"{DIR_CAS_ROOT}/{b_large}/{b_sub}/{ym}/{item['name']}".replace("//", "/"); break
+                            if best_match_path: break
+                    if best_match_path: break
+            except: pass
+
+        if best_match_path:
+            target_cloud_path = best_match_path
+            if any(k in target_cloud_path for k in ["电视剧", "动漫", "短剧"]): is_tv_show = True
+            
+        if not target_cloud_path:
+            if category_key:
+                base_large, base_sub = CAT_ROUTER[category_key]
+                target_cloud_path = f"{DIR_CAS_ROOT}/{base_large}/{base_sub}/{current_ym}/{show_folder_name}".replace("//", "/")
+                if base_large in ["电视剧", "动漫", "短剧"]: is_tv_show = True
+            else:
+                if true_season_num > 1 or temp_ep_num > 1: target_cloud_path = f"{DIR_CAS_ROOT}/电视剧/0-电视剧/{current_ym}/{show_folder_name}"; is_tv_show = True
+                else: target_cloud_path = f"{DIR_CAS_ROOT}/电影/0-电影/{current_ym}/{show_folder_name}"
+
+        base_notify_path = target_cloud_path 
+
+        if is_tv_show:
+            if not re.search(r'(?i)/Season\s*\d+$', target_cloud_path): target_cloud_path = f"{target_cloud_path}/Season {true_season_num}"
+        elif true_season_num > 1 or (len(parts) > 1 and "season" in parts[-1].lower()):
+            if not re.search(r'(?i)/Season\s*\d+$', target_cloud_path): target_cloud_path = f"{target_cloud_path}/Season {true_season_num}"
+
+        final_name = generate_smart_name(filename, target_cloud_path) or filename
+        final_target_dir = get_openlist_path(target_cloud_path)
+        
+        # 归入编组
+        group_key = (raw_dir, final_target_dir, base_notify_path)
+        if group_key not in batch_groups: batch_groups[group_key] = []
+        batch_groups[group_key].append({"orig": filename, "final": final_name})
+
+    # =================================================================
+    # 🚀 效率跃迁步骤 2：以整部剧/整季为单位，执行极速合并洗名与一波流搬运
+    # =================================================================
+    for (raw_dir, final_target_dir, base_notify_path), file_items in batch_groups.items():
+        # 打基建
+        if final_target_dir not in created_dirs:
+            requests.post(f"{OLIST_URL}/api/fs/mkdir", json={"path": final_target_dir}, headers=headers).close()
+            created_dirs.add(final_target_dir)
+            logger.info(f"📁 [基建] 新建目录: {final_target_dir} ...")
+            time.sleep(1.5)
+
+        logger.info(f"✨ [洗名] 正在极速挨个下发整组重命名指令 (共 {len(file_items)} 个文件) ...")
+        names_to_move = []
+        
+        # 1. 紧凑循环极速改名（无间歇连发，极其丝滑）
+        for item in file_items:
+            orig_n, final_n = item["orig"], item["final"]
+            if orig_n != final_n:
+                src_path = f"{raw_dir}/{orig_n}".replace("//", "/")
+                requests.post(f"{OLIST_URL}/api/fs/rename", json={"name": final_n, "path": src_path}, headers=headers).close()
+                names_to_move.append(final_n)
+            else:
+                names_to_move.append(orig_n)
+                
+        # 2. 极其精明的集体防空缓冲：整组文件只等一次落盘，不用等20次！
+        logger.info("⏳ [缓冲] 整组重命名下发完毕，集中等待底层统一刷新落盘 (5秒)...")
+        time.sleep(5.0)
+        requests.post(f"{OLIST_URL}/api/fs/list", json={"path": raw_dir, "refresh": True}, headers=headers).close()
+
+        # 3. 💥 终极收割：一波流批量 Move！直接传一整串数组！
+        logger.info(f"🚚 [搬运] 正在打包移入新家: {final_target_dir} (批量 {len(names_to_move)} 件一波流)")
+        r_mov = requests.post(f"{OLIST_URL}/api/fs/move", json={"src_dir": raw_dir, "dst_dir": final_target_dir, "names": names_to_move}, headers=headers)
+        mov_res = r_mov.json()
+        r_mov.close()
+        
+        if mov_res.get("code") == 200:
+            logger.info(f"✅ [搬运] 批量整组移动成功！")
+            processed_names.extend(names_to_move)
+            updated_paths.add(base_notify_path)
+        else:
+            logger.error(f"❌ [搬运] 批量移动失败: {mov_res.get('message', mov_res)}")
+
+    # =================================================================
+    # 🚨 通知管家收尾 (极致精准 - 影剧双修通吃版)
+    # =================================================================
+    if updated_paths:
+        logger.info("⏳ [引擎] 物理归档结束，等待云盘底层统一落盘缓冲 (8秒)...")
+        time.sleep(8)
+        
+        # 🌟 核心极致调优：全栖兼容分季剧集与独立电影文件夹
+        target_media_roots = set()
+        for p in updated_paths:
+            parts = p.split('/')
+            media_root = ""
+            
+            # 轨一：探测是否含有 Season 分季 (针对剧集/动漫)
+            for i, part in enumerate(parts):
+                if part.lower().startswith("season"):
+                    media_root = '/'.join(parts[:i])
+                    break
+            
+            # 轨二：无 Season 分季兜底 (针对独立电影)
+            if not media_root:
+                # 检查最后一项是否包含扩展名点号 (判定为文件还是目录)
+                # 常见后缀过滤，避免把带有标点符号的独立目录误判为文件
+                last_part = parts[-1]
+                if '.' in last_part and any(last_part.lower().endswith(ext) for ext in ['.mp4', '.mkv', '.ts', '.iso', '.rmvb', '.avi', '.cas', '.strm']):
+                    # 传入的是具体电影文件，取其直接所在的电影文件夹
+                    media_root = os.path.dirname(p)
+                else:
+                    # 传入的本身就是目标电影目录，原封不动直接锁定
+                    media_root = p
+                    
+            if media_root:
+                target_media_roots.add(media_root)
+        
+        logger.info(f"📦 [引擎] 聚合完毕，共锁定 {len(target_media_roots)} 个独立影剧根目录待强刷。")
+        
+        # 仅对精准提取出的影剧总目录发起轻量级同步
+        for media_root in target_media_roots:
+            olist_p = get_openlist_path(media_root)
+            try:
+                requests.get("http://127.0.0.1:5000/api/sync", params={"path": olist_p}, timeout=5).close()
+                time.sleep(2)  # 黄金间隔保护上游搜刮接口
+            except Exception as e:
+                logger.debug(f"⚠️ 通知目录强刷闪断 (可静默忽略): {e}")
+                pass
+                
+        logger.info(f"🔔 [收割] 任务彻底完成，已精准强刷 {len(target_media_roots)} 个专属影视。")
+        
+    # 🌟 终极完美交棒：直接交出系统早已全自动收集好的精准单集文件名列表！
+    return processed_names
+
+# 🌟 你的原版查重逻辑，补入 ignore_time 和 实体文件查验防假历史
+def check_subscriptions(client_obj, force_target_id=None, is_first_run=False, ignore_time=False):
     subs = load_json(SUBS_FILE)
     history = load_json(HISTORY_FILE)
     notifier = TelegramNotifier(TG_BOT_TOKEN, TG_ADMIN_USER_ID)
@@ -551,7 +893,8 @@ def check_subscriptions(client_obj, force_target_id=None, is_first_run=False):
             path = "" if isinstance(sub_info, str) else sub_info.get("path", "")
             freq = "" if isinstance(sub_info, str) else sub_info.get("freq", "")
 
-            if not force_target_id and not is_first_run:
+            # 🌟 加入 ignore_time 参数
+            if not force_target_id and not is_first_run and not ignore_time:
                 if path:
                     now = datetime.now()
                     curr_h, curr_m, curr_w = now.hour, now.minute, now.weekday()
@@ -600,7 +943,7 @@ def check_subscriptions(client_obj, force_target_id=None, is_first_run=False):
                 if smart_target_name is None: continue
                 
                 # ====================================================
-                # 🎯 进阶集数去重逻辑
+                # 🎯 原版的进阶集数去重逻辑 (一字未改)
                 # ====================================================
                 is_duplicate = False
                 if smart_target_name in existing_names or f["name"] in existing_names:
@@ -625,19 +968,35 @@ def check_subscriptions(client_obj, force_target_id=None, is_first_run=False):
                 logger.info(f"🎯 [搬运] 锁定 {len(new_files)} 个增量更新文件，开始物理下发...")
                 
                 taskInfos = [{"fileId": f["id"], "fileName": clean_filename(f["name"]), "isFolder": 0} for f in new_files]
-                success_count = 0
-                renamed_count = 0
                 
+                # ====================================================
+                # 🚀 终极防毒隔离装甲：批次下发 + 幸存者强行洗名抢救
+                # ====================================================
                 code = info.saveShareFiles(taskInfos, target_id)
                 
-                if code in [0, '0', None, False, '']:
-                    success_count = len(taskInfos)
-                    for task in taskInfos:
-                        history[str(task["fileId"])] = {"name": task["fileName"], "sub_id": str(target_id)}
-                else:
-                    notifier.send_message(f"❌ 批次转存被天翼云拦截！错误码: {code}")
+                # 1. 无论返回成功还是特征码报错，都强行给云端 8 秒缓冲时间
+                time.sleep(8)
+                fresh_cloud_files = client_obj.listPrivateFiles(target_id)
+                fresh_names = [cf["name"] for cf in fresh_cloud_files]
+                
+                actually_saved_count = 0
+                saved_tasks = []
+                failed_tasks = []
 
-                if success_count > 0:
+                # 2. 逐一核对实体盘，把真正成功存进去的“幸存者”捞出来
+                for task in taskInfos:
+                    orig_name = task["fileName"]
+                    expected_smart_name = generate_smart_name(orig_name, path)
+                    
+                    if orig_name in fresh_names or (expected_smart_name and expected_smart_name in fresh_names):
+                        history[str(task["fileId"])] = {"name": orig_name, "sub_id": str(target_id)}
+                        actually_saved_count += 1
+                        saved_tasks.append(task)
+                    else:
+                        failed_tasks.append(task)
+
+                # 3. 只要有幸存者落地，立刻存入记忆并执行智能洗名！绝不放生！
+                if actually_saved_count > 0:
                     save_json(HISTORY_FILE, history)
                     if isinstance(subs.get(str(target_id)), dict):
                         now_dt = datetime.now()
@@ -647,9 +1006,8 @@ def check_subscriptions(client_obj, force_target_id=None, is_first_run=False):
                             subs[str(target_id)]["last_success_day"] = now_dt.strftime("%Y-%m-%d")
                         save_json(SUBS_FILE, subs)
                         
-                    time.sleep(8) 
-                    
-                    fresh_cloud_files = client_obj.listPrivateFiles(target_id)
+                    # ✨ 幸存者洗名重命名
+                    renamed_files_list = []
                     for cf in fresh_cloud_files:
                         hist_info = history.get(str(cf["id"]))
                         orig_name = hist_info["name"] if hist_info else cf["name"]
@@ -657,13 +1015,23 @@ def check_subscriptions(client_obj, force_target_id=None, is_first_run=False):
                         
                         if new_name and cf["name"] != new_name:
                             if client_obj.renameFile(cf["id"], new_name):
-                                renamed_count += 1
+                                renamed_files_list.append(new_name)
                                 time.sleep(0.5) 
                                 
-                    notifier.send_message(f"✅【追剧/补档更新】\n🔗 来源: {share_url}\n📂 成功抓取 {success_count} 个文件！")
-                    if renamed_count > 0:
-                        logger.info(f"✨ [刮削] 云端智能命名执行完毕，规范化 {renamed_count} 个文件")
-                        notifier.send_message(f"✨ 云端强制更名: 已规范化 {renamed_count} 个文件！")
+                    # 播报落地战果
+                    notifier.send_message(f"✅【追剧落地报告】\n🔗 来源: {share_url}\n📂 成功入库并洗名 {actually_saved_count} 个文件！")
+                    if renamed_files_list:
+                        if len(renamed_files_list) > 20:
+                            rename_msg = "\n".join([f" └ {n}" for n in renamed_files_list[:20]]) + f"\n...等共 {len(renamed_files_list)} 个文件"
+                        else:
+                            rename_msg = "\n".join([f" └ {n}" for n in renamed_files_list])
+                        notifier.send_message(f"✨ 云端洗名规范化完成:\n{rename_msg}")
+
+                # 4. 如果遇到特征码拦截，且有文件没存上，触发精准报警
+                if code not in [0, '0', None, False, '']:
+                    has_transfer_error = True  # 锁死上一步跟你说的归档自杀行为
+                    failed_msg = "\n".join([f" ❌ {t['fileName'][:30]}" for t in failed_tasks[:10]])
+                    notifier.send_message(f"⚠️ 触发天翼云特征码拦截 (错误码: {code})！\n拦截/未存上的毒文件有 {len(failed_tasks)} 个:\n{failed_msg}")
 
                 openlist_target_path = get_openlist_path(path)
                 
@@ -712,7 +1080,9 @@ def check_subscriptions(client_obj, force_target_id=None, is_first_run=False):
                 history_data = {k: v for k, v in history_data.items() if not (isinstance(v, dict) and str(v.get("sub_id")) == str(target_id))}
                 save_json(HISTORY_FILE, history_data)
                 continue
-            elif any(kw in error_msg for kw in ["掉线", "失败", "拦截", "风控"]): 
+            elif any(kw in error_msg for kw in ["掉线", "失败", "拦截", "风控", "UNKNOWN_ERROR", "unknown"]): 
+                # 🌟 如果是未知的底层风控，先删 Cookie 保证重登能拿到新 Token
+                if os.path.exists(COOKIES_FILE): os.remove(COOKIES_FILE)
                 auto_relogin(client_obj)
 
     if global_cas_paths:
@@ -728,7 +1098,7 @@ def check_subscriptions(client_obj, force_target_id=None, is_first_run=False):
         
     for p in global_emby_paths:
         try:
-            subprocess.Popen(["/data/data/com.termux/files/usr/bin/bash", "/data/data/com.termux/files/home/refresh.sh", p], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.Popen(["/data/data/com.termux/files/usr/bin/bash", "/data/data/com.termux/files/home/refresh.sh", p], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
             logger.info(f"⚡ [脚本] 成功唤醒原生 Emby 刷新: {p}")
             notifier.send_message(f"✅ Emby刷新指令已下发: {p}")
         except: pass
@@ -744,9 +1114,13 @@ def main_control_loop(client_obj):
     logger.info("✅ [系统] 预热完毕！引擎正式切入智能静默巡航模式。")
 
     def scheduled_task():
+        settings = load_json(SETTINGS_FILE)
         logger.info("==========================================")
         logger.info("🛸 [系统] 定时唤醒：引擎升空，接管侦测作业...")
-        check_subscriptions(client_obj)
+        if settings.get("auto_check_subs", True):
+            check_subscriptions(client_obj)
+        if settings.get("auto_scan_cas", False):
+            process_cas_via_olist_api()
         wait_min = random.randint(25, 45)
         logger.info(f"🛌 [系统] 航线巡逻结束。进入节电待机，距下次起飞还有 {wait_min} 分钟...")
         logger.info("==========================================")
@@ -797,13 +1171,14 @@ def main_control_loop(client_obj):
                                 ]}
                                 notifier.edit_message(msg_id, f"✅ 剧名: {wizard_states[chat_id]['title']}\n✅ 频率: {freq}\n\n<b>📅 请选择该剧的更新时间 (周几):</b>", kb)
                             else:
-                                # 非周更，直接跳到分类选项
+                                # 非周更，直接跳到分类选项 (🌟 加入了 演唱会)
                                 kb = {"inline_keyboard": [
                                     [{"text": "📺 华语剧", "callback_data": "wiz_cat_华语剧"}, {"text": "📺 欧美剧", "callback_data": "wiz_cat_欧美剧"}],
                                     [{"text": "🎬 华语电影", "callback_data": "wiz_cat_华语电影"}, {"text": "🎬 欧美电影", "callback_data": "wiz_cat_欧美电影"}],
                                     [{"text": "🐼 日漫/番剧", "callback_data": "wiz_cat_日漫"}, {"text": "🐼 国漫", "callback_data": "wiz_cat_国漫"}],
                                     [{"text": "📺 日韩剧", "callback_data": "wiz_cat_日韩剧"}, {"text": "🎬 日韩电影", "callback_data": "wiz_cat_日韩电影"}],
                                     [{"text": "🎤 综艺", "callback_data": "wiz_cat_综艺"}, {"text": "🎥 纪录片", "callback_data": "wiz_cat_纪录片"}],
+                                    [{"text": "📱 短剧", "callback_data": "wiz_cat_短剧"}, {"text": "🎵 演唱会", "callback_data": "wiz_cat_演唱会"}],
                                     [{"text": "❌ 取消", "callback_data": "wiz_cancel"}]
                                 ]}
                                 notifier.edit_message(msg_id, f"✅ 剧名: {wizard_states[chat_id]['title']}\n✅ 频率: {freq}\n\n<b>请选择【精确分类】(匹配路由):</b>", kb)
@@ -820,6 +1195,7 @@ def main_control_loop(client_obj):
                                 [{"text": "🐼 日漫/番剧", "callback_data": "wiz_cat_日漫"}, {"text": "🐼 国漫", "callback_data": "wiz_cat_国漫"}],
                                 [{"text": "📺 日韩剧", "callback_data": "wiz_cat_日韩剧"}, {"text": "🎬 日韩电影", "callback_data": "wiz_cat_日韩电影"}],
                                 [{"text": "🎤 综艺", "callback_data": "wiz_cat_综艺"}, {"text": "🎥 纪录片", "callback_data": "wiz_cat_纪录片"}],
+                                [{"text": "📱 短剧", "callback_data": "wiz_cat_短剧"}, {"text": "🎵 演唱会", "callback_data": "wiz_cat_演唱会"}],
                                 [{"text": "❌ 取消", "callback_data": "wiz_cancel"}]
                             ]}
                             day_str = f" ({day})" if day != "未知" else ""
@@ -842,7 +1218,7 @@ def main_control_loop(client_obj):
                             f_type = data.split("_")[2]
                             state = wizard_states.pop(chat_id)
                             
-                            kw_map = {"视频": "mp4 mkv ts", "CAS": "cas", "全盘": ""}
+                            kw_map = {"视频": ".mp4 .mkv .ts", "CAS": ".cas", "全盘": ""}
                             kw = kw_map.get(f_type, "")
                             
                             # 🌟 核心魔法：把刚才选的周几拼接到指令里！
@@ -856,11 +1232,19 @@ def main_control_loop(client_obj):
                             
                             # 把指令原样注入消息队列，喂给底下的原始逻辑
                             item['message'] = {'chat': {'id': chat_id}, 'text': cmd}
-
+                        
+                        # 🌟 拦截从“广场”点过来的订阅按钮
+                        elif data.startswith("wiz_feed_"):
+                            url_code = data.replace("wiz_feed_", "")
+                            full_url = f"https://cloud.189.cn/t/{url_code}" # 拼装成原生的官方分享链接
+                            
+                            # 强行激活现有的第一步向导，把组装好的链接塞进去
+                            wizard_states[chat_id] = {"step": 1, "url": full_url}
+                            kb = {"inline_keyboard": [[{"text": "❌ 取消", "callback_data": "wiz_cancel"}]]}
+                            notifier.edit_message(msg_id, f"🔗 <b>已从内部广场锁定直链！</b>\n\n✏️ 请直接回复本条消息，输入【干净剧名(年份)】\n<i>(如带季数，请直接写: 庆余年 2)</i>", kb)
                     # ==========================================
                     # 📝 恢复原有的文字处理逻辑
                     # ==========================================
-
                     msg = item.get('message', {})
                     text = msg.get('text', '')
                     chat_id = msg.get('chat', {}).get('id')
@@ -868,6 +1252,338 @@ def main_control_loop(client_obj):
                     if str(chat_id) == str(TG_ADMIN_USER_ID):
                         text = text.strip()
                         
+                        # 🌟 新增的动态开关与拉取指令
+                        if text in ["开启自动收割", "开启扫描", "/ascan"]:
+                            s = load_json(SETTINGS_FILE); s["auto_scan_cas"] = True; save_json(SETTINGS_FILE, s)
+                            notifier.send_message("✅ 已【开启】CAS自动收割巡逻。")
+                            continue
+                        elif text in ["关闭自动收割", "关闭扫描", "/sscan"]:
+                            s = load_json(SETTINGS_FILE); s["auto_scan_cas"] = False; save_json(SETTINGS_FILE, s)
+                            notifier.send_message("⏸️ 已【关闭】CAS自动收割巡逻。")
+                            continue
+                        elif text in ["开启自动订阅", "开启订阅检查", "/asub"]:
+                            s = load_json(SETTINGS_FILE); s["auto_check_subs"] = True; save_json(SETTINGS_FILE, s)
+                            notifier.send_message("✅ 已【开启】定时订阅拉取。")
+                            continue
+                        elif text in ["关闭自动订阅", "关闭订阅检查", "/ssub"]:
+                            s = load_json(SETTINGS_FILE); s["auto_check_subs"] = False; save_json(SETTINGS_FILE, s)
+                            notifier.send_message("⏸️ 已【关闭】定时订阅拉取。")
+                            continue
+                        elif text in ["同步订阅", "立即拉取", "全部拉取", "更新订阅", "/sync"]:
+                            notifier.send_message("🚀 正在强行冲破时间门槛，全量拉取订阅中...")
+                            check_subscriptions(client_obj, ignore_time=True)
+                            notifier.send_message("✅ 同步拉取任务彻底执行完毕。")
+                            continue
+                        elif text in ["收割", "处理", "添加", "/harvest"]:
+                            notifier.send_message("📥 收到【收割】指令：正在为您洗名并入库 CAS 文件...")
+                            p_names = process_cas_via_olist_api()
+                            if p_names:
+                                msg_str = "\n".join([f" └ {n}" for n in p_names[:20]])
+                                if len(p_names) > 20: msg_str += f"\n...等共 {len(p_names)} 个文件"
+                                notifier.send_message(f"✅ CAS 收割入库完成:\n{msg_str}")
+                            else:
+                                notifier.send_message("✅ CAS 收割完成，暂无新文件。")
+                            continue
+                        elif text in ["动态", "广场", "上新", "/feed"]:
+                            notifier.send_message("📡 正在连接订阅中心，拉取最新情报...")
+                            try:
+                                res = client_obj.session.get("https://cloud.189.cn/api/open/share/getOwnerSubscribeShare.action?pageNum=1&pageSize=8", timeout=10).json()
+                                if res.get("code") == "success":
+                                    file_list = res.get("data", {}).get("shareFileList", [])
+                                    if not file_list:
+                                        notifier.send_message("📭 订阅中心目前没有任何更新。")
+                                        continue
+                                    
+                                    msg_lines = ["📡 <b>【订阅中心】最新动态：</b>\n"]
+                                    kb_buttons = []
+                                    
+                                    for i, item in enumerate(file_list, 1):
+                                        raw_name = item.get("name", "未知资源")
+                                        name = translate_folder_name(raw_name)
+                                        author = item.get("ownerAccount", "未知发布者")
+                                        url_code = item.get("accessURL", "")
+                                        date_str = item.get("lastOpTime", "")[5:16] 
+                                        
+                                        if not url_code: continue
+                                        msg_lines.append(f"{i}. 📁 <code>{name}</code>\n   └ 👤 {author} | ⏱ {date_str}\n")
+                                        btn_text = name.replace("📺 ", "").replace("🎬 ", "")
+                                        kb_buttons.append([{"text": f"📥 订阅: {btn_text[:12]}...", "callback_data": f"wiz_feed_{url_code}"}])
+                                        
+                                    kb_buttons.append([{"text": "❌ 取消", "callback_data": "wiz_cancel"}])
+                                    kb = {"inline_keyboard": kb_buttons}
+                                    notifier.send_message("\n".join(msg_lines), kb)
+                                else:
+                                    # 🚨 掉线报警，抛出异常让底层接住
+                                    raise Exception(f"接口掉线/风控拦截: {res}")
+                            except Exception as e:
+                                notifier.send_message(f"❌ 广场拉取异常: {e}")
+                                err_str = str(e).upper()
+                                # 👇 底层接住异常，启动自愈打针
+                                if "INVALIDSESSIONKEY" in err_str or "CHECK IP ERROR" in err_str or "UNKNOWN_ERROR" in err_str or "UNKNOWN" in err_str:
+                                    if os.path.exists(COOKIES_FILE): os.remove(COOKIES_FILE)
+                                    auto_relogin(client_obj)
+                                    notifier.send_message("✅ 引擎已重新握手自愈，请重发指令！")
+                            continue
+
+                        elif text.startswith("搜 ") or text.startswith("搜索 ") or text.startswith("/search "):
+                            raw_keyword = text.split(" ", 1)[1].strip()
+                            if not raw_keyword: continue
+                            
+                            notifier.send_message(f"🧠 正在请求 TMDB 反查 【{raw_keyword}】 的全维特征码...")
+                            tmdb_info = get_tmdb_info(raw_keyword)
+                            
+                            keywords = set()
+                            keywords.add(raw_keyword.lower())
+                            if " " in raw_keyword:
+                                for k in raw_keyword.split():
+                                    if len(k) > 1: keywords.add(k.lower())
+                                    
+                            if tmdb_info:
+                                if tmdb_info.get('en_name'): keywords.add(tmdb_info['en_name'].lower())
+                                if tmdb_info.get('pinyin_full'): keywords.add(tmdb_info['pinyin_full'].lower())
+                                if tmdb_info.get('pinyin_initial'): keywords.add(tmdb_info['pinyin_initial'].lower())
+                                if tmdb_info.get('id'): 
+                                    keywords.add(f"tmdb-{tmdb_info['id']}")
+                                    keywords.add(f"tmdb{tmdb_info['id']}")
+                                    keywords.add(str(tmdb_info['id']))
+                                    
+                            keyword_list = list(keywords)
+                            display_kw = " | ".join(keyword_list)
+                            
+                            notifier.send_message(f"🔍 锁定全维特征码: 【{display_kw}】\n启动地毯式穿甲雷达，深入主页挖掘...")
+                            try:
+                                active_users = {} 
+                                for feed_page in range(1, 5):
+                                    feed_url = f"https://cloud.189.cn/api/open/share/getOwnerSubscribeShare.action?pageNum={feed_page}&pageSize=100"
+                                    res_feed = client_obj.session.get(feed_url, timeout=15).json()
+                                    
+                                    if res_feed.get("code") == "success":
+                                        items = res_feed.get("data", {}).get("shareFileList", [])
+                                        if not items: break
+                                        for item in items:
+                                            uid = item.get("upUserId")
+                                            name = item.get("ownerAccount", "未知大佬")
+                                            if uid: active_users[uid] = name
+                                    else:
+                                        # 🚨 掉线报警 1
+                                        raise Exception(f"接口掉线/风控拦截: {res_feed}")
+                                
+                                if not active_users:
+                                    notifier.send_message("❌ 广场空空如也，未获取到任何订阅大佬的信息。")
+                                    continue
+                                
+                                matched_items = []
+                                for uid, uname in active_users.items():
+                                    for page in range(1, 50):
+                                        url = f"https://cloud.189.cn/api/open/share/getUpResourceShare.action?pageNum={page}&pageSize=30&upUserId={uid}"
+                                        res_user = client_obj.session.get(url, timeout=10).json()
+                                        
+                                        if res_user.get("code") == "success":
+                                            items = res_user.get("data", {}).get("fileList", []) 
+                                            if not items: break 
+                                            for item in items:
+                                                item_name_lower = item.get("name", "").lower()
+                                                if any(kw in item_name_lower for kw in keyword_list):
+                                                    item["ownerAccount"] = uname 
+                                                    matched_items.append(item)
+                                        else:
+                                            # 🚨 掉线报警 2
+                                            raise Exception(f"扒主页时掉线/风控拦截: {res_user}")
+                                        
+                                unique_matches = []
+                                seen_urls = set()
+                                for item in matched_items:
+                                    url_code = item.get("accessURL", "")
+                                    if url_code and url_code not in seen_urls:
+                                        seen_urls.add(url_code)
+                                        unique_matches.append(item)
+
+                                if not unique_matches:
+                                    notifier.send_message(f"📭 翻遍了 {len(active_users)} 位大佬的个人历史主页，没找到相关的资源。")
+                                    continue
+                                    
+                                msg_lines = [f"🎯 <b>为您精准捞到了 {len(unique_matches)} 个相关资源：</b>\n"]
+                                kb_buttons = []
+                                
+                                for i, item in enumerate(unique_matches[:8], 1):
+                                    raw_name = item.get("name", "未知资源")
+                                    name = translate_folder_name(raw_name)
+                                    author = item.get("ownerAccount", "未知发布者")
+                                    url_code = item.get("accessURL", "")
+                                    date_str = item.get("lastOpTime", "")[5:16]
+                                    
+                                    msg_lines.append(f"{i}. 📁 <code>{name}</code>\n   └ 👤 {author} | ⏱ {date_str}\n")
+                                    btn_text = name.replace("📺 ", "").replace("🎬 ", "")
+                                    kb_buttons.append([{"text": f"📥 订阅: {btn_text[:12]}...", "callback_data": f"wiz_feed_{url_code}"}])
+                                    
+                                kb_buttons.append([{"text": "❌ 取消", "callback_data": "wiz_cancel"}])
+                                kb = {"inline_keyboard": kb_buttons}
+                                
+                                notifier.send_message("\n".join(msg_lines), kb)
+                            except Exception as e:
+                                notifier.send_message(f"❌ 搜索拉取异常: {e}")
+                                # 👇 自愈打针
+                                err_str = str(e).upper()
+                                if "INVALIDSESSIONKEY" in err_str or "CHECK IP ERROR" in err_str or "UNKNOWN_ERROR" in err_str or "UNKNOWN" in err_str:
+                                    if os.path.exists(COOKIES_FILE): os.remove(COOKIES_FILE)
+                                    auto_relogin(client_obj)
+                                    notifier.send_message("✅ 引擎已重新握手自愈，请重发指令！")
+                            continue
+
+                        elif text.startswith("查 ") or text.startswith("查看 ") or text.startswith("/check "):
+                            raw_keyword = text.split(" ", 1)[1].strip()
+                            if not raw_keyword: continue
+                            
+                            keyword_list = [k.strip().lower() for k in raw_keyword.split() if k.strip()]
+                            display_kw = " | ".join(keyword_list)
+                            
+                            notifier.send_message(f"🔍 启动地毯式穿甲雷达，正在遍历所有大佬个人主页挖掘: 【{display_kw}】...")
+                            try:
+                                # 🌟 第一步：获取活跃大佬的名单
+                                res_feed = client_obj.session.get("https://cloud.189.cn/api/open/share/getOwnerSubscribeShare.action?pageNum=1&pageSize=100", timeout=15).json()
+                                active_users = {} 
+                                
+                                if res_feed.get("code") == "success":
+                                    for item in res_feed.get("data", {}).get("shareFileList", []):
+                                        uid = item.get("upUserId")
+                                        name = item.get("ownerAccount", "未知大佬")
+                                        if uid: active_users[uid] = name
+                                
+                                if not active_users:
+                                    notifier.send_message("❌ 广场空空如也，未获取到任何订阅大佬的信息。")
+                                    continue
+                                
+                                # 🌟 第二步：踹门深挖
+                                matched_items = []
+                                for uid, uname in active_users.items():
+                                    for page in range(1, 4):
+                                        url = f"https://cloud.189.cn/api/open/share/getUpResourceShare.action?pageNum={page}&pageSize=30&upUserId={uid}"
+                                        res_user = client_obj.session.get(url, timeout=10).json()
+                                        
+                                        if res_user.get("code") == "success":
+                                            # 🎯 破案核心：这里是 fileList！不是 shareFileList！
+                                            items = res_user.get("data", {}).get("fileList", []) 
+                                            if not items: break 
+                                            
+                                            for item in items:
+                                                item_name_lower = item.get("name", "").lower()
+                                                if any(kw in item_name_lower for kw in keyword_list):
+                                                    item["ownerAccount"] = uname 
+                                                    matched_items.append(item)
+                                        else:
+                                            break
+                                            
+                                # 🌟 第三步：去重展示
+                                unique_matches = []
+                                seen_urls = set()
+                                for item in matched_items:
+                                    url_code = item.get("accessURL", "")
+                                    if url_code and url_code not in seen_urls:
+                                        seen_urls.add(url_code)
+                                        unique_matches.append(item)
+
+                                if not unique_matches:
+                                    notifier.send_message(f"📭 翻遍了 {len(active_users)} 位大佬的个人历史主页，没找到与【{display_kw}】相关的资源。")
+                                    continue
+                                    
+                                msg_lines = [f"🎯 <b>为您精准捞到了 {len(unique_matches)} 个相关资源：</b>\n"]
+                                kb_buttons = []
+                                
+                                for i, item in enumerate(unique_matches[:8], 1):
+                                    name = item.get("name", "未知资源")
+                                    author = item.get("ownerAccount", "未知发布者")
+                                    url_code = item.get("accessURL", "")
+                                    date_str = item.get("lastOpTime", "")[5:16]
+                                    
+                                    msg_lines.append(f"{i}. 📁 <code>{name}</code>\n   └ 👤 {author} | ⏱ {date_str}\n")
+                                    kb_buttons.append([{"text": f"📥 订阅: {name[:15]}...", "callback_data": f"wiz_feed_{url_code}"}])
+                                    
+                                kb_buttons.append([{"text": "❌ 取消", "callback_data": "wiz_cancel"}])
+                                kb = {"inline_keyboard": kb_buttons}
+                                
+                                notifier.send_message("\n".join(msg_lines), kb)
+                            except Exception as e:
+                                notifier.send_message(f"❌ 搜索拉取异常: {e}")
+                            continue
+
+                        # 🌟 第二处：查人/查作者 (约 756 行，替换这行 if 判断)
+                        elif text.startswith("查人 ") or text.startswith("查作者 ") or text.startswith("/author "):
+                            author_kw = text.split(" ", 1)[1].strip()
+                            if not author_kw: continue
+                            
+                            notifier.send_message(f"🕵️‍♂️ 启动多账号联合扫描：正在锁定所有包含【{author_kw}】的大佬...")
+                            try:
+                                res_feed = client_obj.session.get("https://cloud.189.cn/api/open/share/getOwnerSubscribeShare.action?pageNum=1&pageSize=100", timeout=15).json()
+                                suspects = [] 
+                                
+                                if res_feed.get("code") == "success":
+                                    for item in res_feed.get("data", {}).get("shareFileList", []):
+                                        owner = item.get("ownerAccount", "")
+                                        if author_kw.lower() in owner.lower():
+                                            uid = item.get("upUserId")
+                                            if uid and (uid, owner) not in suspects:
+                                                suspects.append((uid, owner))
+                                else:
+                                    # 🚨 掉线报警 1
+                                    raise Exception(f"接口掉线/风控拦截: {res_feed}")
+                                
+                                if not suspects:
+                                    notifier.send_message(f"❌ 没找到名字里带【{author_kw}】的大佬。")
+                                    continue
+                                    
+                                notifier.send_message(f"🔍 锁定 {len(suspects)} 个关联账号，正在合力挖掘最新动态...")
+                                
+                                all_blind_boxes = []
+                                for uid, uname in suspects:
+                                    for page in range(1, 7):
+                                        url = f"https://cloud.189.cn/api/open/share/getUpResourceShare.action?pageNum={page}&pageSize=30&upUserId={uid}"
+                                        res_user = client_obj.session.get(url, timeout=10).json()
+                                        
+                                        if res_user.get("code") == "success":
+                                            items = res_user.get("data", {}).get("fileList", [])
+                                            if not items: break 
+                                            for itm in items:
+                                                itm["_from_user"] = uname 
+                                                all_blind_boxes.append(itm)
+                                        else:
+                                            # 🚨 掉线报警 2
+                                            raise Exception(f"扒主页时掉线/风控拦截: {res_user}")
+
+                                if not all_blind_boxes:
+                                    notifier.send_message("📭 选中的大佬们最近都没有发过任何东西。")
+                                    continue
+
+                                all_blind_boxes.sort(key=lambda x: x.get("lastOpTime", ""), reverse=True)
+                                    
+                                msg_lines = [f"🕵️‍♂️ <b>多账号联合情报（真实时间线）：</b>\n"]
+                                kb_buttons = []
+                                
+                                for i, item in enumerate(all_blind_boxes[:20], 1):
+                                    raw_name = item.get("name", "未知资源")
+                                    name = translate_folder_name(raw_name)
+                                    author = item.get("_from_user", "未知")
+                                    url_code = item.get("accessURL", "")
+                                    date_str = item.get("lastOpTime", "")[5:16]
+                                    
+                                    if not url_code: continue
+                                    msg_lines.append(f"{i}. 📁 <code>{name}</code>\n   └ 👤 {author} | ⏱ {date_str}\n")
+                                    btn_text = name.replace("📺 ", "").replace("🎬 ", "")
+                                    kb_buttons.append([{"text": f"📥 订阅: {btn_text[:12]}...", "callback_data": f"wiz_feed_{url_code}"}])
+                                    
+                                kb_buttons.append([{"text": "❌ 取消", "callback_data": "wiz_cancel"}])
+                                kb = {"inline_keyboard": kb_buttons}
+                                
+                                notifier.send_message("\n".join(msg_lines), kb)
+                            except Exception as e:
+                                notifier.send_message(f"❌ 联合查水表异常: {e}")
+                                # 👇 自愈打针
+                                err_str = str(e).upper()
+                                if "INVALIDSESSIONKEY" in err_str or "CHECK IP ERROR" in err_str or "UNKNOWN_ERROR" in err_str or "UNKNOWN" in err_str:
+                                    if os.path.exists(COOKIES_FILE): os.remove(COOKIES_FILE)
+                                    auto_relogin(client_obj)
+                                    notifier.send_message("✅ 引擎已重新握手自愈，请重发指令！")
+                            continue
+
                         # ==========================================
                         # 🧙‍♂️ 智能嗅探向导拦截器
                         # ==========================================
@@ -891,7 +1607,7 @@ def main_control_loop(client_obj):
                                 [{"text": "🌞 日更 (国产剧/短剧等)", "callback_data": "wiz_freq_日更"}],
                                 [{"text": "📅 周更/连载 (美剧/动漫等)", "callback_data": "wiz_freq_周更"}],
                                 [{"text": "✅ 已完结 (全集一波流)", "callback_data": "wiz_freq_完结"}],
-                                [{"text": "🎬 电影/单次任务", "callback_data": "wiz_freq_电影"}],
+                                [{"text": "🎬 单次任务 (电影/演唱会等)", "callback_data": "wiz_freq_单次"}], # 🌟 改为单次
                                 [{"text": "❌ 取消", "callback_data": "wiz_cancel"}]
                             ]}
                             
@@ -901,8 +1617,11 @@ def main_control_loop(client_obj):
                             
                         # === 原版指令识别开始 ===
                         logger.info(f"🛠️ [指令] 接收到远程终端最高权限指令: {text}")
+                        # 🌟 净水器：一刀切掉 TG 菜单自带的尾巴
+                        if text and "@xushangjun_bot" in text:
+                            text = text.replace("@xushangjun_bot", "")
 
-                        if text == "列表" or text == "清单":
+                        if text == "列表" or text == "清单" or text == "/list":
                             subs = load_json(SUBS_FILE)
                             if not subs:
                                 notifier.send_message("📭 当前没有任何活跃的监控任务。")
@@ -915,7 +1634,7 @@ def main_control_loop(client_obj):
                             msg_lines.append("\n💡 提示：回复“取消+序号”(如: 取消1) 即可解除监控并清理记忆。")
                             notifier.send_message("\n".join(msg_lines))
 
-                        elif text.startswith("取消"):
+                        elif text.startswith("取消") or text.startswith("/cancel"):
                             kw = text.replace("取消", "").strip()
                             if not kw: continue
                             
@@ -988,58 +1707,170 @@ def main_control_loop(client_obj):
                             match_refresh = re.match(r'^(刷新|入库)\s+(.*)', text)
                             if match_refresh:
                                 keyword_input = match_refresh.group(2).strip()
-                                m = re.match(r'^(.*?)\s*[sS第]?0?(\d+)[季]?$', keyword_input)
-                                if m and m.group(1).strip(): base_kw, s_num = m.group(1).strip(), int(m.group(2))
-                                else: base_kw, s_num = keyword_input, None
+                                # 🌟 修复正则：限制季数为1-2位，并要求前方必须有空格或 S/第 等标识，保护带年份的单剧
+                                m = re.match(r'^(.*?)\s+(?:[sS第]\s*)?0?(\d{1,2})[季]?$', keyword_input, re.IGNORECASE)
+                                if m and m.group(1).strip(): 
+                                    base_kw, s_num = m.group(1).strip(), int(m.group(2))
+                                else: 
+                                    base_kw, s_num = keyword_input, None
 
                                 notifier.send_message(f"🔍 收到入库指令，正在检索: {base_kw}...")
                                 
                                 subs = load_json(SUBS_FILE)
                                 matched_paths = []
-                                for t_id, info in subs.items():
-                                    path_in_db = info.get("path", "") if isinstance(info, dict) else ""
-                                    if base_kw.lower() in path_in_db.lower():
-                                        if s_num is not None:
-                                            s_patterns = [f"season {s_num}", f"s{s_num:02d}", f"s{s_num}"]
-                                            if any(p in path_in_db.lower() for p in s_patterns) or str(s_num) in path_in_db.split('/')[-1]:
-                                                if path_in_db not in matched_paths: matched_paths.append(path_in_db)
-                                        else:
+                                
+                                # 👇 新增：如果输入的是带斜杠的绝对路径，直接无脑锁定，不查库！
+                                # =================================================================
+                                # 🌟 终极智能寻轨雷达替换开始：彻底解放人脑，全自动找回带年份的绝对路径
+                                # =================================================================
+                                if base_kw.startswith("/"):
+                                    matched_paths.append(base_kw.strip())
+                                else:
+                                    # 1. 优先极速比对本地活跃记忆库
+                                    for t_id, info in subs.items():
+                                        path_in_db = info.get("path", "") if isinstance(info, dict) else ""
+                                        if base_kw.lower() in path_in_db.lower():
                                             if path_in_db not in matched_paths: matched_paths.append(path_in_db)
+
+                                    # 2. 🌟 终极雷达：如果大脑没记住这剧，立刻启动底层 Openlist 接口全自动搜寻物理路径！
+                                    if not matched_paths:
+                                        notifier.send_message(f"🧠 记忆库未收录老剧，正启动 Openlist 穿透雷达自动检索真实路径: [{base_kw}] ...")
+                                        try:
+                                            r_log = requests.post("http://127.0.0.1:5244/api/auth/login", 
+                                                                  json={"username": "admin", "password": "xxsky1127"}, timeout=5).json()
+                                            if r_log.get("code") == 200:
+                                                o_headers = {"Authorization": r_log["data"]["token"], "Content-Type": "application/json"}
                                                 
+                                                # 提取所有分类的总分区路径作为雷达扫描基点
+                                                radar_bases = set()
+                                                for l_cat, s_cat in CAT_ROUTER.values():
+                                                    sub_p = f"{l_cat}/{s_cat}".strip('/') if s_cat else l_cat
+                                                    radar_bases.add(get_openlist_path(f"{DIR_CAS_ROOT}/{sub_p}".replace("//", "/")))
+                                                    radar_bases.add(get_openlist_path(f"{DIR_VIDEO_ROOT}/{sub_p}".replace("//", "/")))
+                                                    
+                                                for base_p in radar_bases:
+                                                    # 极速读取 Openlist 年月目录列表 (利用接口轻量级穿透)
+                                                    r_list = requests.post("http://127.0.0.1:5244/api/fs/list", 
+                                                                           json={"path": base_p}, headers=o_headers, timeout=5).json()
+                                                    if r_list.get("code") == 200:
+                                                        content = (r_list.get("data") or {}).get("content") or []
+                                                        ym_dirs = [item["name"] for item in content if item["is_dir"] and re.match(r'^\d{4,6}$', item["name"])]
+                                                        ym_dirs.sort(reverse=True) # 优先从最新的月份往老月份找
+                                                        
+                                                        for ym in ym_dirs:
+                                                            ym_path = f"{base_p}/{ym}"
+                                                            r_shows = requests.post("http://127.0.0.1:5244/api/fs/list", 
+                                                                                    json={"path": ym_path}, headers=o_headers, timeout=5).json()
+                                                            if r_shows.get("code") == 200:
+                                                                shows = (r_shows.get("data") or {}).get("content") or []
+                                                                for s_item in shows:
+                                                                    # 只要文件夹名字包含输入的关键词，当场锁定！
+                                                                    if s_item["is_dir"] and base_kw.lower() in s_item["name"].lower():
+                                                                        exact_path = f"{ym_path}/{s_item['name']}"
+                                                                        matched_paths.append(exact_path)
+                                                                        break
+                                                            if matched_paths: break
+                                                    if matched_paths: break
+                                        except Exception as radar_err:
+                                            logger.warning(f"Openlist自动寻轨雷达异常: {radar_err}")
+                                            
+                                        if matched_paths:
+                                            notifier.send_message(f"🎯 雷达寻轨成功！全自动还原出带年份的物理绝对路径:\n📁 {matched_paths[0]}")
+                                        else:
+                                            notifier.send_message(f"📭 雷达遍历了全部分区，未找到包含【{base_kw}】的实体文件夹，已跳过。")
+                                # =================================================================
+                                # 🌟 终极智能寻轨雷达替换结束
+                                # =================================================================
+                                            
+                                # =================================================================
+                                # 🌟 终极双轨驱动装甲替换开始 (涵盖单点刷新与全局扫描)
+                                # =================================================================
                                 if matched_paths:
-                                    notifier.send_message(f"🎯 共命中 {len(matched_paths)} 个关联目录，批量刷新...")
+                                    notifier.send_message(f"🎯 共命中 {len(matched_paths)} 个关联目录，执行双轨刷新...")
+                                    
+                                    # 优化：提到循环外登录 Openlist 一次，拿到通用 Token，大幅提升效率
+                                    o_headers = None
+                                    try:
+                                        r_log = requests.post("http://127.0.0.1:5244/api/auth/login", 
+                                                              json={"username": "admin", "password": "xxsky1127"}, timeout=5).json()
+                                        if r_log.get("code") == 200:
+                                            o_headers = {"Authorization": r_log["data"]["token"], "Content-Type": "application/json"}
+                                    except: pass
+
                                     for mp in matched_paths:
                                         openlist_p = get_openlist_path(mp)
+                                        butler_path = re.sub(r'(?i)/Season\s*\d+/?$', '', openlist_p)
                                         
-                                        if mp.startswith(DIR_CAS_ROOT) or mp.startswith(DIR_CAS_ROOT.strip('/')):
+                                        # 💥 第一步：无论 CAS 还是普通视频，必须先强行穿透 Openlist 缓存！
+                                        # 只有 Openlist 物理层重载了，它自身才能扫描到新文件并映射出普通视频的 STRM！
+                                        if o_headers:
+                                            notifier.send_message(f"⚡ 强制穿透 Openlist 缓存: {butler_path} ...")
+                                            try:
+                                                requests.post("http://127.0.0.1:5244/api/fs/list", 
+                                                              json={"path": butler_path, "refresh": True}, headers=o_headers, timeout=15).close()
+                                                time.sleep(3.0) # 给底层留出落盘和 Openlist 自建 strm 的缓冲时间
+                                            except: pass
+
+                                        # 🔀 第二步：严格的双轨路由分流
+                                        if DIR_CAS_ROOT in openlist_p:
+                                            # 177-秒传 -> 交给 5000 端口管家收割
                                             try: 
-                                                requests.get("http://127.0.0.1:5000/api/sync", params={"path": openlist_p}, timeout=3) 
-                                                notifier.send_message(f"✅ 管家同步指令已下发: {openlist_p}")
+                                                requests.get("http://127.0.0.1:5000/api/sync", params={"path": butler_path}, timeout=3).close()
+                                                notifier.send_message(f"✅ 管家同步指令已精准下发: {butler_path}")
                                             except Exception as e: 
                                                 notifier.send_message(f"❌ 管家同步无响应: {e}")
                                         else:
+                                            # 177-视频与原老目录 -> Openlist 自身已吐出 STRM，直接唤醒 Emby 原生拉取
                                             try:
-                                                subprocess.run(["/data/data/com.termux/files/usr/bin/bash", "/data/data/com.termux/files/home/refresh.sh", openlist_p], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                                                notifier.send_message(f"✅ 目录刷新成功: {openlist_p}")
+                                                subprocess.Popen(["/data/data/com.termux/files/usr/bin/bash", "/data/data/com.termux/files/home/refresh.sh", openlist_p], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                                                notifier.send_message(f"✅ 缓存已刷，原生Emby拉取成功: {openlist_p}")
                                             except: pass
-                                    notifier.send_message("🎉 批量指令已全部执行！")
+                                            
+                                    notifier.send_message("🎉 批量单点指令已全部双轨执行完毕！")
+
                                 else:
-                                    openlist_p_emby_old = get_openlist_path(DIR_MEDIA_PREFIX.strip('/'))
-                                    openlist_p_emby_new = get_openlist_path(DIR_VIDEO_ROOT.strip('/'))   
-                                    openlist_p_cas = get_openlist_path(DIR_CAS_ROOT.strip('/'))          
+                                    notifier.send_message("⚠️ 启动大范围全局雷达扫描，正在过滤顶级父目录防止STRM外溢...")
                                     
-                                    notifier.send_message(f"⚠️ 库中无记录，开启大范围雷达扫描！\n请稍候前往 Emby 查看。")
+                                    scan_roots = set()
+                                    # 核心修正：只从具体订阅库中精确组装有效的“剧集父目录”层级
+                                    for tid, info in subs.items():
+                                        p = info.get("path", "") if isinstance(info, dict) else ""
+                                        if p:
+                                            clean_p = get_openlist_path(p)
+                                            safe_butler_path = re.sub(r'(?i)/Season\s*\d+/?$', '', clean_p)
+                                            scan_roots.add(safe_butler_path)
+
+                                    notifier.send_message(f"⏳ 精确锁定 {len(scan_roots)} 个安全剧集锚点，开始双轨下发...")
                                     
+                                    o_headers = None
                                     try:
-                                        requests.get("http://127.0.0.1:5000/api/sync", params={"path": openlist_p_cas}, timeout=3) 
+                                        r_log = requests.post("http://127.0.0.1:5244/api/auth/login", 
+                                                              json={"username": "admin", "password": "xxsky1127"}, timeout=5).json()
+                                        if r_log.get("code") == 200: 
+                                            o_headers = {"Authorization": r_log["data"]["token"], "Content-Type": "application/json"}
                                     except: pass
                                     
-                                    try:
-                                        subprocess.run(["/data/data/com.termux/files/usr/bin/bash", "/data/data/com.termux/files/home/refresh.sh", openlist_p_emby_old], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                                        subprocess.run(["/data/data/com.termux/files/usr/bin/bash", "/data/data/com.termux/files/home/refresh.sh", openlist_p_emby_new], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                                    except: pass
-                                    
-                                    notifier.send_message(f"✅ 全区最高指令已下发！")
+                                    for rp in scan_roots:
+                                        # 💥 无论 CAS 还是普通视频，全域强制穿透 Openlist 缓存
+                                        if o_headers:
+                                            try:
+                                                requests.post("http://127.0.0.1:5244/api/fs/list", 
+                                                              json={"path": rp, "refresh": True}, headers=o_headers, timeout=10).close()
+                                                time.sleep(1.5) # 批量扫描稍微给点延时错峰即可
+                                            except: pass
+
+                                        # 🔀 严格的双轨路由分流
+                                        if DIR_CAS_ROOT in rp:
+                                            try: requests.get("http://127.0.0.1:5000/api/sync", params={"path": rp}, timeout=3).close()
+                                            except: pass
+                                        else:
+                                            try: subprocess.Popen(["/data/data/com.termux/files/usr/bin/bash", "/data/data/com.termux/files/home/refresh.sh", rp], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                                            except: pass
+                                        
+                                    notifier.send_message(f"✅ 全区最高指令已下发！安全触发并双轨刷新了 {len(scan_roots)} 个雷达基点。")
+                                # =================================================================
+                                # 🌟 终极双轨驱动装甲替换结束
+                                # =================================================================
 
                         elif text.startswith("补档"):
                             match_fill = re.match(r'^补档\s+(.*?)\s+(http[s]?://\S+)', text)
@@ -1094,67 +1925,72 @@ def main_control_loop(client_obj):
                                         notifier.send_message("⚠️ 核对完毕：无需重复拉取。")
                                         if target_path.startswith(DIR_CAS_ROOT) or target_path.startswith(DIR_CAS_ROOT.strip('/')):
                                             try: 
-                                                requests.get("http://127.0.0.1:5000/api/sync", params={"path": openlist_target_path}, timeout=3) 
+                                                requests.get("http://127.0.0.1:5000/api/sync", params={"path": openlist_target_path}, timeout=3).close()
                                                 notifier.send_message(f"✅ 管家同步指令已下发: {openlist_target_path}")
                                             except Exception as e: 
                                                 notifier.send_message(f"❌ 管家同步无响应: {e}")
                                         else:
                                             try: 
-                                                subprocess.Popen(["/data/data/com.termux/files/usr/bin/bash", "/data/data/com.termux/files/home/refresh.sh", openlist_target_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                                subprocess.Popen(["/data/data/com.termux/files/usr/bin/bash", "/data/data/com.termux/files/home/refresh.sh", openlist_target_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
                                                 notifier.send_message(f"✅ Emby刷新指令已下发: {openlist_target_path}")
                                             except: pass
                                     else:
                                         taskInfos = [{"fileId": f["id"], "fileName": clean_filename(f["name"]), "isFolder": 0} for f in new_files]
-                                        success_count, renamed_count = 0, 0
-                                        history_data = load_json(HISTORY_FILE)
-                                        error_msgs = []
                                         
-                                        for i in range(0, len(taskInfos), 50):
-                                            batch = taskInfos[i:i+50]
-                                            code = info_s.saveShareFiles(batch, target_id)
-                                            
-                                            if code in [0, '0', None, False, '']:
-                                                success_count += len(batch)
-                                                for task in batch:
-                                                    history_data[str(task["fileId"])] = {"name": task["fileName"], "sub_id": str(target_id)}
-                                            else:
-                                                error_msgs.append(str(code))
-                                                
-                                        if success_count > 0:
-                                            time.sleep(3)
+                                        code = info_s.saveShareFiles(taskInfos, target_id)
+                                        
+                                        if code in [0, '0', None, False, '']:
+                                            time.sleep(8)
                                             fresh_cloud_files = client_obj.listPrivateFiles(target_id)
-                                            for task in taskInfos:
-                                                original_name = task["fileName"]
-                                                new_name = generate_smart_name(original_name, target_path)
-                                                if new_name != original_name:
-                                                    for cf in fresh_cloud_files:
-                                                        if cf["name"] == original_name:
-                                                            if client_obj.renameFile(cf["id"], new_name): renamed_count += 1
-                                                            break
-
-                                        if success_count > 0:
-                                            save_json(HISTORY_FILE, history_data)
-                                            notifier.send_message(f"✅ 补档完美结束！\n📂 抓取 {success_count} 个缺失文件。")
-                                            if renamed_count > 0:
-                                                notifier.send_message(f"✨ 云端更名: 规范化 {renamed_count} 个文件！")
-                                                time.sleep(6)
+                                            fresh_names = [cf["name"] for cf in fresh_cloud_files]
                                             
-                                            if target_path.startswith(DIR_CAS_ROOT) or target_path.startswith(DIR_CAS_ROOT.strip('/')):
-                                                try:
-                                                    requests.get("http://127.0.0.1:5000/api/sync", params={"path": openlist_target_path}, timeout=3) 
-                                                    notifier.send_message(f"✅ 管家同步指令已下发: {openlist_target_path}")
-                                                except Exception as e: 
-                                                    notifier.send_message(f"❌ 管家同步无响应: {e}")
-                                            else:
-                                                try:
-                                                    subprocess.Popen(["/data/data/com.termux/files/usr/bin/bash", "/data/data/com.termux/files/home/refresh.sh", openlist_target_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                                                    notifier.send_message(f"✅ Emby刷新指令已下发: {openlist_target_path}")
-                                                except: pass
+                                            history_data = load_json(HISTORY_FILE)
+                                            actually_saved_count = 0
+                                            for task in taskInfos:
+                                                orig_name = task["fileName"]
+                                                expected_smart_name = generate_smart_name(orig_name, target_path)
+                                                if orig_name in fresh_names or (expected_smart_name and expected_smart_name in fresh_names):
+                                                    history_data[str(task["fileId"])] = {"name": orig_name, "sub_id": str(target_id)}
+                                                    actually_saved_count += 1
+                                            
+                                            if actually_saved_count > 0:
+                                                renamed_files_list = []
+                                                for task in taskInfos:
+                                                    original_name = task["fileName"]
+                                                    new_name = generate_smart_name(original_name, target_path)
+                                                    if new_name != original_name:
+                                                        for cf in fresh_cloud_files:
+                                                            if cf["name"] == original_name:
+                                                                if client_obj.renameFile(cf["id"], new_name): 
+                                                                    renamed_files_list.append(new_name)
+                                                                break
+
+                                                save_json(HISTORY_FILE, history_data)
+                                                notifier.send_message(f"✅ 补档完美结束！\n📂 成功抓取 {actually_saved_count} 个缺失文件。")
+                                                if renamed_files_list:
+                                                    if len(renamed_files_list) > 20:
+                                                        r_msg = "\n".join([f" └ {n}" for n in renamed_files_list[:20]]) + f"\n...等共 {len(renamed_files_list)} 个文件"
+                                                    else:
+                                                        r_msg = "\n".join([f" └ {n}" for n in renamed_files_list])
+                                                    notifier.send_message(f"✨ 补档云端洗名完成:\n{r_msg}")
+                                                    time.sleep(6)
+                                                
+                                                if target_path.startswith(DIR_CAS_ROOT) or target_path.startswith(DIR_CAS_ROOT.strip('/')):
+                                                    try:
+                                                        requests.get("http://127.0.0.1:5000/api/sync", params={"path": openlist_target_path}, timeout=3).close()
+                                                        notifier.send_message(f"✅ 管家同步指令已下发: {openlist_target_path}")
+                                                    except Exception as e: 
+                                                        notifier.send_message(f"❌ 管家同步无响应: {e}")
+                                                else:
+                                                    try:
+                                                        subprocess.Popen(["/data/data/com.termux/files/usr/bin/bash", "/data/data/com.termux/files/home/refresh.sh", openlist_target_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                                                        notifier.send_message(f"✅ Emby刷新指令已下发: {openlist_target_path}")
+                                                    except: pass
                                         else:
-                                            err_info = ", ".join(error_msgs) if error_msgs else "全盘拦截"
-                                            notifier.send_message(f"❌ 天翼云拒绝转存: {err_info}")
+                                            notifier.send_message(f"❌ 天翼云拒绝转存: {code}")
                                 except Exception as e:
-                                    if "InvalidSessionKey" in str(e) or "check ip error" in str(e):
+                                    err_str = str(e).upper()
+                                    if "INVALIDSESSIONKEY" in err_str or "CHECK IP ERROR" in err_str or "UNKNOWN_ERROR" in err_str or "UNKNOWN" in err_str:
                                         notifier.send_message(f"⚠️ 检测到 IP 漂移！正在自愈...")
                                         if os.path.exists(COOKIES_FILE): os.remove(COOKIES_FILE)
                                         auto_relogin(client_obj)
@@ -1162,7 +1998,7 @@ def main_control_loop(client_obj):
                                     else:
                                         notifier.send_message(f"❌ 补档异常: {e}")
 
-                        elif text.startswith("订阅") or text.startswith("绑定"):
+                        elif text.startswith("订阅") or text.startswith("绑定" or text.startswith("/sub ")):
                             match_bind = re.match(r'^(订阅|绑定)(\d)?\s+', text)
                             if match_bind:
                                 action = match_bind.group(1)
@@ -1175,6 +2011,7 @@ def main_control_loop(client_obj):
                                 elif "#日更" in text: freq_tag, text = "日更", text.replace("#日更", "").strip()
                                 elif "#完结" in text: freq_tag, text = "完结", text.replace("#完结", "").strip()
                                 elif "#单次" in text: freq_tag, text = "单次", text.replace("#单次", "").strip()
+                                elif "#电影" in text: freq_tag, text = "单次", text.replace("#电影", "").strip() # 🌟 加入电影快捷标签映射
                                 
                                 explicit_weekday = False
                                 weekday_map = {"周一": 0, "周二": 1, "周三": 2, "周四": 3, "周五": 4, "周六": 5, "周日": 6}
@@ -1287,28 +2124,112 @@ def main_control_loop(client_obj):
                                                         break
                                         
                                         clean_user_path = target_path.strip()
-                                        
                                         current_ym = datetime.now().strftime("%Y%m")
                                         
-                                        if is_cas:
-                                            if base_dir_sub:
-                                                target_path = f"{DIR_CAS_ROOT}/{base_dir_large}/{base_dir_sub}/{current_ym}/{clean_user_path}".replace("//", "/")
-                                            else:
-                                                target_path = f"{DIR_CAS_ROOT}/{base_dir_large}/{current_ym}/{clean_user_path}".replace("//", "/")
-                                            type_msg = "CAS秒传"
+                                        # ==========================================
+                                        # 🛡️ V7 真·究极形态：记忆体(DB) -> 物理雷达(云端) -> 新建(保底)
+                                        # ==========================================
+                                        subs_cache = load_json(SUBS_FILE)
+                                        existing_path = None
+                                        
+                                        # 🌟 修改：废弃激进正则，保留版本号/4K等特征
+                                        def get_pure(text): return text.replace(" ", "").lower()
+                                        show_name = clean_user_path.split('/')[0].strip()
+                                        pure_show = get_pure(show_name)
+                                        
+                                        best_match_path = None
+                                        
+                                        ignore_words = {get_pure(DIR_CAS_ROOT), get_pure(DIR_VIDEO_ROOT), "season", "s"}
+                                        for cat_key, (large_cat, sub_cat) in CAT_ROUTER.items():
+                                            ignore_words.add(get_pure(cat_key))
+                                            ignore_words.add(get_pure(large_cat))
+                                            if sub_cat: ignore_words.add(get_pure(sub_cat))
+                                        
+                                        # 【第一阶段】：扫描大脑记忆库 (subscriptions.json)
+                                        for sid, info_dict in subs_cache.items():
+                                            if isinstance(info_dict, dict):
+                                                db_path = info_dict.get("path", "")
+                                                db_is_cas = DIR_CAS_ROOT in db_path
+                                                if is_cas != db_is_cas: continue
+                                                
+                                                db_folders = db_path.split('/')
+                                                for idx, f_name in enumerate(db_folders):
+                                                    pure_f = get_pure(f_name)
+                                                    if not pure_f or len(pure_f) < 2: continue
+                                                    if re.match(r'^\d{4,6}$', pure_f) or "season" in pure_f or re.match(r'^s\d+$', pure_f): continue
+                                                    if pure_f in ignore_words: continue
+                                                    
+                                                    # 🌟 摒弃打分！严格要求版本特征一致
+                                                    if pure_show == pure_f:
+                                                        root_path = "/".join(db_folders[:idx+1])
+                                                        best_match_path = root_path + clean_user_path[len(show_name):] if "/" in clean_user_path else root_path
+                                                        break
+                                            if best_match_path: break
+                                            
+                                        if best_match_path:
+                                            existing_path = best_match_path
+                                            type_msg = f"记忆库精确匹配沿用旧目录"
+                                            
+                                        # 【第二阶段】：如果大脑失忆了，启动天翼云物理雷达，扫描历史实体目录！
+                                        if not existing_path:
+                                            notifier.send_message("🧠 记忆库未找到记录，启动网盘物理层穿甲扫描，探测历史遗留目录...")
+                                            try:
+                                                root_for_search = DIR_CAS_ROOT if is_cas else DIR_VIDEO_ROOT
+                                                base_search_path = f"{root_for_search}/{base_dir_large}/{base_dir_sub}".strip('/').replace("//", "/") if base_dir_sub else f"{root_for_search}/{base_dir_large}".strip('/')
+                                                
+                                                curr_id = -11
+                                                valid_path = True
+                                                for p in base_search_path.split('/'):
+                                                    if not p: continue
+                                                    nodes = client_obj.getObjectFolderNodes(curr_id)
+                                                    matched = next((n for n in nodes if n["name"] == p), None)
+                                                    if matched:
+                                                        curr_id = matched["id"]
+                                                    else:
+                                                        valid_path = False; break
+                                                
+                                                if valid_path:
+                                                    ym_nodes = client_obj.getObjectFolderNodes(curr_id)
+                                                    ym_nodes.sort(key=lambda x: x["name"], reverse=True)
+                                                    
+                                                    phy_best_path = None
+                                                    
+                                                    for ym_node in ym_nodes:
+                                                        if re.match(r'^\d{4,6}$', ym_node["name"]):
+                                                            show_nodes = client_obj.getObjectFolderNodes(ym_node["id"])
+                                                            for show_node in show_nodes:
+                                                                pure_f = get_pure(show_node["name"])
+                                                                # 🌟 摒弃打分！
+                                                                if pure_show == pure_f:
+                                                                    found_physical_path = f"/{base_search_path}/{ym_node['name']}/{show_node['name']}"
+                                                                    phy_best_path = found_physical_path + clean_user_path[len(show_name):] if "/" in clean_user_path else found_physical_path
+                                                                    break
+                                                        if phy_best_path: break
+                                                    
+                                                    if phy_best_path:
+                                                        existing_path = phy_best_path
+                                                        type_msg = f"网盘实体精确寻回"
+                                            except Exception as e:
+                                                logger.warning(f"⚠️ 物理雷达扫描异常 (防风控跳过): {e}")
+                                                
+                                        # 【第三阶段】：彻底判定为全新资源，按当前系统年月打基建
+                                        if existing_path:
+                                            target_path = existing_path
                                         else:
-                                            if base_dir_sub:
-                                                target_path = f"{DIR_VIDEO_ROOT}/{base_dir_large}/{base_dir_sub}/{current_ym}/{clean_user_path}".replace("//", "/")
+                                            if is_cas:
+                                                target_path = f"{DIR_CAS_ROOT}/{base_dir_large}/{base_dir_sub}/{current_ym}/{clean_user_path}".replace("//", "/") if base_dir_sub else f"{DIR_CAS_ROOT}/{base_dir_large}/{current_ym}/{clean_user_path}".replace("//", "/")
+                                                type_msg = "全新CAS秒传(建新基建)"
                                             else:
-                                                target_path = f"{DIR_VIDEO_ROOT}/{base_dir_large}/{current_ym}/{clean_user_path}".replace("//", "/")
-                                            type_msg = "智能直连(带时间轴)"
+                                                target_path = f"{DIR_VIDEO_ROOT}/{base_dir_large}/{base_dir_sub}/{current_ym}/{clean_user_path}".replace("//", "/") if base_dir_sub else f"{DIR_VIDEO_ROOT}/{base_dir_large}/{current_ym}/{clean_user_path}".replace("//", "/")
+                                                type_msg = "全新智能直连(建新基建)"
                                         
                                         if base_dir_large == "电影" and not freq_tag:
-                                            freq_tag = "电影"
+                                            freq_tag = "单次"
                                             
                                         notifier.send_message(f"🧠 路由组装完毕 [{type_msg}]！\n📂 建档至: {target_path}")
                                     except Exception as e:
-                                        if "InvalidSessionKey" in str(e) or "check ip error" in str(e):
+                                        err_str = str(e).upper()
+                                        if "INVALIDSESSIONKEY" in err_str or "CHECK IP ERROR" in err_str or "UNKNOWN_ERROR" in err_str or "UNKNOWN" in err_str:
                                             notifier.send_message(f"⚠️ 探测到 IP 漂移！正在自愈...")
                                             if os.path.exists(COOKIES_FILE): os.remove(COOKIES_FILE)
                                             auto_relogin(client_obj)
@@ -1343,7 +2264,8 @@ def main_control_loop(client_obj):
                                         notifier.send_message(f"✅ 添加成功！优先拉取资源...")
                                         check_subscriptions(client_obj, force_target_id=target_id) 
                                 except Exception as e:
-                                    if "InvalidSessionKey" in str(e) or "check ip error" in str(e):
+                                    err_str = str(e).upper()
+                                    if "INVALIDSESSIONKEY" in err_str or "CHECK IP ERROR" in err_str or "UNKNOWN_ERROR" in err_str or "UNKNOWN" in err_str:       
                                         notifier.send_message(f"⚠️ 建档探测到 IP 漂移！正在自愈...")
                                         if os.path.exists(COOKIES_FILE): os.remove(COOKIES_FILE)
                                         auto_relogin(client_obj)
@@ -1353,25 +2275,22 @@ def main_control_loop(client_obj):
         except Exception: pass 
         time.sleep(2)
 
-# ==========================================
-# 🚀 启动入口
-# ==========================================
 if __name__ == '__main__':
     os.makedirs(DB_DIR, exist_ok=True)
     notifier = TelegramNotifier(TG_BOT_TOKEN, TG_ADMIN_USER_ID)
-    notifier.send_message(f"🤖 追剧转存引擎 (V4.8 智能路由版) 启动，获取凭证...")
+    notifier.send_message(f"🤖 追剧转存引擎 (V5.8 智能路由版) 启动，获取凭证...")
     
     try:
         logger.info("✅ [系统] 189底层接口握手成功，正在挂载凭证...")
         client = Cloud189()
         client.login(ENV_189_CLIENT_ID, ENV_189_CLIENT_SECRET)
         last_login_time = time.time()
-        notifier.send_message("✅ 网盘登录成功！全天候监控已就位。")
+        notifier.send_message("✅ 网盘登录成功！全天候监控已就位。\n💡 提示：回复「取消X」清空假记忆，或回复「同步订阅」强制检查更新。")
     except Exception as e:
         logger.error(f"❌ [系统] 登录失败: {e}")
         notifier.send_message(f"❌ 首次登录失败: {e}\n(脚本已进入休眠模式防止被封)")
         time.sleep(600)
-        exit(-1)
+        sys.exit(-1)
         
     main_control_loop(client)
 ```
@@ -1380,24 +2299,24 @@ if __name__ == '__main__':
 
 3.3复制脚本
 ```
-cp ~/storage/downloads/auto_189.py ~/tcloud/auto_189.py
+cp ~/storage/downloads/auto189.py ~/189py/auto189.py
 ```
 4.点火升空 & 日常操作
 前台启动
 ```
-python auto_189.py
+python ~/189py/auto189.py
 ```
 后台静默启动
 ```
-nohup python auto_189.py > run.log 2>&1 &
+nohup python ~/189py/auto189.py > run.log 2>&1 &
 ```
 pm2启动：
 ```
-cd ~/tcloud && pm2 start auto_189.py --name "auto_189" --interpreter python
+cd ~/189py && pm2 start auto189.py --name "auto189" --interpreter python
 ```
 或
 ```
-(cd ~/tcloud && nohup python3 auto_189.py > run.log 2>&1 &) && echo "✅ TG 追剧管家已启动，日志记录于 ~/run.log"
+(cd ~/189py && nohup python3 auto_189.py > run.log 2>&1 &) && echo "✅ TG 追剧管家已启动，日志记录于 ~/run.log"
 ```
 
 5.清理脏数据，正式接客
@@ -1405,38 +2324,52 @@ cd ~/tcloud && pm2 start auto_189.py --name "auto_189" --interpreter python
 在 Termux 里直接执行这两行命令（先清空数据库，再重新启动）：
 ```
 # 1. 强制清空订阅数据库和历史记录（把脏数据扬了）
-pkill -f auto_189.py
-rm -f db/history.json db/subscriptions.json
+pkill -f auto189.py
+rm -f ~/189py/db/history.json ~/189py/db/subscriptions.json
 
 # 2. 重新启动脚本！
-python auto_189.py
+python ~/189py/auto189.py
 ```
 
-### 三、秒传播放cas_server.py
-cas_server.py与auto_189.py同目录下操作方法一样
+### 三、秒传播放casplay.py
+casplay.py与auto189.py同目录下操作方法一样
 
 1.py内容：
 ```
-import base64, json, time, random, hashlib, hmac, urllib.parse, threading, uuid, os, requests, logging, subprocess
-import socket, re
+import base64, json, time, random, hashlib, hmac, urllib.parse, threading, uuid, os, requests, logging, subprocess, math
+import socket, re, functools
 from collections import deque
 from flask import Flask, request, redirect, render_template_string, jsonify
 from Crypto.Cipher import AES, PKCS1_v1_5
 from Crypto.PublicKey import RSA
 from Crypto.Util.Padding import pad
 
-# 🛡️ 强制锁死 IPv4
 old_getaddrinfo = socket.getaddrinfo
-def new_getaddrinfo(*args, **kwargs):
-    responses = old_getaddrinfo(*args, **kwargs)
+def new_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    responses = old_getaddrinfo(host, port, family, type, proto, flags)
+    # 🌟 智能放行：如果 Flask 试图监听所有 IPv6 通配符，直接放行
+    if host == '::':
+        return responses
+    # 🛡️ 强制锁定：外部请求（天翼云等）全部强杀 IPv6，只保留 IPv4 (AF_INET)
     return [res for res in responses if res[0] == socket.AF_INET]
 socket.getaddrinfo = new_getaddrinfo
 
 # ==========================================
-# ⚙️ 默认系统配置
+# 🏠 局域网探针 (新增)
+# ==========================================
+def get_lan_server_ip(req):
+    """嗅探请求头，判断是否处于局域网环境，并提取内网 IP"""
+    host = req.host.split(':')[0]
+    # 匹配标准的私有局域网网段
+    if re.match(r'^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|127\.0\.0\.1)', host):
+        return host
+    return None
+
+# ==========================================
+# ⚙️ 默认系统配置 (主服务)
 # ==========================================
 DEFAULT_CONFIG = {
-    "server_host": "https://on.363689.xyz",
+    "server_host": "https://play.363689.xyz",
     "delete_delay": 600,
     "shield_delay": 2700,
     "cloud_strategy": "hash", 
@@ -1450,7 +2383,16 @@ DEFAULT_CONFIG = {
     "tg_chat_id": ""
 }
 
-app = Flask(__name__)
+# ==========================================
+# 🎬 Emby 双核 302 劫持配置 (原 nginx_302 模块参数)
+# ==========================================
+EMBY_HOST = "http://127.0.0.1:8096"
+API_KEY_LINUX = "751c095055f8493d8e63eb755369b9aa"
+API_KEY_APP = "66644805d4bc45ea91b2a5e5eca22105"
+
+app_main = Flask('cas_server_5000')
+app_302 = Flask('nginx_302_5001')
+
 last_refresh_time = 0
 upload_cache = {}
 cache_lock = threading.Lock()
@@ -1461,6 +2403,55 @@ DB_DIR = os.path.join(BASE_DIR, "db")
 os.makedirs(DB_DIR, exist_ok=True)
 
 def get_db_path(): return os.path.join(DB_DIR, "config.json")
+
+def format_size(size_in_bytes):
+    try:
+        size = float(size_in_bytes)
+        if size < 1024 * 1024 * 1024:
+            return f"{size / (1024 * 1024):.2f} MB"
+        else:
+            return f"{size / (1024 * 1024 * 1024):.2f} GB"
+    except:
+        return "未知大小"
+
+# ==========================================
+# 🔔 统一看板日志与推送系统
+# ==========================================
+log_buffer = deque(maxlen=150) 
+class MemoryHandler(logging.Handler):
+    def emit(self, record):
+        msg = self.format(record)
+        log_buffer.append({'time': time.strftime("%H:%M:%S"), 'level': record.levelname, 'msg': f"💖 [管家] {msg}"})
+
+logger = logging.getLogger('CAS_Server')
+logger.setLevel(logging.INFO)
+mem_handler = MemoryHandler()
+mem_handler.setFormatter(logging.Formatter('%(message)s'))
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+logger.addHandler(mem_handler)
+logger.addHandler(stream_handler)
+
+logging.getLogger('werkzeug').setLevel(logging.ERROR)
+
+@app_main.route('/api/remote_log', methods=['POST'])
+def receive_remote_log():
+    try:
+        data = request.json
+        log_buffer.append({'time': time.strftime("%H:%M:%S"), 'level': data.get('level', 'INFO'), 'msg': f"💜 [引擎] {data.get('msg', '')}"})
+        return "OK", 200
+    except: return "Error", 400
+
+def send_push(title, content):
+    def _do_push():
+        cfg = read_config()
+        if cfg.get('pushplus_token'):
+            try: requests.get(f"http://www.pushplus.plus/send?token={cfg['pushplus_token']}&title={urllib.parse.quote(title)}&content={urllib.parse.quote(content)}&template=html", timeout=5)
+            except Exception as e: logger.error(f"微信推送失败: {e}")
+        if cfg.get('tg_bot_token') and cfg.get('tg_chat_id'):
+            try: requests.post(f"https://api.telegram.org/bot{cfg['tg_bot_token']}/sendMessage", data={"chat_id": cfg['tg_chat_id'], "text": f"🚨 <b>{title}</b>\n\n{content.replace('<br>', '\n')}", "parse_mode": "HTML"}, timeout=5)
+            except Exception as e: logger.error(f"TG推送失败: {e}")
+    threading.Thread(target=_do_push, daemon=True).start()
 
 # ==========================================
 # 🔑 天翼云独立鉴权引擎
@@ -1476,8 +2467,7 @@ def get_session_key_via_api(session_obj, source="未知来源"):
         headers = {"Accept": "application/json;charset=UTF-8", "Referer": "https://cloud.189.cn/"}
         res = session_obj.get(url, headers=headers, timeout=10).json()
         sk = res.get("sessionKey")
-        if sk:
-            logger.info(f"✨ [{source} 获取成功] 拿到新鲜 SESSION_KEY！凭证尾号: {sk[-6:]}")
+        if sk: logger.info(f"✨ [{source} 获取成功] 拿到新鲜 SESSION_KEY！凭证尾号: {sk[-6:]}")
         return sk
     except Exception as e:
         logger.error(f"提取 sessionKey 失败: {e}")
@@ -1510,9 +2500,7 @@ class Cloud189AuthEngine:
             "userName": f"{{NRP}}{rsaEncrpt(username, keyData)}",
             "password": f"{{NRP}}{rsaEncrpt(password, keyData)}",
         }
-        
         result = self.session.post('https://open.e.189.cn/api/logbox/oauth2/loginSubmit.do', data=data, headers={'Referer': 'https://open.e.189.cn/', 'lt': query["lt"][0], 'REQID': query["reqId"][0]}, timeout=15).json()
-        
         if result['result'] == 0:
             self.session.get(result['toUrl'], headers={"Host": 'cloud.189.cn'}, timeout=15)
             sk = get_session_key_via_api(self.session, slot_name)
@@ -1521,23 +2509,19 @@ class Cloud189AuthEngine:
         else:
             raise Exception(result['msg'])
 
-slot3_cache = {"sk": "", "cookie_mtime": 0}
+slot6_cache = {"sk": "", "cookie_mtime": 0}
 
 def get_auto189_session_key():
     cookie_file = os.path.join(DB_DIR, "cookies.json")
     if not os.path.exists(cookie_file): return ""
-    
     mtime = os.path.getmtime(cookie_file)
-    if slot3_cache["sk"] and slot3_cache["cookie_mtime"] == mtime:
-        return slot3_cache["sk"]
-        
+    if slot6_cache["sk"] and slot6_cache["cookie_mtime"] == mtime: return slot6_cache["sk"]
     session = requests.Session()
     try:
-        with open(cookie_file, 'r', encoding='utf-8') as f: 
-            session.cookies.update(json.load(f))
-        sk = get_session_key_via_api(session, "卡槽3-外部同步") or ""
-        slot3_cache["sk"] = sk
-        slot3_cache["cookie_mtime"] = mtime
+        with open(cookie_file, 'r', encoding='utf-8') as f: session.cookies.update(json.load(f))
+        sk = get_session_key_via_api(session, "卡槽6-外部同步") or ""
+        slot6_cache["sk"] = sk
+        slot6_cache["cookie_mtime"] = mtime
         return sk
     except: return ""
 
@@ -1550,27 +2534,22 @@ def read_config():
     cfg = DEFAULT_CONFIG.copy()
     try:
         if os.path.exists(cfg_path):
-            with open(cfg_path, 'r', encoding='utf-8') as f:
-                saved_cfg = json.load(f)
-                cfg.update(saved_cfg)
+            with open(cfg_path, 'r', encoding='utf-8') as f: cfg.update(json.load(f))
     except: pass
     
-    if len(cfg.get('family_clouds', [])) > 2:
-        if not cfg['family_clouds'][2].get('username'):
-            old_sk = cfg['family_clouds'][2].get('session_key', '')
+    if len(cfg.get('family_clouds', [])) > 5:
+        if not cfg['family_clouds'][5].get('username'):
+            old_sk = cfg['family_clouds'][5].get('session_key', '')
             new_sk = get_auto189_session_key()
             if new_sk:
-                cfg['family_clouds'][2]['session_key'] = new_sk
-                if old_sk != new_sk:
-                    save_config(cfg)
-            
+                cfg['family_clouds'][5]['session_key'] = new_sk
+                if old_sk != new_sk: save_config(cfg)
     return cfg
 
 def refresh_slot_logic(slot_idx, cfg):
     if slot_idx < len(cfg.get('family_clouds', [])):
         fc = cfg['family_clouds'][slot_idx]
         user, pwd = fc.get('username'), fc.get('password')
-        
         if user and pwd:
             logger.info(f"🔄 卡槽 {slot_idx+1} 凭证失效，正在使用账号 {user} 自动重登自愈...")
             send_push("🔄 追剧管家自愈启动", f"检测到 卡槽 {slot_idx+1} 凭证失效，引擎已介入执行自动重登。")
@@ -1578,8 +2557,15 @@ def refresh_slot_logic(slot_idx, cfg):
                 auth = Cloud189AuthEngine()
                 new_sk = auth.do_login_and_get_key(user, pwd, f"卡槽{slot_idx+1}")
                 if new_sk:
+                    # 1. 更新当前内存里的副本，保证当前次请求顺畅
                     fc['session_key'] = new_sk
-                    save_config(cfg)
+                    
+                    # 2. 🚀 修复核心：精准保存，防止旧内存覆盖前台刚刚手动修改的新配置
+                    latest_cfg = read_config()
+                    if slot_idx < len(latest_cfg.get('family_clouds', [])):
+                        latest_cfg['family_clouds'][slot_idx]['session_key'] = new_sk
+                        save_config(latest_cfg)
+                        
                     if 'session_key' in fc and fc['session_key'] in client.rsa_keys:
                         del client.rsa_keys[fc['session_key']]
                     logger.info(f"✅ 卡槽 {slot_idx+1} 满血复活！")
@@ -1587,106 +2573,77 @@ def refresh_slot_logic(slot_idx, cfg):
             except Exception as e:
                 logger.error(f"❌ 卡槽 {slot_idx+1} 自动续期失败: {e}")
                 send_push("❌ 追剧管家自愈失败", f"卡槽 {slot_idx+1} 尝试自动重登失败！<br>报错信息: {e}")
-                
-        elif slot_idx == 2:
-            # 🌟 V7.4 容灾模式：撕毁缓存，不再唤醒外部脚本，直接返回 None 触发降级转移
-            logger.warning("🚨 备用卡槽 3 外部凭证失效，已清理本地废弃凭证，等待外部定时任务更新。")
-            send_push("⚠️ 卡槽 3 离线转移", "卡槽 3 外部凭证失效。已自动丢弃旧凭证，当前播放请求将无缝转移至主卡槽。")
-            
+        elif slot_idx == 5: 
+            logger.warning("🚨 备用卡槽 6 外部凭证失效，已清理本地废弃凭证，等待外部定时任务更新。")
+            send_push("⚠️ 卡槽 6 离线转移", "卡槽 6 外部凭证失效。已自动丢弃旧凭证，当前播放请求将无缝转移至主卡槽。")
             cookie_path = os.path.join(DB_DIR, "cookies.json")
             if os.path.exists(cookie_path): os.remove(cookie_path)
-            slot3_cache["sk"] = ""
-            
-            if len(cfg.get('family_clouds', [])) > 2:
-                cfg['family_clouds'][2]['session_key'] = ""
-                save_config(cfg)
+            slot6_cache["sk"] = ""
+            if len(cfg.get('family_clouds', [])) > 5:
+                # 1. 更新当前内存副本
+                cfg['family_clouds'][5]['session_key'] = ""
                 
-            return None # 无法当场自愈，返回 None 让主程序去执行故障转移
-        else:
-            logger.error(f"❌ 卡槽 {slot_idx+1} 缺少账号密码配置，无法执行自愈！")
-            
+                # 2. 🚀 修复核心：精准拉取最新配置再保存
+                latest_cfg = read_config()
+                if len(latest_cfg.get('family_clouds', [])) > 5:
+                    latest_cfg['family_clouds'][5]['session_key'] = ""
+                    save_config(latest_cfg)
+            return None
+        else: logger.error(f"❌ 卡槽 {slot_idx+1} 缺少账号密码配置，无法执行自愈！")
     return None
 
-def get_target_cloud(cfg, bind_key=""):
+def get_target_cloud(cfg, bind_key="", file_size=0):
     global rr_index
-    clouds = [c for c in cfg.get('family_clouds', []) if c.get('family_id') and c.get('hard_folder_id') and c.get('openlist_prefix')]
-    if not clouds: return None, -1
-    
-    strategy = cfg.get('cloud_strategy', 'hash')
-    target = clouds[0]
-    
-    def is_valid(c):
-        return c and c.get('family_id') and c.get('hard_folder_id') and c.get('openlist_prefix')
+    raw_clouds = cfg.get('family_clouds', [])
+    def is_valid(c): return c and c.get('family_id') and c.get('hard_folder_id') and c.get('openlist_prefix')
 
-    if strategy == 'primary' and len(clouds) > 0 and is_valid(clouds[0]):
-        return clouds[0], 0
-    elif strategy == 'slot2' and len(clouds) > 1 and is_valid(clouds[1]):
-        return clouds[1], 1
-    elif strategy == 'slot3' and len(clouds) > 2 and is_valid(clouds[2]):
-        return clouds[2], 2
-
-    valid_clouds = [c for c in clouds if is_valid(c)]
+    valid_clouds = [(c, i) for i, c in enumerate(raw_clouds) if is_valid(c)]
     if not valid_clouds: return None, -1
+
+    strategy = cfg.get('cloud_strategy', 'hash')
     
-    target = valid_clouds[0]
-    
+    # 🎯 绝对优先的单卡槽锁定！只要用户手动指定了单卡槽，绝不被大文件拦截逻辑干扰
+    if strategy == 'primary' and len(raw_clouds) > 0 and is_valid(raw_clouds[0]): return raw_clouds[0], 0
+    elif strategy == 'slot2' and len(raw_clouds) > 1 and is_valid(raw_clouds[1]): return raw_clouds[1], 1
+    elif strategy == 'slot3' and len(raw_clouds) > 2 and is_valid(raw_clouds[2]): return raw_clouds[2], 2
+    elif strategy == 'slot4' and len(raw_clouds) > 3 and is_valid(raw_clouds[3]): return raw_clouds[3], 3
+    elif strategy == 'slot5' and len(raw_clouds) > 4 and is_valid(raw_clouds[4]): return raw_clouds[4], 4
+    elif strategy == 'slot6' and len(raw_clouds) > 5 and is_valid(raw_clouds[5]): return raw_clouds[5], 5
+
+    # ⚖️ 容量调度介入：检测超大文件 (>28G)，无视常规策略，强制分配给卡槽 5 和 卡槽 6
+    try: size_int = int(file_size)
+    except: size_int = 0
+    if size_int > 28 * 1024 * 1024 * 1024:
+        big_clouds = [(c, i) for c, i in valid_clouds if i in [4, 5]]
+        if big_clouds:
+            # 在 5 和 6 之间利用哈希平摊超大文件压力
+            if bind_key:
+                hash_idx = int(hashlib.md5(bind_key.encode('utf-8')).hexdigest(), 16) % len(big_clouds)
+                target = big_clouds[hash_idx]
+            else:
+                target = random.choice(big_clouds)
+            logger.info(f"⚖️ 容量调度介入：检测到超大文件 ({size_int/(1024**3):.2f} GB)，无视常规策略，强制锁定大容量 [卡槽 {target[1]+1}]")
+            return target[0], target[1]
+        else:
+            logger.warning("⚠️ 检测到大于28G的超大文件，但负责承接的 [卡槽 5 / 卡槽 6] 未配置或已失效！将降级落入常规池。")
+
+    # 常规均衡池：1-4号卡槽参与 (index 0, 1, 2, 3)
+    general_clouds = [(c, i) for c, i in valid_clouds if i < 4]
+    if not general_clouds: general_clouds = valid_clouds # 兜底机制
+
     if strategy == 'hash':
         if bind_key:
-            hash_idx = int(hashlib.md5(bind_key.encode('utf-8')).hexdigest(), 16) % len(valid_clouds)
-            target = valid_clouds[hash_idx]
+            hash_idx = int(hashlib.md5(bind_key.encode('utf-8')).hexdigest(), 16) % len(general_clouds)
+            return general_clouds[hash_idx][0], general_clouds[hash_idx][1]
     elif strategy == 'random': 
-        target = random.choice(valid_clouds)
+        target = random.choice(general_clouds)
+        return target[0], target[1]
     elif strategy == 'round_robin':
-        target = valid_clouds[rr_index % len(valid_clouds)]
+        target = general_clouds[rr_index % len(general_clouds)]
         rr_index += 1
+        return target[0], target[1]
         
-    try:
-        slot_idx = clouds.index(target)
-    except:
-        slot_idx = 0
-        
-    return target, slot_idx
-
-# ==========================================
-# 🔔 统一看板日志与推送系统
-# ==========================================
-log_buffer = deque(maxlen=150) 
-class MemoryHandler(logging.Handler):
-    def emit(self, record):
-        msg = self.format(record)
-        log_buffer.append({'time': time.strftime("%H:%M:%S"), 'level': record.levelname, 'msg': f"💖 [管家] {msg}"})
-
-logger = logging.getLogger('CAS_Server')
-logger.setLevel(logging.INFO)
-mem_handler = MemoryHandler()
-mem_handler.setFormatter(logging.Formatter('%(message)s'))
-stream_handler = logging.StreamHandler()
-stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-logger.addHandler(mem_handler)
-logger.addHandler(stream_handler)
-logging.getLogger('werkzeug').setLevel(logging.ERROR)
-
-@app.route('/api/remote_log', methods=['POST'])
-def receive_remote_log():
-    try:
-        data = request.json
-        log_buffer.append({'time': time.strftime("%H:%M:%S"), 'level': data.get('level', 'INFO'), 'msg': f"💜 [引擎] {data.get('msg', '')}"})
-        return "OK", 200
-    except: return "Error", 400
-
-def send_push(title, content):
-    cfg = read_config()
-    if cfg.get('pushplus_token'):
-        try: 
-            requests.get(f"http://www.pushplus.plus/send?token={cfg['pushplus_token']}&title={urllib.parse.quote(title)}&content={urllib.parse.quote(content)}&template=html", timeout=5)
-        except Exception as e: 
-            logger.error(f"微信推送失败: {e}")
-            
-    if cfg.get('tg_bot_token') and cfg.get('tg_chat_id'):
-        try: 
-            requests.post(f"https://api.telegram.org/bot{cfg['tg_bot_token']}/sendMessage", data={"chat_id": cfg['tg_chat_id'], "text": f"🚨 <b>{title}</b>\n\n{content.replace('<br>', '\n')}", "parse_mode": "HTML"}, timeout=5)
-        except Exception as e: 
-            logger.error(f"TG推送失败: {e}")
+    return valid_clouds[0][0], valid_clouds[0][1]
 
 # ==========================================
 # 🧹 全量清空逻辑
@@ -1695,31 +2652,26 @@ def force_clear_all_worker():
     logger.info("🧨 收到最高指令：开始精准清理家庭云缓存及回收站...")
     cfg = read_config()
     with cache_lock: upload_cache.clear()
-    
     for i, fc in enumerate(cfg.get('family_clouds', [])):
         fam_id = fc.get('family_id')
         fold_id = fc.get('hard_folder_id')
         sk = fc.get('session_key')
-        
         if not sk: sk = refresh_slot_logic(i, cfg)
-
         if fam_id and fold_id and sk:
-            logger.info(f"🧹 正在搜寻卡槽 {i+1} [{fam_id[-4:]}] 的残留缓存...")
+            logger.info(f"🧹 正在搜寻卡槽 {i+1} [家庭组:{fam_id[-4:]}] 的残留缓存...")
             try:
                 items = client.get_family_items(fam_id, fold_id, sk)
                 del_count = 0
                 for item in items:
                     if client.delete_item(fam_id, item['fileId'], sk): del_count += 1
-                
                 time.sleep(1)
                 if client.empty_family_recycle(fam_id, sk):
-                    logger.info(f"✅ 卡槽 {i+1} 清理完毕: 移除了 {del_count} 个秒传文件，并清空了该家庭云回收站。")
-            except Exception as e:
-                logger.error(f"❌ 卡槽 {i+1} 清理异常: {e}")
+                    logger.info(f"✅ 卡槽 {i+1} 清理完毕: 移除了 {del_count} 个秒传文件，并清空了所在家庭云的回收站。")
+            except Exception as e: logger.error(f"❌ 卡槽 {i+1} 清理异常: {e}")
     logger.info("🎉 缓存清空作业已圆满完成！")
     send_push("🧹 追剧管家清理完成", "全矩阵秒传缓存及回收站已强制清空完毕。")
 
-@app.route('/api/clear_all', methods=['POST'])
+@app_main.route('/api/clear_all', methods=['POST'])
 def api_clear_all():
     threading.Thread(target=force_clear_all_worker, daemon=True).start()
     return "✅ 清空指令下发成功", 200
@@ -1727,11 +2679,16 @@ def api_clear_all():
 # ==========================================
 # 🖥️ ADMIN 界面与配置路由
 # ==========================================
-@app.route('/admin/config', methods=['POST'])
+@app_main.route('/admin/config', methods=['POST'])
 def update_global_config():
-    cfg = read_config()
+    old_cfg = read_config()
+    old_clouds = old_cfg.get('family_clouds', [])
+    
+    cfg = DEFAULT_CONFIG.copy()
+    for k, v in old_cfg.items(): cfg[k] = v
+    
     clouds = []
-    for i in range(3):
+    for i in range(6):
         fid = request.form.get(f'fc_id_{i}', '').strip()
         hid = request.form.get(f'fc_fd_{i}', '').strip()
         px = request.form.get(f'fc_prefix_{i}', '').strip()
@@ -1740,24 +2697,28 @@ def update_global_config():
         pwd = request.form.get(f'fc_pwd_{i}', '').strip()
         sk = request.form.get(f'fc_sk_{i}', '').strip()
         
+        # 智能重置凭证逻辑
+        if i < len(old_clouds):
+            old_user = old_clouds[i].get('username', '')
+            old_pwd = old_clouds[i].get('password', '')
+            if user != old_user or pwd != old_pwd:
+                sk = "" 
+                logger.info(f"🔄 检测到卡槽 {i+1} 账号或密码变更，已自动清除旧凭证，准备重新登录获取新 Key。")
+
+        # 🔴 关键修复点：如果当前卡槽没填，必须塞一个空字典占位，严防后排数据错位塌陷！
         if fid and hid:
-            cloud_data = {"family_id": fid, "hard_folder_id": hid, "openlist_prefix": px, "openlist_mount_path": mt}
-            cloud_data["username"] = user
-            cloud_data["password"] = pwd
-            cloud_data["session_key"] = sk
+            cloud_data = {"family_id": fid, "hard_folder_id": hid, "openlist_prefix": px, "openlist_mount_path": mt, "username": user, "password": pwd, "session_key": sk}
             clouds.append(cloud_data)
-    
+        else:
+            clouds.append({}) # <--- 必须有这个空字典强行占位！
+            
     cfg['family_clouds'] = clouds
     cfg['cloud_strategy'] = request.form.get('cloud_strategy', 'hash')
-    
     for k in cfg.keys():
         if k not in ['family_clouds', 'cloud_strategy'] and k in request.form:
             val = request.form.get(k, '').strip()
-            if k in ['delete_delay', 'shield_delay']:
-                cfg[k] = int(val) if val else (600 if k == 'delete_delay' else 2700)
-            else:
-                cfg[k] = val
-            
+            if k in ['delete_delay', 'shield_delay']: cfg[k] = int(val) if val else (600 if k == 'delete_delay' else 2700)
+            else: cfg[k] = val
     save_config(cfg)
     client.rsa_keys.clear() 
     logger.info(f"⚙️ 矩阵重组！当前挂载 {len(clouds)} 个独立播放节点。")
@@ -1803,38 +2764,29 @@ ADMIN_HTML = """
 <body>
     <div class="container">
         <div class="header">
-            <h2>💖 追剧管家 V7.4 <span style="font-size:12px; color:#8b5cf6;">无感故障转移版</span></h2>
+            <h2>💖 追剧管家 V7.5 <span style="font-size:12px; color:#8b5cf6;">6路火力全开版</span></h2>
             <span class="badge">SYSTEM ONLINE</span>
         </div>
-        
         {% if msg %}<div class="status-msg">{{ msg }}</div>{% endif %}
-
         <div class="mac-window">
             <div class="mac-header">
-                <div class="mac-btn btn-close"></div>
-                <div class="mac-btn btn-min"></div>
-                <div class="mac-btn btn-max"></div>
+                <div class="mac-btn btn-close"></div><div class="mac-btn btn-min"></div><div class="mac-btn btn-max"></div>
                 <div class="mac-title">追剧控制台 - 实时运行日志</div>
             </div>
             <div class="console" id="logBox">Loading terminal...</div>
         </div>
-
         <div class="card">
             <h3>📊 系统运行状态 & 凭证雷达监控</h3>
             <div class="status-grid">
                 <p style="color:#64748b; margin:0;">存活缓存视频：<br><b style="color:#1e293b; font-size:1.8rem;">{{ cache_count }}</b></p>
                 <div style="color:#64748b; margin:0; font-size: 13px; line-height: 1.8; border-left: 2px solid #e2e8f0; padding-left: 15px;">
                     <b>🔑 矩阵凭证空投雷达：</b><br>
-                    {% for i in range(3) %}
+                    {% for i in range(6) %}
                         {% set fc = cfg.family_clouds[i] if i < cfg.family_clouds|length else {} %}
                         {% set sk = fc.get('session_key', '') %}
                         卡槽 {{ i+1 }}: 
-                        {% if sk %}
-                            <span style="color:#10b981; font-weight:bold;">已挂载 (尾号{{ sk[-4:] }})</span>
-                        {% else %}
-                            <span style="color:#f43f5e; font-weight:bold;">等待获取凭证...</span>
-                        {% endif %}
-                        <br>
+                        {% if sk %}<span style="color:#10b981; font-weight:bold;">已挂载 (尾号{{ sk[-4:] }})</span>
+                        {% else %}<span style="color:#f43f5e; font-weight:bold;">等待获取凭证...</span>{% endif %}<br>
                     {% endfor %}
                 </div>
                 <div style="display:flex; flex-direction:column; gap:10px;">
@@ -1843,120 +2795,89 @@ ADMIN_HTML = """
                 </div>
             </div>
         </div>
-
         <div class="card">
             <h3>⚙️ 多路家庭云配置中心</h3>
             <form method="POST" action="/admin/config">
-                
                 <div style="margin-bottom: 20px;">
                     <label>点播分发策略 (Load Balancing)</label>
                     <select name="cloud_strategy">
-                        <option value="hash" {% if cfg.cloud_strategy == 'hash' %}selected{% endif %}>🔗 剧名哈希绑定 (推荐！同剧永不跳云)</option>
-                        <option value="round_robin" {% if cfg.cloud_strategy == 'round_robin' %}selected{% endif %}>🔁 顺序轮询分发 (常规平摊风控压力)</option>
-                        <option value="primary" {% if cfg.cloud_strategy == 'primary' %}selected{% endif %}>🥇 仅卡槽1分发 (永远只用卡槽 1)</option>
-                        <option value="slot2" {% if cfg.cloud_strategy == 'slot2' %}selected{% endif %}>🥈 仅卡槽2分发 (永远只用卡槽 2)</option>
-                        <option value="slot3" {% if cfg.cloud_strategy == 'slot3' %}selected{% endif %}>🥉 仅卡槽3分发 (永远只用卡槽 3)</option>
-                        <option value="random" {% if cfg.cloud_strategy == 'random' %}selected{% endif %}>🎲 完全随机分发 (看脸分配)</option>
+                        <option value="hash" {% if cfg.cloud_strategy == 'hash' %}selected{% endif %}>🔗 剧名哈希绑定 (仅前4槽参与)</option>
+                        <option value="round_robin" {% if cfg.cloud_strategy == 'round_robin' %}selected{% endif %}>🔁 顺序轮询分发 (仅前4槽参与)</option>
+                        <option value="primary" {% if cfg.cloud_strategy == 'primary' %}selected{% endif %}>🥇 仅卡槽1分发</option>
+                        <option value="slot2" {% if cfg.cloud_strategy == 'slot2' %}selected{% endif %}>🥈 仅卡槽2分发</option>
+                        <option value="slot3" {% if cfg.cloud_strategy == 'slot3' %}selected{% endif %}>🥉 仅卡槽3分发</option>
+                        <option value="slot4" {% if cfg.cloud_strategy == 'slot4' %}selected{% endif %}>💎 仅卡槽4分发</option>
+                        <option value="slot5" {% if cfg.cloud_strategy == 'slot5' %}selected{% endif %}>🚀 仅卡槽5分发 (>28G重装甲)</option>
+                        <option value="slot6" {% if cfg.cloud_strategy == 'slot6' %}selected{% endif %}>🛸 仅卡槽6分发 (备用大爷号专属)</option>
+                        <option value="random" {% if cfg.cloud_strategy == 'random' %}selected{% endif %}>🎲 完全随机分发 (仅前4槽参与)</option>
                     </select>
                 </div>
-
                 <div class="grid">
                     <div>
-                        {% for i in range(3) %}
+                        {% for i in range(6) %}
                         {% set fc = cfg.family_clouds[i] if i < cfg.family_clouds|length else {} %}
                         <div class="cloud-box">
-                            <div class="cloud-title">📌 独立挂载槽位 {{ i + 1 }} {% if i == 2 %}(填账号则自愈，留空则由 auto_189 接管){% else %}(静默自愈){% endif %}</div>
+                            <div class="cloud-title">📌 独立挂载槽位 {{ i + 1 }} {% if i == 5 %}(填账号则自愈，留空则由 auto_189 接管){% else %}(静默自愈){% endif %}</div>
                             <input type="text" name="fc_id_{{ i }}" value="{{ fc.get('family_id', '') }}" placeholder="Family ID (留空则禁用此槽)">
                             <input type="text" name="fc_fd_{{ i }}" value="{{ fc.get('hard_folder_id', '') }}" placeholder="Folder ID">
-                            
                             <div style="display:flex; gap:10px;">
-                                <input type="text" name="fc_user_{{ i }}" value="{{ fc.get('username', '') }}" placeholder="天翼云账号{% if i == 2 %} (留空则由外部接管){% endif %}">
+                                <input type="text" name="fc_user_{{ i }}" value="{{ fc.get('username', '') }}" placeholder="天翼云账号">
                                 <input type="password" name="fc_pwd_{{ i }}" value="{{ fc.get('password', '') }}" placeholder="天翼云密码">
                             </div>
                             <input type="hidden" name="fc_sk_{{ i }}" value="{{ fc.get('session_key', '') }}">
-                            
-                            <input type="text" name="fc_prefix_{{ i }}" value="{{ fc.get('openlist_prefix', '') }}" placeholder="OpenList 专属播放前缀 (Prefix)">
+                            <input type="text" name="fc_prefix_{{ i }}" value="{{ fc.get('openlist_prefix', '') }}" placeholder="OpenList 专属播放前缀">
                             <input type="text" name="fc_mount_{{ i }}" value="{{ fc.get('openlist_mount_path', '') }}" placeholder="OpenList 专属挂载目录" style="margin-bottom:0;">
                         </div>
                         {% endfor %}
                     </div>
-                    
                     <div>
                         <h4 style="margin-top:0;">🌐 全局基础设置</h4>
                         <label>基础外网域名 (Server Host)</label>
                         <input type="text" name="server_host" value="{{ cfg.server_host }}" required>
-                        
                         <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-                            <div style="flex: 1;">
-                                <label>绝对销毁倒计时 (秒)</label>
-                                <input type="number" name="delete_delay" value="{{ cfg.delete_delay }}" style="margin-bottom:0;" required>
-                            </div>
-                            <div style="flex: 1;">
-                                <label>预加载长效护盾 (秒)</label>
-                                <input type="number" name="shield_delay" value="{{ cfg.shield_delay }}" style="margin-bottom:0;" required>
-                            </div>
+                            <div style="flex: 1;"><label>绝对销毁倒计时</label><input type="number" name="delete_delay" value="{{ cfg.delete_delay }}" style="margin-bottom:0;" required></div>
+                            <div style="flex: 1;"><label>预加载长效护盾</label><input type="number" name="shield_delay" value="{{ cfg.shield_delay }}" style="margin-bottom:0;" required></div>
                         </div>
-
-                        <label>本地 STRM 保存路径</label>
-                        <input type="text" name="local_strm_dir" value="{{ cfg.local_strm_dir }}" required>
-                        <label>云端转存 CAS 路径</label>
-                        <input type="text" name="network_cas_path" value="{{ cfg.network_cas_path }}" required>
-                        
+                        <label>本地 STRM 保存路径</label><input type="text" name="local_strm_dir" value="{{ cfg.local_strm_dir }}" required>
+                        <label>云端转存 CAS 路径</label><input type="text" name="network_cas_path" value="{{ cfg.network_cas_path }}" required>
                         <h4 style="margin-top:20px;">🌐 OpenList 核心设置</h4>
-                        <label>OpenList 接口地址 (Host)</label>
-                        <input type="text" name="openlist_host" value="{{ cfg.openlist_host }}" required>
-                        <label>OpenList 授权 Token</label>
-                        <input type="password" name="openlist_token" value="{{ cfg.openlist_token }}" placeholder="在此填入有效的 OpenList Token">
+                        <label>OpenList 接口地址 (Host)</label><input type="text" name="openlist_host" value="{{ cfg.openlist_host }}" required>
+                        <label>OpenList 授权 Token</label><input type="password" name="openlist_token" value="{{ cfg.openlist_token }}" placeholder="填入有效Token">
+                        <h4 style="margin-top:20px;">📱 消息推送设置</h4>
+                        <label>PushPlus Token (微信推送)</label><input type="text" name="pushplus_token" value="{{ cfg.pushplus_token }}" placeholder="留空则不推送">
+                        <label>Telegram Bot Token</label><input type="text" name="tg_bot_token" value="{{ cfg.tg_bot_token }}" placeholder="例: 123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11">
+                        <label>Telegram Chat ID</label><input type="text" name="tg_chat_id" value="{{ cfg.tg_chat_id }}" placeholder="例: 123456789">
                     </div>
                 </div>
-
                 <button type="submit" style="width:100%; margin-top:15px; font-size:16px;">💾 写入配置并重启引擎矩阵</button>
             </form>
-        </div>
-        <div style="height: 40px;"></div>
+        </div><div style="height: 40px;"></div>
     </div>
-
     <script>
-        function syncOpenList() {
-            fetch('/api/sync').then(r => alert('同步指令已下发！请看上方日志。'));
-        }
-        function clearAllCache() {
-            if(confirm('⚠️ 警告：这会清空所有 3 个卡槽 [秒传目录] 下的缓存视频，并强制清空天翼云回收站！\\n\\n确定要执行物理粉碎吗？')) {
-                fetch('/api/clear_all', {method: 'POST'}).then(r => alert('🚀 核弹已发射！请看上方日志面板查看清理进度。'));
-            }
-        }
+        function syncOpenList() { fetch('/api/sync').then(r => alert('同步指令已下发！请看上方日志。')); }
+        function clearAllCache() { if(confirm('⚠️ 确定要清空吗？')) { fetch('/api/clear_all', {method: 'POST'}).then(r => alert('🚀 核弹已发射！')); } }
         function fetchLogs() {
             fetch('/admin/logs').then(r => r.json()).then(logs => {
                 const box = document.getElementById('logBox');
-                const oldScrollTop = box.scrollTop;
-                const oldScrollHeight = box.scrollHeight;
-                const clientHeight = box.clientHeight;
-                
+                const oldScrollTop = box.scrollTop, oldScrollHeight = box.scrollHeight, clientHeight = box.clientHeight;
                 box.innerHTML = logs.map(l => `<span class="log-time">[${l.time}]</span><span class="log-msg ${l.msg.includes('✅') ? 'log-SUCCESS' : 'log-' + l.level}">${l.msg}</span><br>`).join('');
-                
-                if (oldScrollHeight - clientHeight - oldScrollTop < 30) {
-                    box.scrollTop = box.scrollHeight;
-                } else {
-                    box.scrollTop = oldScrollTop;
-                }
+                if (oldScrollHeight - clientHeight - oldScrollTop < 30) { box.scrollTop = box.scrollHeight; } else { box.scrollTop = oldScrollTop; }
             });
         }
-        setInterval(fetchLogs, 2000);
-        fetchLogs();
+        setInterval(fetchLogs, 2000); fetchLogs();
     </script>
 </body>
 </html>
 """
 
-@app.route('/admin')
+@app_main.route('/admin')
 def admin_index():
     cfg = read_config()
     with cache_lock: count = len(upload_cache)
     return render_template_string(ADMIN_HTML, cfg=cfg, cache_count=count, msg=request.args.get('msg'))
 
-@app.route('/admin/logs')
-def get_logs():
-    return jsonify(list(log_buffer))
+@app_main.route('/admin/logs')
+def get_logs(): return jsonify(list(log_buffer))
 
 # ==========================================
 # ☁️ 天翼云核心功能类
@@ -1964,34 +2885,35 @@ def get_logs():
 class TianyiFinalUploader:
     def __init__(self):
         self.rsa_keys = {}
+        self.session = requests.Session()
 
     def get_base_headers(self, session_key):
-        return {
-            'User-Agent': 'ecloud/10.2.1 (Windows NT 10.0; Win64; x64)', 
-            'Cookie': f"SESSION_KEY={session_key}; cookieUserSession={session_key}", 
-            'Accept': 'application/json;charset=UTF-8',
-            'clientType': 'TELEMAC'
-        }
+        return {'User-Agent': 'ecloud/10.2.1 (Windows NT 10.0; Win64; x64)', 'Cookie': f"SESSION_KEY={session_key}; cookieUserSession={session_key}", 'Accept': 'application/json;charset=UTF-8', 'clientType': 'TELEMAC'}
 
     def _random_string(self, length=16): return ''.join(random.choices('0123456789abcdef', k=length))
     def _get_timestamp(self): return str(int(time.time() * 1000))
+
+    def _get_slice_size(self, file_size):
+        try: size = int(file_size)
+        except: return '10485760'  
+        D = 10485760
+        if size > D * 2 * 999: return str(max(math.ceil(size / 1999 / D), 5) * D)
+        elif size > D * 999: return str(D * 2)
+        return str(D)
 
     def get_rsa_key(self, session_key):
         if session_key in self.rsa_keys: return self.rsa_keys[session_key]
         url = f"https://cloud.189.cn/api/security/generateRsaKey.action?sessionKey={urllib.parse.quote(session_key)}"
         for _ in range(3):
             try:
-                res = requests.get(url, headers=self.get_base_headers(session_key), timeout=10).json()
+                res = self.session.get(url, headers=self.get_base_headers(session_key), timeout=10).json()
                 if 'pubKey' in res:
                     self.rsa_keys[session_key] = res
                     return res
-                if str(res.get('res_code')) == '111' or 'Session' in str(res):
-                    raise Exception("公钥获取拦截_AUTH_FAIL")
+                if str(res.get('res_code')) == '111' or 'Session' in str(res): raise Exception("公钥获取拦截_AUTH_FAIL")
             except Exception as e: 
                 if "AUTH_FAIL" in str(e): raise e
             time.sleep(2)
-            
-        logger.error(f"❌ 无法获取公钥！凭证尾号 [{session_key[-4:]}] 可能已失效！")
         raise Exception("无法获取公钥_AUTH_FAIL")
 
     def build_request(self, params, request_uri, req_id, session_key):
@@ -2011,58 +2933,49 @@ class TianyiFinalUploader:
     def get_family_items(self, family_id, folder_id, session_key):
         all_items = []
         params = {"familyId": family_id, "folderId": folder_id, "pageSize": 60, "sessionKey": session_key}
-        res = requests.get("https://cloud.189.cn/api/open/family/file/listFiles.action", params=params, headers=self.get_base_headers(session_key), timeout=10).json()
-        
-        if str(res.get('res_code')) == '111' or 'Session' in str(res):
-            raise Exception("接口返回111_AUTH_FAIL")
-            
-        for f in res.get('fileListAO', {}).get('fileList', []):
-            all_items.append({'fileName': f['name'], 'fileId': f['id']})
+        res = self.session.get("https://cloud.189.cn/api/open/family/file/listFiles.action", params=params, headers=self.get_base_headers(session_key), timeout=10).json()
+        if str(res.get('res_code')) == '111' or 'Session' in str(res): raise Exception("接口返回111_AUTH_FAIL")
+        for f in res.get('fileListAO', {}).get('fileList', []): all_items.append({'fileName': f['name'], 'fileId': f['id']})
         return all_items
 
     def delete_item(self, family_id, file_id, session_key):
         url = "https://cloud.189.cn/api/open/family/file/deleteFile.action"
         p = {"familyId": family_id, "fileId": file_id, "sessionKey": session_key}
-        try: return requests.post(url, params=p, headers=self.get_base_headers(session_key), timeout=10).status_code == 200
+        try: return self.session.post(url, params=p, headers=self.get_base_headers(session_key), timeout=10).status_code == 200
         except: return False
 
     def empty_family_recycle(self, family_id, session_key):
         url = "https://cloud.189.cn/api/open/batch/createBatchTask.action"
         payload = {"type": "EMPTY_RECYCLE", "taskInfos": "[]", "targetFolderId": "", "familyId": family_id, "sessionKey": session_key}
         try:
-            res = requests.post(url, data=payload, headers=self.get_base_headers(session_key), timeout=10).json()
+            res = self.session.post(url, data=payload, headers=self.get_base_headers(session_key), timeout=10).json()
             if str(res.get("res_code")) == "0": return True
         except: pass
         return False
 
     def rapid_upload(self, family_id, parent_folder_id, md5, size, smd5, safe_name, session_key):
         req_id = str(uuid.uuid4())
-        init_p = {'familyId': family_id, 'parentFolderId': parent_folder_id, 'fileName': urllib.parse.quote(safe_name), 'fileSize': str(size), 'sliceSize': '10485760', 'fileMd5': md5, 'sliceMd5': smd5, 'lazyCheck': '1', 'opertype': '3'}
+        slice_size = self._get_slice_size(size)  
+        init_p = {'familyId': family_id, 'parentFolderId': parent_folder_id, 'fileName': urllib.parse.quote(safe_name), 'fileSize': str(size), 'sliceSize': slice_size, 'fileMd5': md5, 'sliceMd5': smd5, 'lazyCheck': '1', 'opertype': '3'}
         url, h = self.build_request(init_p, '/family/initMultiUpload', req_id, session_key)
-        res = requests.get(url, headers=h).json()
+        res = self.session.get(url, headers=h).json()
         if res.get('code') != 'SUCCESS': 
             msg_str = str(res.get('msg', ''))
-            if any(k in msg_str.lower() for k in ['session', 'privatekey', '111']):
-                raise Exception(f"秒传初始化拒绝_AUTH_FAIL: {msg_str}")
+            if any(k in msg_str.lower() for k in ['session', 'privatekey', '111']): raise Exception(f"秒传初始化拒绝_AUTH_FAIL: {msg_str}")
             raise Exception(f"秒传初始化失败: {msg_str}")
         
         up_id = res['data']['uploadFileId']
-        
         ck_p = {'familyId': family_id, 'fileMd5': md5, 'sliceMd5': smd5, 'uploadFileId': up_id}
         url, h = self.build_request(ck_p, '/family/checkTransSecond', req_id, session_key)
-        if not requests.get(url, headers=h).json().get('data', {}).get('fileDataExists'): 
-            raise Exception("云端无此文件 (可能是死链或MD5未入库)")
+        if not self.session.get(url, headers=h).json().get('data', {}).get('fileDataExists'): raise Exception("云端无此文件")
         
         cm_p = {'familyId': family_id, 'uploadFileId': up_id, 'fileMd5': md5, 'sliceMd5': smd5, 'lazyCheck': '1', 'opertype': '3'}
         url, h = self.build_request(cm_p, '/family/commitMultiUploadFile', req_id, session_key)
-        
-        commit_res = requests.get(url, headers=h).json()
+        commit_res = self.session.get(url, headers=h).json()
         file_info = commit_res.get('file')
-        if not file_info:
-            raise Exception(f"秒传确认失败，云端异常拦截: {commit_res.get('msg', '未知错误')}")
-            
+        if not file_info: raise Exception(f"秒传确认失败: {commit_res.get('msg', '未知错误')}")
         return file_info['userFileId']
-
+            
 client = TianyiFinalUploader()
 
 def cleanup_worker(name, f_md5, fam_id, fold_id, session_key):
@@ -2088,43 +3001,88 @@ def cleanup_worker(name, f_md5, fam_id, fold_id, session_key):
     logger.info(f"🗑️ 视频删除: [{name}]")
 
     try:
+        # --- 原版正常删除逻辑 ---
         items = client.get_family_items(fam_id, fold_id, session_key)
         real_fid = next((i['fileId'] for i in items if f_md5 in i['fileName'] or i['fileName'] == name), None)
         
+        deleted = False
         if real_fid and client.delete_item(fam_id, real_fid, session_key):
+            deleted = True
             time.sleep(2) 
             if client.empty_family_recycle(fam_id, session_key):
                 logger.info(f"♻️ 清空回收站: 存储卡槽 [{fam_id[-4:]}] 空间已释放")
+                
+        # --- 方案一：如果正常删除没成功，调出卡槽 6 的钥匙兜底 ---
+        if not deleted:
+            logger.warning(f"⚠️ 常规删除受阻，触发兜底: 尝试调用卡槽 6 凭证强删！")
+            cfg = read_config()
+            if len(cfg.get('family_clouds', [])) > 5 and cfg['family_clouds'][5].get('session_key'):
+                master_sk = cfg['family_clouds'][5]['session_key']
+                
+                # 用卡槽 6 的钥匙重新查一次
+                master_items = client.get_family_items(fam_id, fold_id, master_sk)
+                master_fid = next((i['fileId'] for i in master_items if f_md5 in i['fileName'] or i['fileName'] == name), None)
+                
+                # 用卡槽 6 的钥匙去删和清空回收站
+                if master_fid and client.delete_item(fam_id, master_fid, master_sk):
+                    logger.info(f"✅ 兜底强删成功: 已使用卡槽 6 凭证销毁 [{name}]")
+                    time.sleep(2)
+                    if client.empty_family_recycle(fam_id, master_sk):
+                        logger.info(f"♻️ 借用主号权限清空回收站完毕。")
+                else:
+                    logger.error(f"❌ 兜底失败：卡槽 6 凭证也无法删除该文件。")
+            else:
+                logger.warning(f"❌ 无法执行兜底删除：卡槽 6 未配置或凭证无效。")
+
     except Exception as e:
         logger.error(f"🗑️ 后台删除作业受阻: {e}")
         
     with cache_lock:
         if f_md5 in upload_cache: del upload_cache[f_md5]
 
-@app.route('/play', methods=['GET', 'HEAD'])
+@app_main.route('/play', methods=['GET', 'HEAD'])
 def play():
-    if request.method == 'HEAD': return "", 200, {'Content-Type': 'video/mp4', 'Accept-Ranges': 'bytes'}
+    if request.method == 'HEAD': 
+        try:
+            cas = request.args.get('cas')
+            j = json.loads(base64.b64decode(cas).decode())
+            
+            raw_size = j.get('size') or j.get('fileSize') or 0
+            name = j.get('name') or j.get('fileName') or ""
+            ext = name.split('.')[-1].lower() if '.' in name else 'mp4'
+            
+            mime_dict = {
+                'mp4': 'video/mp4', 'mkv': 'video/x-matroska', 'ts':  'video/mp2t',
+                'avi': 'video/x-msvideo', 'mov': 'video/quicktime', 'webm':'video/webm'
+            }
+            content_type = mime_dict.get(ext, 'video/mp4')
+
+            return "", 200, {
+                'Content-Type': content_type, 
+                'Accept-Ranges': 'bytes',
+                'Content-Length': str(raw_size)
+            }
+        except:
+            return "", 200, {'Content-Type': 'video/mp4', 'Accept-Ranges': 'bytes'}
 
     cas = request.args.get('cas')
     show_name_from_url = request.args.get('show', '').strip()
     safe_name = "未知文件"
-    
     try:
         j = json.loads(base64.b64decode(cas).decode())
         f_md5 = str(j.get('md5') or j.get('fileMd5')).upper()
         s_md5 = str(j.get('slice_md5') or j.get('sliceMd5')).upper()
-        
+        raw_size = j.get('size') or j.get('fileSize')
+        human_size = format_size(raw_size)
         name = j.get('name') or j.get('fileName')
         base_safe_name = "".join(x for x in name if x not in r'\/:*?"<>|')
         
-        if show_name_from_url:
-            show_identifier = re.sub(r'\s*\(\d{4}\)$', '', show_name_from_url).strip()
+        if show_name_from_url: show_identifier = re.sub(r'\s*\(\d{4}\)$', '', show_name_from_url).strip()
         else:
             guess = re.split(r'(?i)\.S\d+|\.E\d+|-第\d+集', base_safe_name)[0]
             show_identifier = re.sub(r'\s*\(\d{4}\)$', '', guess).strip()
             
         bind_key = show_identifier
-
         ext = os.path.splitext(base_safe_name)[1]
         if not ext or len(ext) > 6: ext = ".mp4"
 
@@ -2134,24 +3092,16 @@ def play():
             if m: 
                 ep_num = int(m.group(1))
                 break
-
         s_match = re.search(r'(?i)S0*(\d+)', base_safe_name)
         s_num = int(s_match.group(1)) if s_match else 1
 
-        # ============================================
-        # 1. 绝对原版的 safe_name 生成逻辑 (一字不动)
-        # ============================================
-        if show_identifier and ep_num is not None:
-            safe_name = f"{show_identifier}.S{s_num:02d}E{ep_num:02d}{ext}"
+        if show_identifier and ep_num is not None: safe_name = f"{show_identifier}.S{s_num:02d}E{ep_num:02d}{ext}"
         else:
-            if bind_key and bind_key not in base_safe_name:
-                safe_name = f"{bind_key}.{base_safe_name}"
-            else:
-                safe_name = base_safe_name
+            year_match = re.search(r'(?<!\d)(19\d{2}|20\d{2})(?!\d)', base_safe_name)
+            year_str = f".{year_match.group(1)}" if year_match else ""
+            if show_identifier: safe_name = f"{show_identifier}{year_str}{ext}"
+            else: safe_name = base_safe_name
 
-        # ============================================
-        # 2. 仅在生成好的原版 safe_name 后缀前插入画质标签
-        # ============================================
         tags = []
         if re.search(r'(?i)\bSDR\b', base_safe_name): tags.append("SDR")
         if re.search(r'(?i)\bHDR\b', base_safe_name): tags.append("HDR")
@@ -2160,14 +3110,11 @@ def play():
         tag_str = "." + ".".join(tags) if tags else ""
         
         if tag_str:
-            if safe_name.endswith(ext):
-                safe_name = safe_name[:-len(ext)] + tag_str + ext
-            else:
-                safe_name = safe_name + tag_str + ext
+            if safe_name.endswith(ext): safe_name = safe_name[:-len(ext)] + tag_str + ext
+            else: safe_name = safe_name + tag_str + ext
                 
         cfg = read_config()
         current_time = time.time()
-        
         fam_fid, target_fam_id, target_fold_id, target_session_key, target_prefix, target_mount, is_new, requires_cleanup = None, None, None, None, None, None, False, False
         s_idx = 0
 
@@ -2175,25 +3122,16 @@ def play():
             if f_md5 in upload_cache:
                 target_prefix = upload_cache[f_md5]['prefix']
                 
-                shield_delay = cfg.get('shield_delay', 2700) 
-                brother_shield_time = current_time + shield_delay
-                extended_count = 0
-                
-                for k, v in upload_cache.items():
-                    if v.get('show_name') == bind_key and k != f_md5:
-                        if v['expire'] < brother_shield_time:
-                            v['expire'] = brother_shield_time
-                            extended_count += 1
+                # 🔪 砍掉互相加持的毒瘤逻辑！维持原判，各自安好！
                 
                 last_log_time = upload_cache[f_md5].get('last_log', 0)
                 if current_time - last_log_time > 60: 
                     expire_self_str = time.strftime("%H:%M:%S", time.localtime(upload_cache[f_md5]['expire']))
-                    logger.info(f"📡 探针侦测: [{safe_name}] 预计于 {expire_self_str} 删除 (已为 {extended_count} 个续集加持护盾)")
+                    logger.info(f"📡 探针侦测: [{safe_name}] 预计于 {expire_self_str} 准时处决！")
                     upload_cache[f_md5]['last_log'] = current_time
             else:
-                cloud, s_idx = get_target_cloud(cfg, bind_key)
+                cloud, s_idx = get_target_cloud(cfg, bind_key, file_size=raw_size)
                 if not cloud: raise Exception("未配置有效的家庭云阵列！请检查后台。")
-                
                 target_fam_id = cloud['family_id']
                 target_fold_id = cloud['hard_folder_id']
                 target_session_key = cloud['session_key']
@@ -2201,33 +3139,21 @@ def play():
                 target_mount = cloud['openlist_mount_path']
 
                 brother_exists = any(v.get('show_name') == bind_key for v in upload_cache.values())
-                
-                if brother_exists:
-                    shield_delay = cfg.get('shield_delay', 2700)
-                    initial_expire = current_time + shield_delay
-                else:
-                    initial_expire = current_time + cfg.get('delete_delay', 600)
+                if brother_exists: initial_expire = current_time + cfg.get('shield_delay', 2700)
+                else: initial_expire = current_time + cfg.get('delete_delay', 600)
 
-                upload_cache[f_md5] = {
-                    'fid': 'processing', 
-                    'expire': initial_expire, 
-                    'fam_id': target_fam_id, 'fold_id': target_fold_id, 
-                    'session_key': target_session_key, 'prefix': target_prefix, 'mount': target_mount,
-                    'show_name': bind_key
-                }
+                upload_cache[f_md5] = {'fid': 'processing', 'expire': initial_expire, 'fam_id': target_fam_id, 'fold_id': target_fold_id, 'session_key': target_session_key, 'prefix': target_prefix, 'mount': target_mount, 'show_name': bind_key}
                 requires_cleanup = True
                 
         if requires_cleanup:
             try:
-                if not target_session_key:
-                    raise Exception("AUTH_FAIL: 本地凭证为空，强制触发自愈流程")
-                    
+                if not target_session_key: raise Exception("AUTH_FAIL: 本地凭证为空，强制触发自愈流程")
                 items = client.get_family_items(target_fam_id, target_fold_id, target_session_key)
                 fam_fid = next((i['fileId'] for i in items if f_md5 in i['fileName'] or i['fileName'] == safe_name), None)
-                
                 if not fam_fid:
-                    logger.info(f"🔄 路由调度: [{bind_key}] -> 卡槽 {target_fam_id[-4:]}")
-                    fam_fid = client.rapid_upload(target_fam_id, target_fold_id, f_md5, j.get('size') or j.get('fileSize'), s_md5, safe_name, target_session_key)
+                    # 🚀 修复日志提示：打印真实的卡槽索引
+                    logger.info(f"🔄 路由调度: [{bind_key}] ({human_size}) -> 卡槽 {s_idx+1}")
+                    fam_fid = client.rapid_upload(target_fam_id, target_fold_id, f_md5, raw_size, s_md5, safe_name, target_session_key)
                     is_new = True
             except Exception as e:
                 err_str = str(e).lower()
@@ -2237,84 +3163,86 @@ def play():
                     if new_sk:
                         target_session_key = new_sk
                         with cache_lock: upload_cache[f_md5]['session_key'] = new_sk
-                        
                         items = client.get_family_items(target_fam_id, target_fold_id, target_session_key)
                         fam_fid = next((i['fileId'] for i in items if f_md5 in i['fileName'] or i['fileName'] == safe_name), None)
                         if not fam_fid:
-                            fam_fid = client.rapid_upload(target_fam_id, target_fold_id, f_md5, j.get('size') or j.get('fileSize'), s_md5, safe_name, target_session_key)
+                            fam_fid = client.rapid_upload(target_fam_id, target_fold_id, f_md5, raw_size, s_md5, safe_name, target_session_key)
                             is_new = True
                     else:
-                        if s_idx == 2 and not cfg['family_clouds'][2].get('username'):
-                            logger.warning("🔄 卡槽 3 外部凭证失效，正在触发【无缝故障转移】至主卡槽...")
+                        if s_idx == 5 and not cfg['family_clouds'][5].get('username'):
+                            logger.warning("🔄 卡槽 6 外部凭证失效，正在触发【无缝故障转移】至主卡槽(卡槽1)...")
                             if len(cfg['family_clouds']) > 0 and cfg['family_clouds'][0].get('session_key'):
                                 target_fam_id = cfg['family_clouds'][0]['family_id']
                                 target_fold_id = cfg['family_clouds'][0]['hard_folder_id']
                                 target_session_key = cfg['family_clouds'][0]['session_key']
                                 target_prefix = cfg['family_clouds'][0]['openlist_prefix']
                                 target_mount = cfg['family_clouds'][0]['openlist_mount_path']
-                                
                                 with cache_lock:
-                                    upload_cache[f_md5]['fam_id'] = target_fam_id
-                                    upload_cache[f_md5]['fold_id'] = target_fold_id
-                                    upload_cache[f_md5]['session_key'] = target_session_key
-                                    upload_cache[f_md5]['prefix'] = target_prefix
-                                    upload_cache[f_md5]['mount'] = target_mount
-                                
+                                    upload_cache[f_md5].update({'fam_id': target_fam_id, 'fold_id': target_fold_id, 'session_key': target_session_key, 'prefix': target_prefix, 'mount': target_mount})
                                 items = client.get_family_items(target_fam_id, target_fold_id, target_session_key)
                                 fam_fid = next((i['fileId'] for i in items if f_md5 in i['fileName'] or i['fileName'] == safe_name), None)
                                 if not fam_fid:
-                                    fam_fid = client.rapid_upload(target_fam_id, target_fold_id, f_md5, j.get('size') or j.get('fileSize'), s_md5, safe_name, target_session_key)
+                                    fam_fid = client.rapid_upload(target_fam_id, target_fold_id, f_md5, raw_size, s_md5, safe_name, target_session_key)
                                     is_new = True
-                            else:
-                                raise Exception("卡槽 3 无法恢复，且主卡槽不可用，降级转移彻底失败！")
-                        else:
-                            raise Exception(f"卡槽 {s_idx+1} 防线自愈失败，无法重建有效凭证！")
-                else:
-                    raise e
+                            else: raise Exception("卡槽 6 无法恢复，且主卡槽(1)不可用，降级转移彻底失败！")
+                        else: raise Exception(f"卡槽 {s_idx+1} 防线自愈失败，无法重建有效凭证！")
+                else: raise e
                 
             if fam_fid:
                 if is_new:
-                    if brother_exists: 
-                        logger.info(f"✅ 秒传成功: [{safe_name}] (被动预加载，已天生加持长效护盾)")
+                    if brother_exists: logger.info(f"✅ 秒传成功: [{safe_name}] ({human_size}) (被动预加载，已天生加持长效护盾)")
                     else: 
-                        logger.info(f"✅ 秒传成功: [{safe_name}] 已上传！")
-                        send_push("▶️ 新剧集入库并播放", f"<b>{safe_name}</b><br>已成功秒传至卡槽 {target_fam_id[-4:]} 并启动播放通道。")
-                        
-                with cache_lock:
-                    upload_cache[f_md5]['fid'] = fam_fid
-                
+                        # 🚀 修复日志提示：精准播报具体卡槽
+                        logger.info(f"✅ 秒传成功: [{safe_name}] ({human_size}) 已利用 卡槽 {s_idx+1} 上传！")
+                        send_push("▶️ 新剧集入库并播放", f"<b>{safe_name}</b> ({human_size})<br>已成功利用 <b>卡槽 {s_idx+1}</b> 秒传并启动播放通道。")
+                with cache_lock: upload_cache[f_md5]['fid'] = fam_fid
                 threading.Thread(target=cleanup_worker, args=(safe_name, f_md5, target_fam_id, target_fold_id, target_session_key), daemon=True).start()
-
+        
+        # === 替换 play 函数底部的 if is_new: 以及之后的部分 ===
+        
         if is_new:
-            time.sleep(1.5)
-            try:
-                if cfg['openlist_token'] and target_mount: 
-                    logger.info(f"🔔 正在呼叫 OpenList 强制刷新缓存: {target_mount}")
-                    res = requests.post(f"{cfg['openlist_host']}/api/fs/list", json={"path": target_mount, "refresh": True}, headers={"Authorization": cfg['openlist_token']}, timeout=10)
-                    if res.status_code == 200 and res.json().get('code') == 200:
-                        logger.info("✅ OpenList 缓存刷新成功！播放通道已通畅。")
-                    else:
-                        msg = res.json().get('message', '未知错误')
-                        logger.error(f"❌ OpenList 拒绝刷新 (错误码:{res.json().get('code')}): {msg}")
-                        send_push("⚠️ OpenList 刷新拒绝", f"节点 <b>{target_mount}</b> 刷新失败！<br>报错信息: {msg}<br>请及时登录后台更换最新的 Token。")
-                else:
-                    logger.warning("⚠️ 未配置 OpenList Token 或挂载路径，跳过刷新。")
-            except Exception as e:
-                logger.error(f"❌ 无法连接到 OpenList 服务: {e}")
+            logger.info(f"🔔 启动 OpenList 智能嗅探: 等待天翼云底层数据同步...")
+            found = False
+            # ⚡ 极限轮询：最多查 4 次（最多约 0.8秒），只要查到文件立刻放行，绝不多等 1 毫秒！
+            for step in range(4):
+                time.sleep(0.2)
+                try:
+                    if cfg['openlist_token'] and target_mount: 
+                        res = requests.post(f"{cfg['openlist_host']}/api/fs/list", json={"path": target_mount, "refresh": True}, headers={"Authorization": cfg['openlist_token']}, timeout=3).json()
+                        if res.get('code') == 200:
+                            # 把 OpenList 当前目录下的所有文件名扫一遍
+                            files = [f.get('name') for f in res.get('data', {}).get('content', [])]
+                            # 如果咱们刚传的文件已经冒头了
+                            if safe_name in files:
+                                logger.info(f"✅ 第 {step+1} 次嗅探成功！文件已在 OpenList 极速就绪！")
+                                found = True
+                                break
+                except Exception as e:
+                    pass
+                
+            if not found:
+                logger.warning(f"⚠️ 嗅探结束，天翼云底层同步严重延迟，强行放行赌一把！")
 
+        # 👇 新增：内网直链解析
+        lan_ip = get_lan_server_ip(request)
+        if lan_ip:
+            parsed_prefix = urllib.parse.urlparse(target_prefix)
+            # 剥离外网穿透，强制替换为内网 openlist 专属的 5244 访问端口
+            local_alist_host = f"http://{lan_ip}:5244"
+            target_prefix = target_prefix.replace(f"{parsed_prefix.scheme}://{parsed_prefix.netloc}", local_alist_host)
+            logger.info(f"🏠 [内网嗅探] 真实流媒体通道已切换为内网直连: {local_alist_host}")
+        # 👆 新增结束
+
+        # 🎯 无论新旧文件，全部老老实实走 OpenList 通道！
+        logger.info(f"🔄 路由导向: [{safe_name}] 已移交 OpenList 播放通道！")
         return redirect(f"{target_prefix.rstrip('/')}/{urllib.parse.quote(safe_name)}", code=302)
         
     except Exception as e:
         logger.error(f"❌ 链路故障: {e}")
-        
-        # ============================================
-        # 🚨 致命死锁修复：报错拦截区瞬间抹除假缓存
-        # ============================================
         with cache_lock:
             if 'f_md5' in locals() and f_md5 in upload_cache and upload_cache[f_md5].get('fid') == 'processing':
                 del upload_cache[f_md5]
                 logger.info("🧹 已清除因报错假死的转存缓存，通道已重新释放！")
-                
         if "云端无此文件" in str(e) or "秒传初始化失败" in str(e) or "AUTH_FAIL" in str(e) or "privatekey" in str(e).lower():
             send_push("💔 播放链路故障", f"点播 <b>{safe_name}</b> 失败！<br>原因: {e}")
         return f"错误: {e}", 500
@@ -2322,17 +3250,15 @@ def play():
 def warm_up_parent(target_path, headers, cfg):
     if not target_path: return
     base_path = cfg.get('network_cas_path', '').rstrip('/')
-    
     if target_path.startswith(base_path):
         rel_path = target_path[len(base_path):].strip('/')
         parts = rel_path.split('/')
-        
         current_path = base_path
         for part in parts[:-1]:
             current_path = f"{current_path}/{part}"
             logger.info(f"🧊 破冰行动：逐级向下唤醒缓存 -> {current_path}")
             try:
-                requests.post(f"{cfg['openlist_host']}/api/fs/list", json={"path": current_path, "refresh": True}, headers=headers, timeout=5)
+                requests.post(f"{cfg['openlist_host']}/api/fs/list", json={"path": current_path, "page": 1, "per_page": 1000, "refresh": True}, headers=headers, timeout=5)
                 time.sleep(0.5)
             except: pass
 
@@ -2340,70 +3266,52 @@ def scan_openlist_recursive(current_path, headers, result_list, cfg):
     logger.info(f"🔎 正在探测目录: {current_path}")
     try:
         req_headers = headers if cfg['openlist_token'] else {}
-        res = requests.post(f"{cfg['openlist_host']}/api/fs/list", json={"path": current_path, "refresh": True}, headers=req_headers, timeout=15).json()
-        
+        res = requests.post(f"{cfg['openlist_host']}/api/fs/list", json={"path": current_path, "page": 1, "per_page": 1000, "refresh": True}, headers=req_headers, timeout=15).json()
         if res.get("code") != 200: 
-            logger.error(f"❌ OpenList 扫描拒绝 (可能 Token 错误或路径不存在): {res.get('message')}")
+            logger.error(f"❌ OpenList 扫描拒绝: {res.get('message')}")
             return
-            
         for f in res.get("data", {}).get("content", []):
             if f.get("is_dir"): scan_openlist_recursive(f"{current_path}/{f['name']}", headers, result_list, cfg)
             elif f['name'].endswith('.cas'): result_list.append(f"{current_path}/{f['name']}")
-    except Exception as e:
-        logger.error(f"❌ 探测目录失败 {current_path}: {e}")
+    except Exception as e: logger.error(f"❌ 探测目录失败 {current_path}: {e}")
 
 def generate_strm_from_openlist_to_local(target_path=None):
     cfg = read_config()
     scan_root = target_path if target_path else cfg['network_cas_path']
     base_cas_path = cfg['network_cas_path']
-    
     os.makedirs(cfg['local_strm_dir'], exist_ok=True)
     headers = {"Authorization": cfg['openlist_token']} if cfg['openlist_token'] else {}
-    
     if target_path: warm_up_parent(target_path, headers, cfg)
     
     logger.info(f"🔄 启动 OpenList 扫描 -> 目标区域: {scan_root}")
     cas_files = []
-    
     scan_openlist_recursive(scan_root, headers, cas_files, cfg)
-    if not cas_files:
-        logger.info(f"⚠️ 扫描完毕：该区域下未找到任何 .cas 文件")
-        return
+    if not cas_files: return logger.info(f"⚠️ 扫描完毕：该区域下未找到任何 .cas 文件")
         
     count = 0
     for full_path in cas_files:
         try:
-            if full_path.startswith(base_cas_path):
-                rel_path = full_path[len(base_cas_path):].lstrip('/')
-            else:
-                rel_path = full_path.split('/')[-1]
-                
+            if full_path.startswith(base_cas_path): rel_path = full_path[len(base_cas_path):].lstrip('/')
+            else: rel_path = full_path.split('/')[-1]
             rel_dir = os.path.dirname(rel_path)
-            
             dir_parts = [p for p in rel_dir.split('/') if p]
             show_name = ""
             for part in reversed(dir_parts):
                 if not re.match(r'(?i)^(season\s*\d+|specials|电视剧|电影|动漫|纪录片|综艺)$', part):
-                    show_name = part
-                    break
-            
+                    show_name = part; break
             if not show_name and dir_parts: show_name = dir_parts[-1] 
             if not show_name: show_name = "未知剧集"
-            
             show_name = re.sub(r'\s*\(\d{4}\)$', '', show_name).strip()
-                
             base_name = os.path.basename(rel_path).rsplit('.', 1)[0]
             
             target_local_dir = os.path.join(cfg['local_strm_dir'], rel_dir)
             os.makedirs(target_local_dir, exist_ok=True)
             strm_path = os.path.join(target_local_dir, f"{base_name}.strm")
-            
             if os.path.exists(strm_path): continue
             
             get_res = requests.post(f"{cfg['openlist_host']}/api/fs/get", json={"path": full_path}, headers=headers).json()
             raw_url = get_res.get("data", {}).get("raw_url")
             if not raw_url: continue
-            
             cas_content = requests.get(raw_url).text.strip()
             strm_data = f"{cfg['server_host']}/play?cas={urllib.parse.quote(cas_content)}&show={urllib.parse.quote(show_name)}"
             
@@ -2419,17 +3327,158 @@ def generate_strm_from_openlist_to_local(target_path=None):
             send_push("🎬 STRM同步成功", f"成功生成并归档了 {count} 个媒体文件，并已触发媒体库刷新。")
         except: pass
 
-@app.route('/api/sync')
+@app_main.route('/api/sync')
 def trigger_sync():
     target_path = request.args.get('path') 
     threading.Thread(target=generate_strm_from_openlist_to_local, args=(target_path,), daemon=True).start()
     return "✅ 同步指令下发成功", 200
 
+# ==========================================
+# 🔀 独立服务二号头：5001 端口专属 302 劫持 (完全迎合旧 Nginx)
+# ==========================================
+emby_session = requests.Session()
+
+@functools.lru_cache(maxsize=256)
+def get_emby_item_path(item_id):
+    try:
+        url = f"{EMBY_HOST}/emby/Items?Ids={item_id}&Fields=Path&api_key={API_KEY_LINUX}"
+        res = emby_session.get(url, timeout=3)
+        if res.status_code == 200:
+            items = res.json().get('Items', [])
+            if items: return items[0].get('Path', ''), "Linux(主力)"
+    except: pass
+    try:
+        url = f"{EMBY_HOST}/emby/Items?Ids={item_id}&Fields=Path&api_key={API_KEY_APP}"
+        res = emby_session.get(url, timeout=3)
+        if res.status_code == 200:
+            items = res.json().get('Items', [])
+            if items: return items[0].get('Path', ''), "APP(备用)"
+    except: pass
+    return None, None
+
+@app_302.route('/', defaults={'path': ''}, methods=['GET', 'HEAD', 'POST', 'OPTIONS'])
+@app_302.route('/<path:full_path>', methods=['GET', 'HEAD', 'POST', 'OPTIONS'])
+def catch_all_for_emby(full_path):
+    # 🚀 扩大雷达：把 Vidhub、Infuse 爱用的 Download 路径全部罩进去！
+    # （注：不要拦截 PlaybackInfo，因为那是 Emby 客户端要 JSON 数据的，强行 302 会报错）
+    match = re.search(r'/(?:videos|Items)/(\d+)/(?:stream|original|Download)', request.path, re.IGNORECASE)
+    
+    if not match:
+        return redirect(f"{EMBY_HOST}{request.full_path}", code=302)
+    item_id = match.group(1)
+    
+    try:
+        file_path, version = get_emby_item_path(item_id)
+        if not file_path: return redirect(f"{EMBY_HOST}{request.full_path}", code=302)
+        file_name = file_path.split('/')[-1] if file_path else "未知文件"
+        if file_path.lower().endswith('.strm') and os.path.exists(file_path):
+                with open(file_path, 'r', encoding='utf-8') as f: strm_url = f.read().strip()
+                
+                # 👇 新增：内网智能分流
+                cfg = read_config()
+                lan_ip = get_lan_server_ip(request)
+                if lan_ip:
+                    # 检测到内网访问，将 STRM 里的外网 host 动态替换为当前 Termux 的局域网 IP + 5000 重定向端口
+                    local_cas_host = f"http://{lan_ip}:5000"
+                    strm_url = strm_url.replace(cfg['server_host'], local_cas_host)
+                    logger.info(f"🏠 [内网嗅探] 识别到局域网播放，路由已切至: {local_cas_host}")
+                # 👆 新增结束
+                
+                logger.info(f"✅ 🔺[{version}劫持成功] Player -> {file_name}")
+                return redirect(strm_url, code=302)
+        else:
+            logger.info(f"▶️ 🔻[{version}常规播放] 丢回Emby -> {file_name}")
+            return redirect(f"{EMBY_HOST}{request.full_path}", code=302)
+    except Exception as e:
+        logger.error(f"❌ [劫持出错] 兜底放行: {e}")
+        return redirect(f"{EMBY_HOST}{request.full_path}", code=302)
+
+# ==========================================
+# 🚀 引擎启动：双线程齐发
+# ==========================================
+def run_main():
+    # 改为 '::' 监听所有 IPv4 和 IPv6，配合上面的智能锁，局域网全通！
+    app_main.run(host='::', port=5000, use_reloader=False)
+
+def run_302():
+    app_302.run(host='::', port=5001, use_reloader=False)
+
+# ==========================================
+# 🛡️ 后台错峰保活机制 (防风控打更人)
+# ==========================================
+def keep_alive_worker():
+    logger.info("🛡️ 后台错峰保活机制已启动，将在后台默默守护你的天翼云 Key...")
+    # 刚启动时别急着刷，先等 5 分钟，让主程序安稳落地
+    time.sleep(600)
+    
+    while True:
+        try:
+            cfg = read_config()
+            clouds = cfg.get('family_clouds', [])
+            
+            for i, fc in enumerate(clouds):
+                # 💥 核心防御 1：跳过无账号密码的槽位（避开外部同步卡槽和废弃卡槽）
+                if not fc.get('username') or not fc.get('password'):
+                    continue
+                
+                sk = fc.get('session_key')
+                fam_id = fc.get('family_id')
+                fold_id = fc.get('hard_folder_id')
+                
+                logger.info(f"🛡️ [保活巡更] 正在探测 卡槽 {i+1} 凭证健康度...")
+                
+                is_alive = False
+                if sk and fam_id and fold_id:
+                    try:
+                        # 🎯 智能探针：用现有的 Key 发起一次极小代价的目录查询
+                        # 如果没有报错，说明 Key 是活的，并且这次请求也起到了防止服务器休眠的作用
+                        client.get_family_items(fam_id, fold_id, sk)
+                        is_alive = True
+                        logger.info(f"✨ 卡槽 {i+1} 凭证状态极其健康，无需重登！(已完成触碰保活)")
+                    except Exception as e:
+                        err_str = str(e).lower()
+                        if any(k in err_str for k in ["auth_fail", "111", "session"]):
+                            # 明确是被踢下线或过期了
+                            is_alive = False 
+                        else:
+                            # 可能是网络波动、请求超时等，暂定存活，绝不盲目重登
+                            is_alive = True
+                            logger.warning(f"⚠️ 卡槽 {i+1} 探测遇到网络波动，跳过刷新: {e}")
+                
+                # 只有明确探测到 Key 死透了，或者压根就没有 Key，才触发自愈重登
+                if not is_alive:
+                    refresh_slot_logic(i, cfg)
+                
+                # 💥 核心防御 2：绝对错峰！刷完一个号，强行随机休眠 10 到 30 分钟！
+                sleep_time = random.randint(600, 1800)
+                logger.info(f"💤 [防风控] 卡槽 {i+1} 巡检完毕，打更人休眠 {sleep_time} 秒后去下一个卡槽...")
+                time.sleep(sleep_time)
+
+            logger.info("✅ 本轮打更巡检完成！所有主力卡槽凭证已全员满血！")
+        except Exception as e:
+            logger.error(f"❌ 保活线程遇到意外: {e}")
+
+        # 整体大循环间隔：每隔 180 分钟（10800秒）启动下一轮大巡检
+        logger.info("⏳ 打更人进入深度睡眠，120 分钟后开启下一轮巡视。")
+        time.sleep(10800)
+
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    logger.info("✅ 🚦 真·双头蛇引擎启动！(5000端口负责直链/后台 | 5001端口负责Emby劫持)")
+    
+    # 🌟 把保活打更人作为守护线程放出去跑
+    threading.Thread(target=keep_alive_worker, daemon=True).start()
+    
+    t1 = threading.Thread(target=run_main)
+    t2 = threading.Thread(target=run_302)
+    
+    t1.start()
+    t2.start()
+    
+    t1.join()
+    t2.join()
 ```
 2.pm2启动
 
 ```
-cd ~/tcloud && pm2 start cas_server.py --name "cas_server" --interpreter python
+cd ~/189py && pm2 start casplay.py --name "casplay" --interpreter python
 ```

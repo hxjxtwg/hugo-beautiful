@@ -117,13 +117,21 @@ curl -s "http://www.pushplus.plus/send?token=你的Token&title=私人影院更�
 curl -s -X POST "https://api.telegram.org/bot把你的BOT_TOKEN粘贴在这里/sendMessage" -d "chat_id=把你的CHAT_ID粘贴在这里&text=🎬 您的私人影院云盘已扫描完毕，Emby正在入库！" > /dev/null
 EOF
 ```
-或者
+或者双emby版本
 ```
 cat > /data/data/com.termux/files/home/refresh.sh << "EOF"
 #!/bin/bash
+echo "$(date '+%Y-%m-%d %H:%M:%S') - 收到刷新指令，路径: $1" >> /data/data/com.termux/files/home/refresh_log.txt
 
 # 你的真实管理员 Token
-TOKEN="openlist-4ba3bee7-2112-42bd-92e7-6f3a7c67a83a7CIOwhmfYpB9Hi8HX1NYfRJUn1iWvyPnyuoOUPC5Fqn5FGxTwNuKHwRSYCT6OZC2"
+TOKEN="openlist-a87614da-32dd-4b80-9150-6447de823da8f33x53ymkrx0aPKG0HUcsFHmjFRYTKFhSADLRhoQLkXa7ogaiByhWRNEXCjpblp9"
+
+# ==========================================
+# 🔑 双身份密钥配置区
+# ==========================================
+API_KEY_LINUX="751c095055f8493d8e63eb755369b9aa" # [首选] Linux 版密钥
+API_KEY_APP="fcf90c63fd1343cf9e6c66a62f73cfe5"  # [备选] 原 APP 版密钥
+# ==========================================
 
 if [ -z "$1" ]; then
     echo "❌ 错误：请告诉我你要扫哪个目录！"
@@ -160,19 +168,32 @@ scan_dir "$TARGET_PATH"
 echo "🎉 OpenList 专项目录任务已下发完毕！"
 
 # ==========================================
-# 🌟 修复核心：等本地硬盘同步 strm 文件
+# 🌟 等待本地硬盘同步 strm 文件
 # ==========================================
 echo "⏳ 给硬盘 30 秒钟时间生成 strm 文件..."
 sleep 30
 
-echo "🎬 呼叫 Emby 进行扫描..."
-# 捕获 Emby 的真实反应 (HTTP 状态码)
-STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "http://127.0.0.1:8096/Library/Refresh?api_key=fcf90c63fd1343cf9e6c66a62f73cfe5")
+echo "🎬 开始下发【精准局部刷新】指令，优先呼叫 Linux 主力..."
 
-if [ "$STATUS" == "204" ]; then
-    echo "✅ Emby 已成功接收扫描指令！请等待刮削完成推送..."
+# 构建只扫描当前变动目录的 JSON 载荷
+JSON_DATA="{\"Updates\":[{\"Path\":\"$TARGET_PATH\"}]}"
+
+# 1️⃣ 【首选测试】使用 Linux 密钥触发局部刷新
+STATUS_LINUX=$(curl -s -o /dev/null -w "%{http_code}" -H "Content-Type: application/json" -X POST -d "$JSON_DATA" "http://127.0.0.1:8096/Library/Media/Updated?api_key=$API_KEY_LINUX")
+
+if [ "$STATUS_LINUX" == "204" ]; then
+    echo "✅ [主路由成功] Linux Emby 局部刷新已触发！"
 else
-    echo "❌ Emby 呼叫失败！HTTP 状态码: $STATUS (检查 IP、端口或 API Key)"
+    echo "⚠️ Linux 版未响应(状态码:$STATUS_LINUX)，降级呼叫 APP 备用版..."
+    
+    # 2️⃣ 【备选兜底】使用 APP 老密钥再次触发
+    STATUS_APP=$(curl -s -o /dev/null -w "%{http_code}" -H "Content-Type: application/json" -X POST -d "$JSON_DATA" "http://127.0.0.1:8096/Library/Media/Updated?api_key=$API_KEY_APP")
+    
+    if [ "$STATUS_APP" == "204" ]; then
+        echo "✅ [备用路由成功] 独立 APP 版 Emby 局部刷新已触发！"
+    else
+        echo "❌ [全线崩溃] 两个版本的 Emby 均未响应！"
+    fi
 fi
 echo "==================================="
 EOF
@@ -213,7 +234,7 @@ pip install flask requests
 
 监控播放与入库通知
 ```
-cat > ~/tg_bridge.py << "EOF"
+cat > ~/tgms.py << "EOF"
 from flask import Flask, request
 import requests
 import time
@@ -354,19 +375,19 @@ EOF
 
 10.3.静默启动
 ```
-nohup python ~/tg_bridge.py > /dev/null 2>&1 &
+nohup python ~/tgms.py > /dev/null 2>&1 &
 ```
 或启动
 ```
-python ~/tg_bridge.py
+python ~/tgms.py
 ```
 杀掉进程
 ```
-pkill -f tg_bridge.py
+pkill -f tgms.py
 ```
 或
 ```
-pkill -9 -f tg_bridge.py
+pkill -9 -f tgms.py
 ```
 ```
 pkill -9 python
