@@ -103,6 +103,10 @@ pm2 start cloudflared --name "cloudflared" -- tunnel --edge-ip-version 4 --proto
 ```
 pm2 start cloudflared --name "cloudflared" -- tunnel --edge-ip-version 4 --protocol http2 run <你的超长Token>
 ```
+锁定IPV4、quic、配置文件启动
+```
+pm2 start cloudflared --name "cloudflared" -- tunnel --edge-ip-version 4 --protocol quic --config /data/data/com.termux/files/home/.cloudflared/config.yml run xxsky_tunnel
+```
 
 ### 二、FRP
 ### VPS部署服务端 frps
