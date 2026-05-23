@@ -131,6 +131,9 @@ import os
 import json
 import time
 import requests
+import urllib3
+# 🚨 终极核武器：直接在底层网络库中物理阉割 IPv6，防止天翼云 IP 漂移拦截
+urllib3.util.connection.HAS_IPV6 = False
 import re
 import subprocess
 import random
@@ -265,6 +268,7 @@ DIR_MEDIA_PREFIX = "/177-"
 OPENLIST_MOUNT_POINT = "177"    
 
 SUBS_FILE = os.path.join(DB_DIR, "subscriptions.json")
+HARVEST_SUBS_FILE = os.path.join(DB_DIR, "harvest_subs.json") # 🌟 新增收割专属库
 HISTORY_FILE = os.path.join(DB_DIR, "history.json")
 COOKIES_FILE = os.path.join(DB_DIR, "cookies.json")
 SETTINGS_FILE = os.path.join(DB_DIR, "settings.json") # 🌟 新增配置保存
@@ -308,6 +312,14 @@ def clean_filename(name):
     for char in illegal_chars:
         name = name.replace(char, '')
     return name[:255]
+
+# 🌟 将洗名函数提到全局，让收割库也能公用
+def get_match_key(text): 
+    clean = re.sub(r'[（\(\[\{]?\d{4}[）\)\]\}]?', '', text)
+    clean = re.sub(r'(?i)\b(4k|1080p|2160p|web-dl|sdr|hdr)\b', '', clean)
+    clean = re.sub(r'(完结|连载中|全\d+集|打包|修正)', '', clean)
+    clean = re.sub(r'[^\w\u4e00-\u9fa5]', '', clean)
+    return clean.lower()
 
 def rsaEncrpt(password, public_key):
     rsakey = RSA.importKey(public_key)
@@ -618,8 +630,13 @@ def process_cas_via_olist_api():
     OLIST_URL = "http://127.0.0.1:5244"  
     OLIST_USER = "admin"      
     OLIST_PASS = "xxsky1127"   
-    WATCH_DIRS = ["/family/177_cas", "/local_cas"]
+    
+    # 🌟 动态读取巡逻目录，如果没有配置，默认保留原来的两个
+    s = load_json(SETTINGS_FILE)
+    WATCH_DIRS = s.get("watch_dirs", ["/family/177_cas", "/local_cas"])
+    
     processed_names = []
+    if not WATCH_DIRS: return processed_names # 🛡️ 防呆：如果你把目录全删光了，它直接下班，防止报错
 
     try:
         r_log = requests.post(f"{OLIST_URL}/api/auth/login", json={"username": OLIST_USER, "password": OLIST_PASS}, timeout=10)
@@ -662,13 +679,6 @@ def process_cas_via_olist_api():
     updated_paths = set()
     created_dirs = set()
     
-    def get_match_key(text): 
-        clean = re.sub(r'[（\(\[\{]?\d{4}[）\)\]\}]?', '', text)
-        clean = re.sub(r'(?i)\b(4k|1080p|2160p|web-dl|sdr|hdr)\b', '', clean)
-        clean = re.sub(r'(完结|连载中|全\d+集|打包|修正)', '', clean)
-        clean = re.sub(r'[^\w\u4e00-\u9fa5]', '', clean)
-        return clean.lower()
-
     # =================================================================
     # 🚀 效率跃迁步骤 1：先不急着改名移动，把属于同一个家(目录)的文件合并编组
     # =================================================================
@@ -713,42 +723,83 @@ def process_cas_via_olist_api():
 
         best_match_path = None
 
-        # 查本地库
-        for sid, info_dict in subs.items():
-            if isinstance(info_dict, dict):
-                db_path = info_dict.get("path", "")
-                if DIR_CAS_ROOT not in db_path: continue 
-                db_folders = db_path.split('/')
-                for idx, f_name in enumerate(db_folders):
-                    pure_f = get_match_key(f_name)
-                    if not pure_f or len(pure_f) < 2: continue
-                    if re.match(r'^\d{4,6}$', pure_f) or pure_f in ignore_words: continue
-                    if search_key == pure_f: best_match_path = "/".join(db_folders[:idx+1]); break
-            if best_match_path: break
+        # ====== 🥇 第一优先：查“专属收割记录库” ======
+        try:
+            h_data = load_json(HARVEST_SUBS_FILE)
+            if search_key in h_data:
+                best_match_path = h_data[search_key]
+        except Exception:
+            pass
 
-        # 查雷达
+        # ====== 🥈 第二优先：查“订阅库” ======
+        if not best_match_path:
+            # 查本地库 (升级版：防止乱认亲戚截胡)
+            db_possible_matches = []
+            for sid, info_dict in subs.items():
+                if isinstance(info_dict, dict):
+                    db_path = info_dict.get("path", "")
+                    if DIR_CAS_ROOT not in db_path: continue 
+                    db_folders = db_path.split('/')
+                    for idx, f_name in enumerate(db_folders):
+                        pure_f = get_match_key(f_name)
+                        if not pure_f or len(pure_f) < 2: continue
+                        if re.match(r'^\d{4,6}$', pure_f) or pure_f in ignore_words: continue
+                        if search_key == pure_f: 
+                            db_possible_matches.append("/".join(db_folders[:idx+1]))
+                            break
+                            
+            if db_possible_matches:
+                # 同样祭出立体打分，防止记忆库瞎认亲
+                db_possible_matches.sort(key=lambda p: (
+                    0 if p.split('/')[-1].lower() == show_folder_name.lower() else 1, # 1. 名字完全一样绝对优先
+                    len(p.split('/')[-1])                                             # 2. 名字越短越干净越优先
+                ))
+                best_match_path = db_possible_matches[0]
+
+        # ====== 🥉 第三优先：查雷达（跨月份全局扫描精准优选 + HDR原配优先装甲） ======
         if not best_match_path:
             try:
                 search_roots = []
                 if category_key:
                     b_large, b_sub = CAT_ROUTER[category_key]
                     search_roots.append(get_openlist_path(f"{DIR_CAS_ROOT}/{b_large}/{b_sub}".strip("/").replace("//", "/")))
-                else: search_roots = [get_openlist_path(f"{DIR_CAS_ROOT}/动漫/0-动漫"), get_openlist_path(f"{DIR_CAS_ROOT}/电视剧/0-电视剧")]
+                else:
+                    search_roots = [get_openlist_path(f"{DIR_CAS_ROOT}/动漫/0-动漫"), get_openlist_path(f"{DIR_CAS_ROOT}/电视剧/0-电视剧")]
+                
                 for root_path in search_roots:
                     r = requests.post(f"{OLIST_URL}/api/fs/list", json={"path": root_path, "password": "", "page": 1, "per_page": 1000, "refresh": True}, headers=headers, timeout=20)
                     if r.json().get("code") == 200:
                         ym_nodes = [item["name"] for item in (r.json().get("data") or {}).get("content", []) if item["is_dir"] and re.match(r'^\d{4,6}$', item["name"])]
                         ym_nodes.sort(reverse=True)
+                        
+                        # 🌟 把备选池提到外面，准备收集所有月份的匹配项
+                        all_months_matches = []
+                        
                         for ym in ym_nodes:
                             ym_path = f"{root_path}/{ym}"
                             r2 = requests.post(f"{OLIST_URL}/api/fs/list", json={"path": ym_path, "password": "", "page": 1, "per_page": 1000, "refresh": True}, headers=headers, timeout=20)
                             if r2.json().get("code") == 200:
                                 for item in (r2.json().get("data") or {}).get("content", []):
                                     if item["is_dir"] and search_key == get_match_key(item["name"]):
-                                        best_match_path = f"{DIR_CAS_ROOT}/{b_large}/{b_sub}/{ym}/{item['name']}".replace("//", "/"); break
-                            if best_match_path: break
-                    if best_match_path: break
-            except: pass
+                                        # 记录下它在哪个月份叫什么名字
+                                        all_months_matches.append({"ym": ym, "name": item["name"]})
+                        
+                        # 🌟 全盘月份扫描结束，开始三维立体全局优选
+                        if all_months_matches:
+                            # show_folder_name 就是你传进来的源文件夹原名（比如：搜神记 (2026) HDR）
+                            all_months_matches.sort(key=lambda x: (
+                                0 if x["name"].lower() == show_folder_name.lower() else 1,  # 第一维：名字完全一样，优先级绝对最高（门当户对）
+                                len(x["name"]),                                             # 第二维：名字越短越干净越优先（过滤杂牌标签）
+                                -int(x["ym"])                                               # 第三维：年份月份越新越优先
+                            ))
+                            
+                            best_share = all_months_matches[0]
+                            best_match_path = f"{DIR_CAS_ROOT}/{b_large}/{b_sub}/{best_share['ym']}/{best_share['name']}".replace("//", "/")
+                            
+                    if best_match_path:
+                        break
+            except:
+                pass
 
         if best_match_path:
             target_cloud_path = best_match_path
@@ -818,7 +869,30 @@ def process_cas_via_olist_api():
             processed_names.extend(names_to_move)
             updated_paths.add(base_notify_path)
         else:
-            logger.error(f"❌ [搬运] 批量移动失败: {mov_res.get('message', mov_res)}")
+            err_msg = mov_res.get('message', str(mov_res))
+            logger.warning(f"⚠️ [搬运] 批量移动受阻: {err_msg}。启动单件排查与强制清理模式...")
+            
+            # 💡 降级为逐个处理：精准解决 Openlist 缓存导致的源文件残留问题
+            for name in names_to_move:
+                r_single = requests.post(f"{OLIST_URL}/api/fs/move", json={"src_dir": raw_dir, "dst_dir": final_target_dir, "names": [name]}, headers=headers)
+                single_res = r_single.json()
+                r_single.close()
+
+                if single_res.get("code") == 200:
+                    logger.info(f"✅ [搬运] 单件扫尾移动成功: {name}")
+                    processed_names.append(name)
+                    updated_paths.add(base_notify_path)
+                else:
+                    single_err = single_res.get("message", "").lower()
+                    # 如果提示文件已存在，说明上次已经挪过去了，目前只是个没删掉的缓存幽灵
+                    if "exist" in single_err:
+                        logger.info(f"🗑️ [清理] 目标端已安全存在 [{name}]，正在强行斩杀残留的源文件...")
+                        requests.post(f"{OLIST_URL}/api/fs/remove", json={"dir": raw_dir, "names": [name]}, headers=headers).close()
+                        # 文件既然已经在那边了，正常将其加入已处理列表，确保后续能照常通知 5000 管家强刷
+                        processed_names.append(name)
+                        updated_paths.add(base_notify_path)
+                    else:
+                        logger.error(f"❌ [搬运] 单件移动彻底失败: {name} - {single_res.get('message')}")
 
     # =================================================================
     # 🚨 通知管家收尾 (极致精准 - 影剧双修通吃版)
@@ -1252,6 +1326,182 @@ def main_control_loop(client_obj):
                     if str(chat_id) == str(TG_ADMIN_USER_ID):
                         text = text.strip()
                         
+                        # ====== 🥇 新增：纯收割专用建库指令（纯净版，绝不污染全局） ======
+                        if text.startswith("加库") or text.startswith("/hsub"):
+                            try:
+                                if text.startswith("加库"):
+                                    clean_text = text[2:].strip()
+                                else:
+                                    clean_text = text[5:].strip()
+                                    
+                                parts = clean_text.split()
+                                if len(parts) < 2:
+                                    notifier.send_message("格式错误！\n常规：加库 剧名(年份) 分类\n指定老月：加库 剧名 分类 202604")
+                                    continue
+                                
+                                # 直接使用顶部引入的全局 re 和 datetime，绝不在此局部 import
+                                if parts[-1].startswith("/"):
+                                    cloud_path = parts[-1].strip()
+                                    show_name = " ".join(parts[:-1]).strip()
+                                elif re.match(r'^\d{6}$', parts[-1]):
+                                    target_ym = parts[-1].strip()
+                                    category_key = parts[-2].strip()
+                                    show_name = " ".join(parts[:-2]).strip()
+                                    b_large, b_sub = CAT_ROUTER.get(category_key, ("未分类", "0-未分类"))
+                                    cloud_path = f"{DIR_CAS_ROOT}/{b_large}/{b_sub}/{target_ym}/{show_name}".replace("//", "/")
+                                else:
+                                    target_ym = datetime.now().strftime("%Y%m")
+                                    category_key = parts[-1].strip()
+                                    show_name = " ".join(parts[:-1]).strip()
+                                    b_large, b_sub = CAT_ROUTER.get(category_key, ("未分类", "0-未分类"))
+                                    cloud_path = f"{DIR_CAS_ROOT}/{b_large}/{b_sub}/{target_ym}/{show_name}".replace("//", "/")
+
+                                # 直接使用顶部定义的全局函数和全局变量
+                                search_key = get_match_key(show_name)
+
+                                if not search_key:
+                                    notifier.send_message("❌ 剧名无法提取有效特征词，建档失败！")
+                                    continue
+                                    
+                                h_data = load_json(HARVEST_SUBS_FILE)
+                                h_data[search_key] = cloud_path
+                                save_json(HARVEST_SUBS_FILE, h_data)
+                                notifier.send_message(f"✅ 收割记录建档成功！\n📺 剧名：{show_name}\n🔍 特征词：{search_key}\n📂 目标路径：{cloud_path}")
+                            except Exception as e:
+                                notifier.send_message(f"🚨 代码崩溃抓包：\n<code>{str(e)}</code>")
+                            continue # 核心拦截器：干完活直接掐断
+                        
+                        # ====== 🗑️ 新增：删除收割库记录指令 ======
+                        elif text.startswith("删库") or text.startswith("/dsub"):
+                            try:
+                                kw = text[2:].strip() if text.startswith("删库") else text[5:].strip()
+                                if not kw:
+                                    notifier.send_message("格式错误！\n示例：删库 师兄啊师兄")
+                                    continue
+                                    
+                                h_file = globals().get('HARVEST_SUBS_FILE', os.path.join(DB_DIR, "harvest_subs.json"))
+                                h_data = load_json(h_file)
+                                
+                                if not h_data:
+                                    notifier.send_message("📭 收割记录库为空，没什么可删的。")
+                                    continue
+
+                                try:
+                                    search_key = get_match_key(kw)
+                                except NameError:
+                                    c = re.sub(r'[（\(\[\{]?\d{4}[）\)\]\}]?', '', kw)
+                                    c = re.sub(r'(?i)\b(4k|1080p|2160p|web-dl|sdr|hdr)\b', '', c)
+                                    c = re.sub(r'(完结|连载中|全\d+集|打包|修正)', '', c)
+                                    search_key = re.sub(r'[^\w\u4e00-\u9fa5]', '', c).lower()
+
+                                deleted_items = []
+                                
+                                # 1. 先尝试精确匹配
+                                if search_key and search_key in h_data:
+                                    deleted_items.append((search_key, h_data[search_key]))
+                                    del h_data[search_key]
+                                else:
+                                    # 2. 如果没精确对上，启动模糊匹配兜底（只要名字里包含就干掉）
+                                    keys_to_delete = []
+                                    for k, v in h_data.items():
+                                        if kw.lower() in k or kw.lower() in v.lower():
+                                            keys_to_delete.append(k)
+                                    for k in keys_to_delete:
+                                        deleted_items.append((k, h_data[k]))
+                                        del h_data[k]
+                                        
+                                if deleted_items:
+                                    save_json(h_file, h_data)
+                                    msg = "✅ 已成功从收割库中删除以下记录：\n"
+                                    for k, p in deleted_items:
+                                        msg += f" └ {k}"
+                                    notifier.send_message(msg)
+                                else:
+                                    notifier.send_message(f"❌ 没找到与“{kw}”相关的收割记录。")
+                                    
+                            except Exception as e:
+                                notifier.send_message(f"🚨 删库指令报错：\n<code>{str(e)}</code>")
+                            continue
+
+                        # ====== 📋 新增：查看收割库清单指令 ======
+                        elif text == "查库" or text == "/lsub":
+                            try:
+                                h_file = globals().get('HARVEST_SUBS_FILE', os.path.join(DB_DIR, "harvest_subs.json"))
+                                h_data = load_json(h_file)
+                                if not h_data:
+                                    notifier.send_message("📭 当前收割库为空，没有任何手动建档的记录。")
+                                    continue
+                                
+                                msg_lines = ["📋 <b>【专属收割库】当前记录：</b>\n"]
+                                for i, (k, p) in enumerate(h_data.items(), 1):
+                                    msg_lines.append(f"{i}. <b>{k}</b>\n   └ 📁 {p}")
+                                msg_lines.append("\n💡 提示：回复“删库 剧名”即可删除对应记录。")
+                                notifier.send_message("\n".join(msg_lines))
+                            except Exception as e:
+                                notifier.send_message(f"🚨 查库指令报错：\n<code>{str(e)}</code>")
+                            continue
+
+                        # ====== 🕵️‍♂️ 新增：动态巡逻目录管理指令 ======
+                        elif text == "查目录" or text == "/ldir":
+                            s = load_json(SETTINGS_FILE)
+                            watch_dirs = s.get("watch_dirs", ["/family/177_cas", "/local_cas"])
+                            if not watch_dirs:
+                                notifier.send_message("📭 当前没有配置任何巡逻目录，收割兵正在集体放假。")
+                                continue
+                            
+                            msg = "📋 <b>当前自动收割的【巡逻路线】：</b>\n\n"
+                            for i, wd in enumerate(watch_dirs, 1):
+                                msg += f"{i}. 📁 <code>{wd}</code>\n"
+                            msg += "\n💡 提示：回复“加目录 路径”或“删目录 序号”进行动态调整。"
+                            notifier.send_message(msg)
+                            continue
+
+                        elif text.startswith("加目录") or text.startswith("/adir"):
+                            new_dir = text[3:].strip() if text.startswith("加目录") else text[5:].strip()
+                            if not new_dir:
+                                notifier.send_message("格式错误！\n示例：加目录 /177-临时收割")
+                                continue
+                            
+                            s = load_json(SETTINGS_FILE)
+                            watch_dirs = s.get("watch_dirs", ["/family/177_cas", "/local_cas"])
+                            
+                            if new_dir not in watch_dirs:
+                                watch_dirs.append(new_dir)
+                                s["watch_dirs"] = watch_dirs
+                                save_json(SETTINGS_FILE, s)
+                                notifier.send_message(f"✅ 成功划定新的巡逻战区：\n📁 {new_dir}\n(下次收割时生效)")
+                            else:
+                                notifier.send_message(f"⚠️ 该目录已经在巡逻路线中了，无需重复添加：\n📁 {new_dir}")
+                            continue
+
+                        elif text.startswith("删目录") or text.startswith("/ddir"):
+                            del_dir = text[3:].strip() if text.startswith("删目录") else text[5:].strip()
+                            if not del_dir:
+                                notifier.send_message("格式错误！\n示例：删目录 1\n(发“查目录”看序号，直接填序号或名字删)")
+                                continue
+                                
+                            s = load_json(SETTINGS_FILE)
+                            watch_dirs = s.get("watch_dirs", ["/family/177_cas", "/local_cas"])
+                            
+                            target_to_del = None
+                            # 智能匹配：如果你发的是纯数字，按序号删；如果发的是文字，模糊匹配删
+                            if del_dir.isdigit() and 1 <= int(del_dir) <= len(watch_dirs):
+                                target_to_del = watch_dirs[int(del_dir) - 1]
+                            else:
+                                for wd in watch_dirs:
+                                    if del_dir.lower() in wd.lower():
+                                        target_to_del = wd
+                                        break
+                                        
+                            if target_to_del:
+                                watch_dirs.remove(target_to_del)
+                                s["watch_dirs"] = watch_dirs
+                                save_json(SETTINGS_FILE, s)
+                                notifier.send_message(f"✅ 已撤销该战区的巡逻任务：\n🗑️ {target_to_del}")
+                            else:
+                                notifier.send_message(f"❌ 没找到匹配的目录：{del_dir}")
+                            continue
+
                         # 🌟 新增的动态开关与拉取指令
                         if text in ["开启自动收割", "开启扫描", "/ascan"]:
                             s = load_json(SETTINGS_FILE); s["auto_scan_cas"] = True; save_json(SETTINGS_FILE, s)
@@ -1506,7 +1756,7 @@ def main_control_loop(client_obj):
                                 notifier.send_message(f"❌ 搜索拉取异常: {e}")
                             continue
 
-                        # 🌟 第二处：查人/查作者 (约 756 行，替换这行 if 判断)
+                        # 🌟 第二处：查人/查作者
                         elif text.startswith("查人 ") or text.startswith("查作者 ") or text.startswith("/author "):
                             author_kw = text.split(" ", 1)[1].strip()
                             if not author_kw: continue
@@ -1747,7 +1997,7 @@ def main_control_loop(client_obj):
                                                     sub_p = f"{l_cat}/{s_cat}".strip('/') if s_cat else l_cat
                                                     radar_bases.add(get_openlist_path(f"{DIR_CAS_ROOT}/{sub_p}".replace("//", "/")))
                                                     radar_bases.add(get_openlist_path(f"{DIR_VIDEO_ROOT}/{sub_p}".replace("//", "/")))
-                                                    
+                                                
                                                 for base_p in radar_bases:
                                                     # 极速读取 Openlist 年月目录列表 (利用接口轻量级穿透)
                                                     r_list = requests.post("http://127.0.0.1:5244/api/fs/list", 
@@ -1773,7 +2023,7 @@ def main_control_loop(client_obj):
                                                     if matched_paths: break
                                         except Exception as radar_err:
                                             logger.warning(f"Openlist自动寻轨雷达异常: {radar_err}")
-                                            
+                                        
                                         if matched_paths:
                                             notifier.send_message(f"🎯 雷达寻轨成功！全自动还原出带年份的物理绝对路径:\n📁 {matched_paths[0]}")
                                         else:
@@ -1825,7 +2075,7 @@ def main_control_loop(client_obj):
                                                 subprocess.Popen(["/data/data/com.termux/files/usr/bin/bash", "/data/data/com.termux/files/home/refresh.sh", openlist_p], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
                                                 notifier.send_message(f"✅ 缓存已刷，原生Emby拉取成功: {openlist_p}")
                                             except: pass
-                                            
+                                        
                                     notifier.send_message("🎉 批量单点指令已全部双轨执行完毕！")
 
                                 else:
@@ -1973,7 +2223,7 @@ def main_control_loop(client_obj):
                                                     else:
                                                         r_msg = "\n".join([f" └ {n}" for n in renamed_files_list])
                                                     notifier.send_message(f"✨ 补档云端洗名完成:\n{r_msg}")
-                                                    time.sleep(6)
+                                                time.sleep(6)
                                                 
                                                 if target_path.startswith(DIR_CAS_ROOT) or target_path.startswith(DIR_CAS_ROOT.strip('/')):
                                                     try:
@@ -2164,8 +2414,8 @@ def main_control_loop(client_obj):
                                                         root_path = "/".join(db_folders[:idx+1])
                                                         best_match_path = root_path + clean_user_path[len(show_name):] if "/" in clean_user_path else root_path
                                                         break
-                                            if best_match_path: break
-                                            
+                                                if best_match_path: break
+                                        
                                         if best_match_path:
                                             existing_path = best_match_path
                                             type_msg = f"记忆库精确匹配沿用旧目录"
@@ -2204,11 +2454,11 @@ def main_control_loop(client_obj):
                                                                     found_physical_path = f"/{base_search_path}/{ym_node['name']}/{show_node['name']}"
                                                                     phy_best_path = found_physical_path + clean_user_path[len(show_name):] if "/" in clean_user_path else found_physical_path
                                                                     break
-                                                        if phy_best_path: break
-                                                    
-                                                    if phy_best_path:
-                                                        existing_path = phy_best_path
-                                                        type_msg = f"网盘实体精确寻回"
+                                                            if phy_best_path: break
+                                                
+                                                if phy_best_path:
+                                                    existing_path = phy_best_path
+                                                    type_msg = f"网盘实体精确寻回"
                                             except Exception as e:
                                                 logger.warning(f"⚠️ 物理雷达扫描异常 (防风控跳过): {e}")
                                                 
@@ -2338,6 +2588,8 @@ casplay.py与auto189.py同目录下操作方法一样
 ```
 import base64, json, time, random, hashlib, hmac, urllib.parse, threading, uuid, os, requests, logging, subprocess, math
 import socket, re, functools
+import urllib3
+urllib3.util.connection.HAS_IPV6 = False
 from collections import deque
 from flask import Flask, request, redirect, render_template_string, jsonify
 from Crypto.Cipher import AES, PKCS1_v1_5
@@ -3289,6 +3541,9 @@ def generate_strm_from_openlist_to_local(target_path=None):
     if not cas_files: return logger.info(f"⚠️ 扫描完毕：该区域下未找到任何 .cas 文件")
         
     count = 0
+    # 🌟 依然保留 Session 复用，这能省下大量的 TCP 握手时间，本身就能提速
+    req_session = requests.Session() 
+    
     for full_path in cas_files:
         try:
             if full_path.startswith(base_cas_path): rel_path = full_path[len(base_cas_path):].lstrip('/')
@@ -3309,15 +3564,27 @@ def generate_strm_from_openlist_to_local(target_path=None):
             strm_path = os.path.join(target_local_dir, f"{base_name}.strm")
             if os.path.exists(strm_path): continue
             
-            get_res = requests.post(f"{cfg['openlist_host']}/api/fs/get", json={"path": full_path}, headers=headers).json()
+            # 🌟 核心智能引擎：普通剧集全速狂飙，遇到超长篇才动态错峰！
+            # 每成功拉取 50 个文件，强制让网盘接口休息 3 秒，清空天翼云的频率阻断计数器
+            if count > 0 and count % 50 == 0:
+                logger.info(f"🚦 [智能防刷] 已极速突发拉取 {count} 集，触发冷却机制，让接口喘息 3 秒...")
+                time.sleep(3)
+                
+            get_res = req_session.post(f"{cfg['openlist_host']}/api/fs/get", json={"path": full_path}, headers=headers, timeout=10).json()
             raw_url = get_res.get("data", {}).get("raw_url")
             if not raw_url: continue
-            cas_content = requests.get(raw_url).text.strip()
+            
+            cas_content = req_session.get(raw_url, timeout=10).text.strip()
             strm_data = f"{cfg['server_host']}/play?cas={urllib.parse.quote(cas_content)}&show={urllib.parse.quote(show_name)}"
             
             with open(strm_path, "w", encoding="utf-8") as f: f.write(strm_data)
             count += 1
-        except: pass
+            
+        except Exception as e:
+            logger.error(f"❌ 读取 {base_name} 时受阻: {e}")
+            # 遇到真实的风控拦截或报错，才老老实实低头认怂休眠一下
+            time.sleep(2) 
+            pass
 
     if count > 0: 
         logger.info(f"🎉 同步完毕，成功生成 {count} 个带精准剧名标记的 STRM 文件")
@@ -3449,8 +3716,8 @@ def keep_alive_worker():
                 if not is_alive:
                     refresh_slot_logic(i, cfg)
                 
-                # 💥 核心防御 2：绝对错峰！刷完一个号，强行随机休眠 10 到 30 分钟！
-                sleep_time = random.randint(600, 1800)
+                # 💥 核心防御 2：绝对错峰！刷完一个号，强行随机休眠 10 到 15 分钟！
+                sleep_time = random.randint(600, 900)
                 logger.info(f"💤 [防风控] 卡槽 {i+1} 巡检完毕，打更人休眠 {sleep_time} 秒后去下一个卡槽...")
                 time.sleep(sleep_time)
 
@@ -3458,9 +3725,9 @@ def keep_alive_worker():
         except Exception as e:
             logger.error(f"❌ 保活线程遇到意外: {e}")
 
-        # 整体大循环间隔：每隔 180 分钟（10800秒）启动下一轮大巡检
+        # 整体大循环间隔：每隔 120 分钟（7200秒）启动下一轮大巡检
         logger.info("⏳ 打更人进入深度睡眠，120 分钟后开启下一轮巡视。")
-        time.sleep(10800)
+        time.sleep(7200)
 
 if __name__ == '__main__':
     logger.info("✅ 🚦 真·双头蛇引擎启动！(5000端口负责直链/后台 | 5001端口负责Emby劫持)")
@@ -3481,4 +3748,33 @@ if __name__ == '__main__':
 
 ```
 cd ~/189py && pm2 start casplay.py --name "casplay" --interpreter python
+```
+
+### 四、添加机器人指令
+1.打开BotFather机器人
+
+2.发指令/setcommands
+
+3.选择自己的机器人
+
+4.粘贴如下内容：
+```
+sub - 📥 [订阅/绑定] 绑定外部链接追剧
+harvest - 🚜 [收割/处理/添加] 洗名并入库CAS文件
+feed - 📡 [动态/广场] 订阅中心最新情报
+search - 🔍 [搜 关键词] 穿甲雷达搜索
+check - 🔍 [查 剧名] 剧名查找
+author - 🕵️‍♂️ [查作者\查人] 大佬真实时间线
+refresh- 🔄 [刷新\入库] 刷新入库某剧
+sync - 🔄 [同步订阅] 强制检查所有更新
+list - 📋 [列表] 查看当前追剧清单
+ascan - ✔️ [开启自动收割] 自动收割扫描
+sscan - ⭕️ [关闭自动收割] 关闭收割扫描
+asub - ✅ [开启订阅检查] 开启订阅检查
+ssub - ❎ [关闭订阅检查] 关闭订阅检查
+ldir - 🔍 [查目录] 查看收割目录
+adir - ➕ [加目录] 增加收割目录
+hsub - ➕ [加库] 增加收割入库记录
+dsub - ❌ [删库] 删除收割入库记录
+dsub - 🔍 [查库] 查看收割入库记录
 ```
