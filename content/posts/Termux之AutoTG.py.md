@@ -995,6 +995,11 @@ async def sweep_existing_history(client, chat_id, drama_key, category, folder_se
             if not media: continue
             
             text_to_scan = f"{old_msg.caption or ''} {getattr(media, 'file_name', '')}"
+            
+            # 🔥 新增：历史消息扫荡，同样执行上下文缝合术！
+            if old_msg.reply_to_message:
+                parent_text = old_msg.reply_to_message.caption or old_msg.reply_to_message.text or ""
+                text_to_scan = f"{text_to_scan} {parent_text}"
             # 🔥 这里要用真实的剧名 search_kw 去扫描文字
             if search_kw.lower() in text_to_scan.lower():
                 ep_num = extract_pure_episode(text_to_scan, drama_anchor=search_kw)
@@ -1254,7 +1259,23 @@ async def manage_system_commands(client, message):
             size_str = args.pop(size_idx)
             min_mb, max_mb = map(int, size_str.split('-'))
         
-        specific_channel = next((args.pop(i) for i, arg in enumerate(args) if arg.startswith("-100")), None)
+        # 🔥🔥🔥 痛点克星：如果你的指令是“回复”给某条转发视频的，自动抠出频道ID并建档！
+        replied = message.reply_to_message
+        if replied and replied.forward_from_chat:
+            specific_channel = str(replied.forward_from_chat.id)
+            channel_title = replied.forward_from_chat.title or specific_channel
+            # 自动帮新频道在数据库开户！
+            if specific_channel not in config.setdefault("trusted_channels", {}):
+                config["trusted_channels"][specific_channel] = {"channel_name": channel_title, "monitored_dramas": {}}
+        else:
+            # 备用方案：如果你没用回复功能，就看看命令里有没有手写的 -100 ID
+            specific_channel = next((args.pop(i) for i, arg in enumerate(args) if arg.startswith("-100")), None)
+            
+        target_pools = [specific_channel] if specific_channel else list(config.get("trusted_channels", {}).keys())
+        
+        if not target_pools:
+            return await message.reply_text("⚠️ 你的大盘里还没有任何频道！请先转发一条频道的视频，并对它【回复】 /sub 指令来自动添加！")
+
         file_season = int(args.pop(-1)[1:]) if args and re.match(r'^s\d+$', args[-1], re.IGNORECASE) else None
         min_ep = int(args.pop(-1)) if args and args[-1].isdigit() else 1
         folder_season = int(args.pop(-1)) if args and args[-1].isdigit() else 1
@@ -1307,6 +1328,56 @@ async def manage_system_commands(client, message):
                 del config["trusted_channels"][chat_id]["monitored_dramas"][message.command[1]]
         with open(TG_LISTENER_DB, "w", encoding="utf-8") as f: json.dump(config, f, ensure_ascii=False, indent=4)
         await message.reply_text(f"🗑️ 已解除监控。")
+        return
+    
+    if command in ["unsub", "del"]:
+        args = message.command[1:]
+        if not args: 
+            return await message.reply_text("⚠️ 语法：`/unsub [剧名] [可选: v=版本号] [可选:-100开头的频道ID]`")
+        
+        # 🎯 提取精准狙击的频道 ID
+        specific_channel = next((arg for arg in args if arg.startswith("-100")), None)
+        if specific_channel:
+            args.remove(specific_channel)
+            
+        # 🎯 提取要取消的版本号 (例如 v=HDR)
+        version_suffix = ""
+        for i, arg in enumerate(args):
+            if arg.lower().startswith("v="):
+                version_suffix = args.pop(i)[2:]
+                break
+                
+        drama_name = " ".join(args)
+        if not drama_name:
+            return await message.reply_text("⚠️ 请输入要取消的剧名！")
+            
+        # 拼接数据库里的真实 Key
+        drama_key = f"{drama_name}_{version_suffix}" if version_suffix else drama_name
+        
+        config = load_listener_config()
+        channels = config.get("trusted_channels", {})
+        
+        deleted_count = 0
+        # 如果指定了频道，就只杀那个频道；没指定，就全频道通杀！
+        target_pools = [specific_channel] if specific_channel else list(channels.keys())
+        
+        for chat_id in target_pools:
+            if chat_id in channels and "monitored_dramas" in channels[chat_id]:
+                # 精准匹配带版本的剧名
+                if drama_key in channels[chat_id]["monitored_dramas"]:
+                    del channels[chat_id]["monitored_dramas"][drama_key]
+                    deleted_count += 1
+                # 兼容老数据，如果没有版本号，也顺手试着删一下
+                elif drama_name in channels[chat_id]["monitored_dramas"]:
+                    del channels[chat_id]["monitored_dramas"][drama_name]
+                    deleted_count += 1
+                    
+        if deleted_count > 0:
+            with open(TG_LISTENER_DB, "w", encoding="utf-8") as f:
+                json.dump(config, f, ensure_ascii=False, indent=4)
+            await message.reply_text(f"✅ **精确打击成功**\n💣 目标: `{drama_key}`\n📉 共从 **{deleted_count}** 个频道中移除了该监听雷达！")
+        else:
+            await message.reply_text(f"⚠️ **未找到目标**: `{drama_key}`\n💡 请使用 `/list` 命令查看雷达大盘里的准确名称（包含版本）。")
         return
 
     if command == "go":
@@ -1363,6 +1434,35 @@ async def manage_system_commands(client, message):
         
         await message.reply_text(f"✅ 新航线已打通：\n📁 目标锁定: `{folder_name}`\n请直接转发媒体发车！")
         return
+    
+    if command in ["help", "h"]:
+        help_text = """
+🤖 **[打更人媒体管家 - 终极参数指南]** 🤖
+
+🎬 **1. 自动订阅 (`/sub`)**
+💬 **语法**: `/sub [剧名] [分类] [最小-最大MB] [频率] [年份] [v=版本] [文件夹季] [S文件季]`
+👉 *示例*: `/sub 将夜 国漫 400-1500 周四 2026 v=HDR 1 S2`
+💡 *秘籍*: 直接回复频道的视频发送此命令，自动免绑频道ID！
+
+🗑️ **2. 取消订阅 (`/unsub`)**
+💬 **语法**: `/unsub [剧名] [v=版本] [-100频道ID]`
+👉 *示例*: `/unsub 将夜 v=HDR` (精准取消HDR版)
+
+🚀 **3. 手动霸权引流 (`/go`)**
+💬 **语法**: `/go [剧名] [分类] [年份] [v=版本] [文件夹季]`
+👉 *步骤1*: `/go 绝命毒师 欧美剧 2018 v=4K 1` (锁死文件夹)
+👉 *步骤2*: 发送 `#S2E8` (随意捏造文件名，不破环文件夹)
+👉 *步骤3*: 狂发视频，自动重命名入库！
+
+📡 **4. 大盘与扫荡**
+👉 `/list` : 查看各频道监听排班表 (带版本号/大小/频率)
+👉 `/scan` : 无视排班，立刻触发一次全网暴风补漏扫荡
+
+📡 **5. 删除记录**
+👉 `/rmh` : +剧名 删除下载历史记录
+👉 `/rm` : +剧名 删除历史航线！ 把不再需要的死档从 /history 里永久抹除
+"""
+        return await message.reply_text(help_text)
 
 # =================================================================
 # 🎛️ 航线遥控器：手动霸权重塑文件名 (绝对不碰底层文件夹)
@@ -1394,20 +1494,49 @@ async def override_episode(client, message):
             await message.reply_text(reply_msg)
 
 # =================================================================
-# 🎯 被动网关双保险拦截 (封死底层缓存泄露漏洞)
+# 🎯 被动网关双保险拦截 (穿透评论区结界版)
 # =================================================================
 @app.on_message(filters.video | filters.document)
 @app.on_edited_message(filters.video | filters.document)
 async def media_routing_gateway(client, message):
     config = load_listener_config()
-    chat_id_to_check = str(message.chat.id) if message.chat else (str(message.forward_from_chat.id) if message.forward_from_chat else "")
-    matched_channel = next((k for k in config.get("trusted_channels", {}) if k in chat_id_to_check or chat_id_to_check in k), None)
+    
+    chat_id_to_check = str(message.chat.id) if message.chat else ""
+    original_channel_id = ""
+    parent_text = ""
+    
+    # 🔥 核心穿透术：如果是评论区消息，精准提取它的“主频道户口”和“主贴文案”！
+    if message.reply_to_message:
+        parent = message.reply_to_message
+        parent_text = parent.caption or parent.text or ""
+        
+        # 兼容 TG 最新底层逻辑：评论区主贴的身份其实是 sender_chat！
+        if parent.forward_from_chat:
+            original_channel_id = str(parent.forward_from_chat.id)
+        elif parent.sender_chat:
+            original_channel_id = str(parent.sender_chat.id) # 👈 加了这行，瞬间打通！
+            
+        # 防御极端的“楼中楼”回复（回复了评论区的某个人）
+        if parent.reply_to_message:
+            parent_text += f" {parent.reply_to_message.caption or parent.reply_to_message.text or ''}"
+
+    # 🕵️‍♂️ 身份双重核验：当前群聊ID 或 背后主频道ID，只要有一个在订阅列表里，就放行！
+    matched_channel = None
+    for k in config.get("trusted_channels", {}):
+        if chat_id_to_check and (k in chat_id_to_check or chat_id_to_check in k):
+            matched_channel = k
+            break
+        if original_channel_id and (k in original_channel_id or original_channel_id in k):
+            matched_channel = k
+            break
 
     # 🚪 第一道门：只处理订阅频道的自动拦截与质检
     if matched_channel:
         channel_info = config["trusted_channels"][matched_channel]
         media = message.video or message.document
-        text_to_scan = f"{message.caption or ''} {getattr(media, 'file_name', '')}"
+        
+        # 🔥 将当前无字视频，强行与主频道文案缝合！
+        text_to_scan = f"{message.caption or ''} {getattr(media, 'file_name', '')} {parent_text}"
 
         # 注意这里从字典取出的是 drama_key
         for drama_key, route_info in channel_info.get("monitored_dramas", {}).items():
@@ -1555,3 +1684,71 @@ Enter password (hint: ***):
 /clean 清除下载碎片
 
 /scan 拉取订阅下载（+剧名可直接拉取单剧）
+
+```
+终极备忘录：全指令参数详解图鉴
+你可以把这段保存在你的记事本里，随时查阅：
+
+/sub - ➕ 自动订阅 (可直接回复视频抓取频道)
+
+完整语法：/sub [剧名] [分类] [最小MB-最大MB] [频率:日更/周一~周日] [可选:年份] [可选:v=版本号] [可选:文件夹季数] [可选:S文件名季数]
+
+实战举例：/sub 将夜 国漫 1500-3000 周四 2026 v=HDR 1 S2
+
+快捷玩法：直接转发目标频道的视频，对它点击【回复】，然后输入上述参数（此时无需手填频道ID，机器自动抓取建档）。
+
+/unsub - 🗑️ 取消订阅 (全网通杀或精准单杀)
+
+完整语法：/unsub [剧名] [可选:v=版本号] [可选:-100开头的频道ID]
+
+实战举例：/unsub 将夜 v=HDR (只取消所有频道的HDR版本)
+
+实战举例：/unsub 将夜 -1001234567 (只踢掉某个发垃圾画质的频道)
+
+/go - 🚀 手动发车 (开辟航线并锁死物理文件夹)
+
+完整语法：/go [剧名关键字] [可选:分类] [可选:年份] [可选:v=版本号] [可选:文件夹季数] [可选:S文件名季数]
+
+实战举例：/go 绝命毒师 欧美剧 2018 v=4K 1 (将后续文件死锁进 Season 1 文件夹)
+
+配合遥控：发车后，发送 #S2E8 (只改变文件的刮削名字为第二季第八集，绝不改变刚才锁死的 Season 1 文件夹)。
+
+/list - 📡 查看雷达大盘排班与状态
+
+语法：直接发送 /list 即可，无参数。
+
+/scan - 🔍 强行触发一次全网补漏扫荡
+
+语法：直接发送 /scan 即可，无参数。
+
+/help - 📖 查看随身说明书与指令语法
+
+语法：直接发送 /help 或 /h 即可。
+
+```
+### 五、机器人指令菜单
+
+1.@BotFather
+
+2.在对话框里发送指令：/mybots
+
+3.屏幕上会弹出你创建过的机器人列表，点击咱们正在用的这个机器人的名字
+
+4.接着点击弹出面板上的 Edit Bot
+
+5.然后点击 Edit Commands
+
+6.把这套菜单直接喂给它
+```
+sub - ➕ 自动订阅 (可直接回复视频抓取频道)
+unsub - 🗑️ 取消订阅 (全网通杀或精准单杀)
+go - 🚀 手动发车 (开辟航线并锁死文件夹)
+list - 📡 查看雷达大盘排班与状态
+scan - 🔍 强行触发一次全网补漏扫荡
+history - 📋 查看曾经发过车的历史航线记录
+rm - ❌ 删除历史航线！ 把不再需要的死档从history 里永久抹除
+rmh - ❎ 删除下载历史记录
+clean - ⭕️ 清除下载碎片
+ping - 💓 查看系统是否活着、存活时间、雷达正在盯防多少部剧
+help - 📖 查看随身说明书与指令语法
+```
