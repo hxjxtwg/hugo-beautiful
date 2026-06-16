@@ -259,6 +259,85 @@ def translate_folder_name(folder_name):
     except: pass
     return folder_name
 
+def fetch_tmdb_rich_info(keyword):
+    """通过 TMDB 获取影视剧的详细多维信息"""
+    if not TMDB_API_KEY:
+        return "❌ 系统未配置 TMDB_API_KEY，无法查询。"
+        
+    try:
+        # 1. 基础搜索，先锁定是最贴合的那部戏
+        url_search = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&language=zh-CN&query={parse.quote(keyword)}&page=1"
+        res = requests.get(url_search, timeout=5).json()
+        if not res.get("results"):
+            return f"📭 TMDB 数据库中未找到关于【{keyword}】的信息。"
+            
+        top = res["results"][0]
+        media_type = top.get("media_type", "tv")
+        tmdb_id = top.get("id")
+        
+        # 2. 根据 ID 拿取极其详尽的完整档案
+        detail_url = f"https://api.themoviedb.org/3/{media_type}/{tmdb_id}?api_key={TMDB_API_KEY}&language=zh-CN"
+        detail_res = requests.get(detail_url, timeout=5).json()
+        
+        # 3. 基础共用信息清洗
+        title = detail_res.get("name") or detail_res.get("title", "未知")
+        original_title = detail_res.get("original_name") or detail_res.get("original_title", "")
+        overview = detail_res.get("overview", "暂无简介")
+        if len(overview) > 200: overview = overview[:197] + "..." # 防止简介太长刷屏
+        vote = round(detail_res.get("vote_average", 0), 1)
+        genres = ", ".join([g["name"] for g in detail_res.get("genres", [])])
+        country = ", ".join(detail_res.get("origin_country", []))
+        
+        # 状态汉化字典
+        status_trans = {
+            "Returning Series": "📺 连载中", "Ended": "✅ 已完结", 
+            "Canceled": "❌ 已砍掉", "Released": "✅ 已上映", 
+            "Post Production": "🛠 后期制作中", "In Production": "🎥 拍摄中"
+        }
+        raw_status = detail_res.get("status", "未知")
+        status = status_trans.get(raw_status, raw_status)
+
+        # 4. 根据类型分发组装 Telegram 卡片
+        if media_type == "tv":
+            first_air = detail_res.get("first_air_date", "未知")
+            year = first_air[:4] if first_air != '未知' else '未知'
+            seasons = detail_res.get("number_of_seasons", 0)
+            episodes = detail_res.get("number_of_episodes", 0)
+            
+            msg = (
+                f"📺 <b>{title} ({year})</b>\n"
+                f"🏷 <b>原名:</b> {original_title}\n"
+                f"🌍 <b>国家:</b> {country}\n"
+                f"🎭 <b>类型:</b> {genres}\n"
+                f"⭐ <b>评分:</b> {vote} / 10\n"
+                f"🎬 <b>状态:</b> {status}\n"
+                f"📚 <b>规模:</b> 共 {seasons} 季, {episodes} 集\n"
+                f"🔗 <b>TMDB ID:</b> <code>{tmdb_id}</code>\n"
+                f"────────────────\n"
+                f"📖 <b>简介:</b>\n{overview}"
+            )
+        else:
+            release_date = detail_res.get("release_date", "未知")
+            year = release_date[:4] if release_date != '未知' else '未知'
+            runtime = detail_res.get("runtime", 0)
+            
+            msg = (
+                f"🎬 <b>{title} ({year})</b>\n"
+                f"🏷 <b>原名:</b> {original_title}\n"
+                f"🌍 <b>国家:</b> {country}\n"
+                f"🎭 <b>类型:</b> {genres}\n"
+                f"⭐ <b>评分:</b> {vote} / 10\n"
+                f"⏳ <b>时长:</b> {runtime} 分钟\n"
+                f"🎬 <b>状态:</b> {status}\n"
+                f"🔗 <b>TMDB ID:</b> <code>{tmdb_id}</code>\n"
+                f"────────────────\n"
+                f"📖 <b>简介:</b>\n{overview}"
+            )
+        return msg
+    except Exception as e:
+        logger.error(f"TMDB 详情查询异常: {e}")
+        return f"❌ 查询 TMDB 时发生异常，可能是网络超时。"
+
 # ==========================================
 # 📁 核心目录与挂载配置
 # ==========================================
@@ -327,10 +406,28 @@ def rsaEncrpt(password, public_key):
     return cipher.encrypt(password.encode()).hex()
 
 def generate_smart_name(original_filename, sub_path):
-    valid_exts = ('.mp4', '.mkv', '.ts', '.avi', '.rmvb', '.flv', '.wmv', '.cas', '.srt', '.ass')
-    _, ext = os.path.splitext(original_filename)
-    if ext.lower() not in valid_exts: return None
+    # --- 🌟 核心一：侦测并保留 .mp4.cas 这种双后缀 ---
+    valid_media_exts = ['.mp4', '.mkv', '.ts', '.avi', '.rmvb', '.flv', '.wmv', '.srt', '.ass']
+    lower_name = original_filename.lower()
+    final_ext = ""
     
+    for me in valid_media_exts:
+        if lower_name.endswith(f"{me}.cas"):
+            final_ext = f"{me}.cas"  # 锁定双后缀
+            break
+            
+    if not final_ext:
+        _, ext = os.path.splitext(original_filename)
+        if ext.lower() in valid_media_exts or ext.lower() == '.cas':
+            final_ext = ext.lower()
+            
+    # 🚑 抢救瞎子文件：避开图片垃圾，剩下的强行套 .cas
+    if not final_ext:
+        _, ext = os.path.splitext(original_filename)
+        if ext.lower() in ['.jpg', '.jpeg', '.png', '.nfo', '.txt', '.torrent', '.html']:
+            return None
+        final_ext = '.cas'
+        
     path_parts = sub_path.strip('/').split('/')
     folder_name = path_parts[-1]
     for part in reversed(path_parts):
@@ -342,30 +439,43 @@ def generate_smart_name(original_filename, sub_path):
     year_in_path = re.search(r'\((\d{4})\)', folder_name)
     year_str = year_in_path.group(1) if year_in_path else ""
     
-    # 🌟 1. 无情洗名：把目录名里所有的垃圾（包括你指定的五个词，防止粘在剧名上）全切干净！
+    # --- 🌟 核心修改：无情绞肉机 (以年份为界，一刀切断) ---
     clean_show_name = folder_name
-    clean_show_name = re.sub(r'\(\d{4}\)', '', clean_show_name)
-    clean_show_name = re.sub(r'(?i)\b(HQ|IQ|DV|4K|1080p|720p|2160p|WEB-DL|HDR|SDR|H265|x265|BluRay|Remux)\b', '', clean_show_name)
+    # 1. 只要碰到 (四位年份)，把年份和它屁股后面的“所有任意标签”一刀剁掉
+    clean_show_name = re.sub(r'\s*\(\d{4}\).*$', '', clean_show_name)
+    # 2. 无年份兜底：如果没写年份，用常规黑名单兜底，顺便清理 tmdb 尾巴 (连带外面的花括号/方括号一起杀)
+    clean_show_name = re.sub(r'(?i)[_\-\s]*(HQ|IQ|DV|4K|1080[pP]|720[pP]|2160[pP]|WEB-DL|HDR|SDR|HD|H\.?26[45]|x\.?26[45]|BluRay|Remux)[_\-\s]*', '', clean_show_name)
+    clean_show_name = re.sub(r'(?i)[\[{\(]?tmdb[-_=]?\w+[\]}\)]?', '', clean_show_name)
+    # 3. 修剪首尾垃圾字符，并用点号替换空格
     clean_show_name = re.sub(r'[-_\s]+$', '', clean_show_name).strip()
     clean_show_name = clean_show_name.replace(' ', '.') 
     
-    # 🌟 2. 极简提取：从原文件名里，只抓取你要的这 5 个词！其他统统当做垃圾扔掉！
-    tags_match = re.findall(r'(?i)\b(DV|HQ|HDR|SDR|IQ)\b', original_filename)
+    # --- 🌟 核心二：精准提取你要的组合标签 (通杀带点号的 H.265/x.264) ---
+    tags_match = re.findall(r'(?i)\b(1080p|2160p|4K|DV|HQ|HDR|SDR|IQ|H\.?26[45]|x\.?26[45])\b', original_filename)
     tags = []
     for t in tags_match:
-        t_upper = t.upper()
+        # 第一步：全部转大写，并且无情抹除中间的点号 (把 H.265 变成 H265)
+        t_upper = t.upper().replace('.', '')
+        
+        # 第二步：照顾命名强迫症，统一规范大小写
+        if t_upper == '1080P': t_upper = '1080p'
+        elif t_upper == '2160P': t_upper = '2160p'
+        elif t_upper == 'X264': t_upper = 'H264'
+        elif t_upper == 'X265': t_upper = 'H265'
+        
         if t_upper not in tags:
             tags.append(t_upper)
             
     tag_str = "." + ".".join(tags) if tags else ""
 
-    # 🌟 3. 极速组装
+    # 🎬 电影/单次任务组装区 (这里自动接上了 tag_str)
     if any(k in sub_path for k in ["电影", "movie", "演唱会", "纪录片"]):
         part_match = re.search(r'(?i)(part\d+|cd\d+)', original_filename)
         part_str = f".{part_match.group(1).lower()}" if part_match else ""
         year_part = f".{year_str}" if year_str else ""
-        return f"{clean_show_name}{year_part}{part_str}{tag_str}{ext}".replace('..', '.')
+        return f"{clean_show_name}{year_part}{part_str}{tag_str}{final_ext}".replace('..', '.')
 
+    # 📺 剧集/动漫组装区
     ep_patterns = [
         r'(?i)E(?:P)?\s*(\d+)', r'第\s*(\d+)\s*[集话期]',
         r'(?:\[|\()(\d+)(?:\]|\))', r'\s+0*(\d{1,3})\s*(?:\.|$)', r'^0*(\d{1,3})\s*(?:\.|$)'  
@@ -389,7 +499,7 @@ def generate_smart_name(original_filename, sub_path):
             
     year_part = f".{year_str}" if year_str else ""
     
-    return f"{clean_show_name}.S{season_num:02d}E{ep_num:02d}{year_part}{tag_str}{ext}".replace('..', '.')
+    return f"{clean_show_name}.S{season_num:02d}E{ep_num:02d}{year_part}{tag_str}{final_ext}".replace('..', '.')
 
 # ==========================================
 # 🌟 升级版 TelegramNotifier (兼容V4.8日志机制+交互按钮)
@@ -1192,6 +1302,163 @@ def check_subscriptions(client_obj, force_target_id=None, is_first_run=False, ig
         except: pass
         time.sleep(2)
 
+# ==========================================
+# 📦 本地投递箱极速雷达 (全新独立模块，不干扰云端收割)
+# ==========================================
+def scan_local_dropbox():
+    s = load_json(SETTINGS_FILE)
+    # 默认你的投递箱路径，你可以随时在 settings.json 里改
+    dropbox_dir = s.get("local_dropbox_dir", "/storage/emulated/0/Download/189cas")
+    local_strm_dir = s.get("local_strm_dir", "/storage/emulated/0/Download/cas_strm")
+    
+    if not os.path.exists(dropbox_dir):
+        return  # 如果你没建这个文件夹，雷达直接下班，绝不报错
+
+    history_file = os.path.join(DB_DIR, "monitor_history.json")
+    monitor_history = load_json(history_file)
+    changed = False
+    updated_dirs = set()  # 🌟 新增：用来聚合本次所有变动的剧集目录
+
+    # 🛡️ 防线二：幽灵记录自动修剪
+    # 如果你把投递箱里的文件删了，把历史记录也清掉，防止越积越大
+    keys_to_delete = [path for path in monitor_history.keys() if not os.path.exists(path)]
+    for k in keys_to_delete:
+        del monitor_history[k]
+        changed = True
+
+    # 🔍 极速扫描本地目录 (瞬间完成)
+    cas_files = []
+    for root, dirs, files in os.walk(dropbox_dir):
+        for f in files:
+            if f.lower().endswith('.cas'):
+                cas_files.append(os.path.join(root, f).replace("\\", "/"))
+
+    if not cas_files:
+        if changed: save_json(history_file, monitor_history)
+        return
+
+    # 🧠 开始智能算命
+    for file_path in cas_files:
+        try:
+            file_stat = os.stat(file_path)
+            mtime = file_stat.st_mtime
+            size = file_stat.st_size
+
+            # 🛡️ 防线一：基于绝对路径、大小、时间的严苛防重
+            if file_path in monitor_history:
+                record = monitor_history[file_path]
+                if record.get('mtime') == mtime and record.get('file_size') == size:
+                    continue  # 完完全全的老文件，直接跳过闭嘴
+
+            logger.info(f"📥 [投递箱] 雷达锁定新目标: {file_path}")
+
+            # 提取相对路径来判断大类和版本文件夹
+            rel_path = file_path.replace(dropbox_dir, "").strip("/")
+            parts = rel_path.split("/")
+            filename = parts[-1]
+
+            # 提取大类
+            category_key = parts[0] if len(parts) > 1 else None
+            show_folder_name = filename.rsplit('.', 1)[0] # 兜底名
+
+            # 🌟 核心修复：聪明地向上找剧名，强行跳过 Season 目录干扰
+            if len(parts) > 1:
+                for part in reversed(parts[:-1]):
+                    # 如果这层文件夹叫 Season 1 或 S1，直接无视，继续往上一层找
+                    if re.match(r'(?i)^(season\s*\d+|s\d+)$', part.strip()):
+                        continue
+                    show_folder_name = part.strip()
+                    break
+
+            # 借用你原版的绞肉机提取干净剧名
+            clean_show_name = re.sub(r'\s*\(\d{4}\)', '', show_folder_name)
+            clean_show_name = re.sub(r'(?i)[_\-\s]*(HQ|IQ|DV|4K|1080[pP]|720[pP]|2160[pP]|WEB-DL|HDR|SDR|H265|x265|BluRay|Remux)[_\-\s]*', '', clean_show_name)
+            clean_show_name = re.sub(r'[-_\s]+$', '', clean_show_name).strip()
+
+            # 智能路由推导
+            # 1. 默认取当前年月
+            current_ym = datetime.now().strftime("%Y%m")
+            
+            # 2. 🧠 终极跨月防断层：直接搜查真实的物理目录！(通杀云端和本地)
+            if os.path.exists(local_strm_dir):
+                for root, dirs, files in os.walk(local_strm_dir):
+                    if show_folder_name in dirs:
+                        # 找到了该剧的物理目录！它的上一层(root)绝对是年月结尾
+                        ym_match = re.search(r'/(\d{6})$', root.replace('\\', '/'))
+                        if ym_match:
+                            current_ym = ym_match.group(1)
+                            break
+
+            # 3. 继续走大类判断...
+            b_large, b_sub = "未分类", "0-未分类"
+            if category_key and category_key in CAT_ROUTER:
+                b_large, b_sub = CAT_ROUTER[category_key]
+            else:
+                # 尝试从路径名硬猜
+                for cat_k, (l, s) in CAT_ROUTER.items():
+                    if cat_k in rel_path:
+                        b_large, b_sub = l, s
+                        break
+                if b_large == "未分类": b_large, b_sub = "电视剧", "0-电视剧" # 兜底
+
+            # 组装虚拟路径 (骗过生成函数，拿到完美结果)
+            virtual_cloud_path = f"{DIR_CAS_ROOT}/{b_large}/{b_sub}/{current_ym}/{show_folder_name}".replace("//", "/")
+            s_match = re.search(r'(?i)S0*(\d+)', filename)
+            season_num = int(s_match.group(1)) if s_match else 1
+            if b_large in ["电视剧", "动漫", "短剧"] or season_num > 1:
+                virtual_cloud_path = f"{virtual_cloud_path}/Season {season_num}"
+
+            # 核心算命：白嫖你写好的洗名函数！
+            final_name = generate_smart_name(filename, virtual_cloud_path) or filename
+            strm_name = final_name.rsplit('.', 1)[0] + ".strm"
+
+            # 算出要发给 casplay 的精准生成目录 (去掉云盘根目录)
+            local_sub_dir = virtual_cloud_path.replace(DIR_CAS_ROOT, "").strip("/")
+            target_local_dir = os.path.join(local_strm_dir, local_sub_dir).replace("\\", "/")
+
+            # 打包情报下发给 5000 端口
+            payload = {
+                "source_cas_path": file_path,
+                "target_local_dir": target_local_dir,
+                "strm_name": strm_name,
+                "show_name": clean_show_name
+            }
+
+            try:
+                res = requests.post("http://127.0.0.1:5000/api/make_strm", json=payload, timeout=5)
+                if res.status_code == 200:
+                    # 记入小本本，任务圆满结束
+                    monitor_history[file_path] = {
+                        "process_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "file_size": size,
+                        "mtime": mtime,
+                        "target_strm_dir": target_local_dir,
+                        "strm_name": strm_name,
+                        "status": "success"
+                    }
+                    changed = True
+                    updated_dirs.add(target_local_dir) # 🌟 新增：丢进聚合池
+                else:
+                    logger.error(f"❌ [投递箱] API 拒绝: {res.text}")
+            except Exception as e:
+                logger.error(f"❌ [投递箱] 无法连接到 5000 管家: {e}")
+
+        except Exception as e:
+            logger.error(f"❌ [投递箱] 解析异常: {file_path} - {e}")
+
+    if changed:
+        save_json(history_file, monitor_history)
+
+    # 🌟 新增：整批任务完结，一波流合并同类项局部刷新
+    if updated_dirs:
+        logger.info(f"🎬 投递箱批量生成完毕，开始聚合局部刷新 (共 {len(updated_dirs)} 个目录)")
+        for d in updated_dirs:
+            try:
+                subprocess.Popen(["/data/data/com.termux/files/usr/bin/bash", "/data/data/com.termux/files/home/refresh.sh", d], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                logger.info(f"✅ [聚合刷新] 已精准触发单剧目录刷新: {d}")
+                time.sleep(0.5) # 稍微留点高密间隔保护
+            except: pass
+
 def main_control_loop(client_obj):
     offset = 0
     notifier = TelegramNotifier(TG_BOT_TOKEN, TG_ADMIN_USER_ID)
@@ -1209,6 +1476,10 @@ def main_control_loop(client_obj):
             check_subscriptions(client_obj)
         if settings.get("auto_scan_cas", False):
             process_cas_via_olist_api()
+            
+        # 👇 新增：本地投递箱极速雷达
+        if settings.get("auto_scan_local", True):
+            scan_local_dropbox()
         wait_min = random.randint(25, 45)
         logger.info(f"🛌 [系统] 航线巡逻结束。进入节电待机，距下次起飞还有 {wait_min} 分钟...")
         logger.info("==========================================")
@@ -1548,6 +1819,14 @@ def main_control_loop(client_obj):
                             else:
                                 notifier.send_message("✅ CAS 收割完成，暂无新文件。")
                             continue
+                        elif text in ["扫箱子", "投递", "本地扫描", "/dropbox"]:
+                            notifier.send_message("🚀 收到指令：立刻启动本地投递箱极速雷达...")
+                            try:
+                                scan_local_dropbox()
+                                notifier.send_message("✅ 本地投递箱雷达扫描与下发任务已执行完毕！")
+                            except Exception as e:
+                                notifier.send_message(f"❌ 扫描本地投递箱时发生异常: {e}")
+                            continue
                         elif text in ["动态", "广场", "上新", "/feed"]:
                             notifier.send_message("📡 正在连接订阅中心，拉取最新情报...")
                             try:
@@ -1692,6 +1971,21 @@ def main_control_loop(client_obj):
                                     if os.path.exists(COOKIES_FILE): os.remove(COOKIES_FILE)
                                     auto_relogin(client_obj, force=True)
                                     notifier.send_message("✅ 引擎已重新握手自愈，请重发指令！")
+                            continue
+                        
+                        # ====== 📖 新增：TMDB 影视资料百科指令 ======
+                        elif text.startswith("查剧 ") or text.startswith("信息 ") or text.startswith("/info "):
+                            keyword = text.split(" ", 1)[1].strip()
+                            if not keyword: continue
+                            
+                            notifier.send_message(f"🔍 正在连接 TMDB 全球数据库，检索【{keyword}】的档案...")
+                            try:
+                                info_msg = fetch_tmdb_rich_info(keyword)
+                                # 配合一个快速订阅的建议按钮
+                                kb = {"inline_keyboard": [[{"text": "❌ 关闭面板", "callback_data": "wiz_cancel"}]]}
+                                notifier.send_message(info_msg, kb)
+                            except Exception as e:
+                                notifier.send_message(f"❌ 检索失败: {e}")
                             continue
 
                         elif text.startswith("查 ") or text.startswith("查看 ") or text.startswith("/check "):
@@ -2315,6 +2609,13 @@ def main_control_loop(client_obj):
                                             text = text.replace(f"#{alias}", "").strip()
                                         
                                 is_bind = (action == "绑定")
+                                
+                                # 🚨 核心修复：智能抓取中文提取码，防止变成瞎子
+                                pwd_match = re.search(r'(?:访问码|提取码|密码)\s*[:：]\s*([a-zA-Z0-9]{4})', text)
+                                extracted_pwd = pwd_match.group(1) if pwd_match else None
+                                # 把密码从文本里剔除，防止污染过滤关键词
+                                text = re.sub(r'[\(（]?\s*(?:访问码|提取码|密码)\s*[:：]\s*[a-zA-Z0-9]{4}\s*[\)）]?', '', text)
+                                
                                 parts = text.split()
                                 share_url, keyword, target_path = "", "", ""
 
@@ -2325,6 +2626,10 @@ def main_control_loop(client_obj):
                                         break
 
                                 if url_index != -1:
+                                    # 把抓到的密码强行焊死在网址屁股后面
+                                    if extracted_pwd:
+                                        share_url += f"?pwd={extracted_pwd}" if "?" not in share_url else f"&pwd={extracted_pwd}"
+                                        
                                     target_path = " ".join(parts[1:url_index])
                                     if url_index < len(parts) - 1: keyword = " ".join(parts[url_index+1:])
                                 else:
@@ -3311,6 +3616,11 @@ def play():
     if request.method == 'HEAD': 
         try:
             cas = request.args.get('cas')
+            # --- 新增：强制修复 Base64 字符串 ---
+            if cas:
+                cas = cas.replace(' ', '+')
+                cas += "=" * ((4 - len(cas) % 4) % 4)
+            # ------------------------------------
             j = json.loads(base64.b64decode(cas).decode())
             
             raw_size = j.get('size') or j.get('fileSize') or 0
@@ -3332,33 +3642,38 @@ def play():
             return "", 200, {'Content-Type': 'video/mp4', 'Accept-Ranges': 'bytes'}
 
     cas = request.args.get('cas')
+    # --- 新增：强制修复 Base64 字符串 ---
+    if cas:
+        cas = cas.replace(' ', '+')  # 修复 URL 传输时把 + 变成空格的问题
+        cas += "=" * ((4 - len(cas) % 4) % 4)  # 修复末尾丢失的 =
+    # ------------------------------------
     show_name_from_url = request.args.get('show', '').strip()
     safe_name = "未知文件"
     try:
         j = json.loads(base64.b64decode(cas).decode())
-        f_md5 = str(j.get('md5') or j.get('fileMd5')).upper()
-        s_md5 = str(j.get('slice_md5') or j.get('sliceMd5')).upper()
+        f_md5 = str(j.get('md5') or j.get('fileMd5') or j.get('fileMD5')).upper()
+        s_md5 = str(j.get('slice_md5') or j.get('sliceMd5') or j.get('sliceMD5')).upper()
         raw_size = j.get('size') or j.get('fileSize')
         human_size = format_size(raw_size)
         name = j.get('name') or j.get('fileName')
         base_safe_name = "".join(x for x in name if x not in r'\/:*?"<>|')
         
-        # === 这是唯一修改的核心点：精准清洗剧名，不误杀季集 ===
+        # === 1. 洗净外部传来的中文剧名（同步带点号的编码黑名单） ===
         if show_name_from_url: 
             clean_name = re.sub(r'\s*\(\d{4}\)', '', show_name_from_url)
-            clean_name = re.sub(r'(?i)\s*(HQ|IQ|HDR|SDR|DV|4K|1080p|720p)\b', '', clean_name)
+            clean_name = re.sub(r'(?i)[_\-\s]*(HQ|IQ|DV|4K|1080[pP]|720[pP]|2160[pP]|WEB-DL|HDR|SDR|HD|H\.?26[45]|x\.?26[45]|BluRay|Remux)[_\-\s]*', '', clean_name)
             show_identifier = re.sub(r'[《》]', '', clean_name).strip()
         else:
             guess = re.split(r'(?i)\.S\d+|\.E\d+|-第\d+集', base_safe_name)[0]
             clean_name = re.sub(r'\s*\(\d{4}\)', '', guess)
-            clean_name = re.sub(r'(?i)\s*(HQ|IQ|HDR|SDR|DV|4K|1080p|720p)\b', '', clean_name)
+            clean_name = re.sub(r'(?i)[_\-\s]*(HQ|IQ|DV|4K|1080[pP]|720[pP]|2160[pP]|WEB-DL|HDR|SDR|HD|H\.?26[45]|x\.?26[45]|BluRay|Remux)[_\-\s]*', '', clean_name)
             show_identifier = re.sub(r'[《》]', '', clean_name).strip()
             
         bind_key = show_identifier
         ext = os.path.splitext(base_safe_name)[1]
         if not ext or len(ext) > 6: ext = ".mp4"
 
-        # --- 这里完全是你原本的代码，季集号绝对不会丢 ---
+        # === 2. 抓出 E01 和 S01 ===
         ep_num = None
         for p in [r'(?i)E(?:P)?\s*0*(\d+)', r'第\s*0*(\d+)\s*[集话期]', r'(?:\[|\()0*(\d+)(?:\]|\))', r'(?i)episode\s*0*(\d+)']:
             m = re.search(p, base_safe_name)
@@ -3368,20 +3683,28 @@ def play():
         s_match = re.search(r'(?i)S0*(\d+)', base_safe_name)
         s_num = int(s_match.group(1)) if s_match else 1
 
-        if show_identifier and ep_num is not None: safe_name = f"{show_identifier}.S{s_num:02d}E{ep_num:02d}{ext}"
+        # === 3. 完美拼装：提取年份，并为剧集带上年份 ===
+        year_match = re.search(r'(?<!\d)(19\d{2}|20\d{2})(?!\d)', base_safe_name)
+        year_str = f".{year_match.group(1)}" if year_match else ""
+
+        if show_identifier and ep_num is not None: 
+            safe_name = f"{show_identifier}.S{s_num:02d}E{ep_num:02d}{year_str}{ext}"
         else:
-            year_match = re.search(r'(?<!\d)(19\d{2}|20\d{2})(?!\d)', base_safe_name)
-            year_str = f".{year_match.group(1)}" if year_match else ""
             if show_identifier: safe_name = f"{show_identifier}{year_str}{ext}"
             else: safe_name = base_safe_name
 
-        # === 追加了 IQ 标签 ===
+        # === 4. 提取发烧友标签（同步 auto189 通杀带点号的 H.265 提取与净化） ===
+        tags_match = re.findall(r'(?i)\b(1080p|2160p|4K|DV|HQ|HDR|SDR|IQ|H\.?26[45]|x\.?26[45])\b', base_safe_name)
         tags = []
-        if re.search(r'(?i)\bSDR\b', base_safe_name): tags.append("SDR")
-        if re.search(r'(?i)\bHDR\b', base_safe_name): tags.append("HDR")
-        if re.search(r'(?i)\bHQ\b', base_safe_name): tags.append("HQ")
-        if re.search(r'(?i)\bIQ\b', base_safe_name): tags.append("IQ")
-        if re.search(r'(?i)\bDV\b', base_safe_name): tags.append("DV")
+        for t in tags_match:
+            t_upper = t.upper().replace('.', '')
+            if t_upper == '1080P': t_upper = '1080p'
+            elif t_upper == '2160P': t_upper = '2160p'
+            elif t_upper == 'X264': t_upper = 'H264'
+            elif t_upper == 'X265': t_upper = 'H265'
+            if t_upper not in tags:
+                tags.append(t_upper)
+                
         tag_str = "." + ".".join(tags) if tags else ""
         
         if tag_str:
@@ -3616,6 +3939,42 @@ def trigger_sync():
     threading.Thread(target=generate_strm_from_openlist_to_local, args=(target_path,), daemon=True).start()
     return "✅ 同步指令下发成功", 200
 
+@app_main.route('/api/make_strm', methods=['POST'])
+def api_make_strm():
+    """接收 auto189 下发的本地极速生成指令，原位读取 CAS 并局部刷新"""
+    try:
+        data = request.json
+        source_cas_path = data.get('source_cas_path')    # 源 cas 文件的绝对物理路径
+        target_local_dir = data.get('target_local_dir')  # 目标 strm 所在的精确目录
+        strm_name = data.get('strm_name')                # strm 的标准文件名
+        show_name = data.get('show_name')                # 纯净剧名
+
+        if not all([source_cas_path, target_local_dir, strm_name, show_name]):
+            return jsonify({"code": 400, "msg": "指令参数不全"}), 400
+
+        if not os.path.exists(source_cas_path):
+            return jsonify({"code": 404, "msg": f"找不到源文件: {source_cas_path}"}), 404
+
+        cfg = read_config()
+        os.makedirs(target_local_dir, exist_ok=True)
+        strm_path = os.path.join(target_local_dir, strm_name)
+
+        # 1. 极速模式：直接读取本地 CAS 文件，完全不走网络
+        with open(source_cas_path, 'r', encoding='utf-8') as f:
+            cas_content = f.read().strip()
+
+        # 2. 组装 strm 内容并写入本地
+        strm_data = f"{cfg['server_host']}/play?cas={urllib.parse.quote(cas_content)}&show={urllib.parse.quote(show_name)}"
+        with open(strm_path, "w", encoding="utf-8") as f:
+            f.write(strm_data)
+
+        logger.info(f"✨ 本地直通生成完毕: {strm_name}")
+        return jsonify({"code": 200, "msg": "success"}), 200
+
+    except Exception as e:
+        logger.error(f"❌ make_strm 接口异常: {e}")
+        return jsonify({"code": 500, "msg": str(e)}), 500
+
 # ==========================================
 # 🔀 独立服务二号头：5001 端口专属 302 劫持 (完全迎合旧 Nginx)
 # ==========================================
@@ -3776,11 +4135,13 @@ cd ~/189py && pm2 start casplay.py --name "casplay" --interpreter python
 4.粘贴如下内容：
 ```
 sub - 📥 [订阅/绑定] 绑定外部链接追剧
-harvest - 🚜 [收割/处理/添加] 洗名并入库CAS文件
+dropbox - 🚜 [投递/本地扫描/扫箱子] 洗名并入库本地CAS文件
+harvest - 🚜 [收割/处理/添加] 洗名并入库云端CAS文件
 feed - 📡 [动态/广场] 订阅中心最新情报
 search - 🔍 [搜 关键词] 穿甲雷达搜索
 check - 🔍 [查 剧名] 剧名查找
 author - 🕵️‍♂️ [查作者\查人] 大佬真实时间线
+info - 🎞 [查剧\信息] TMDB影视资料
 refresh- 🔄 [刷新\入库] 刷新入库某剧
 sync - 🔄 [同步订阅] 强制检查所有更新
 list - 📋 [列表] 查看当前追剧清单

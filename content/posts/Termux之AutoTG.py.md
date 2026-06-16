@@ -65,8 +65,9 @@ Telegram 官方要求任何第三方自动化脚本（无论是普通客户端�
 
 * ⚠️ 铁律：直接把这两个值复制贴进咱们脚本的配置项里。绝对绝不泄露给任何人，这是你账号操控权的底层凭证。
 
-### 三、autotg.py手动版
+### 三、autotg.py
 
+1.脚本：
 ```
 import os
 import re
@@ -82,8 +83,8 @@ import logging
 # =================================================================
 # ⚙️ 核心网关、路径与凭证配置区域
 # =================================================================
-API_ID = 33349348             
-API_HASH = "44bde7f01d2b6001589c28cea93716af"      
+API_ID = 33349348              
+API_HASH = "44bde7f01d2b6001589c28cea93716af"       
 
 COMMAND_CENTER_CHAT = "@xxskyemby_bot"
 
@@ -102,7 +103,6 @@ os.makedirs(LOCAL_TEMP_DIR, exist_ok=True)
 TMDB_API_KEY = "9c88e18e43543c8ff195c631aaa0d2fa" 
 START_TIME = time.time()
 
-# 把它放在 OLIST_TOKEN 等配置的下面
 TG_SETTINGS_DB = os.path.join(BASE_DIR, "tg_settings.json")
 
 def get_mount_root():
@@ -164,24 +164,51 @@ def load_history():
     if os.path.exists(TG_HISTORY_DB):
         try:
             with open(TG_HISTORY_DB, 'r', encoding='utf-8') as f: 
-                return json.load(f) # 🔥 卸下包袱，开机直接秒读，不再进行任何循环和多余判断
+                return json.load(f) 
         except Exception: pass
     return {}
 
-def check_and_record_history(drama, file_season, ep, version=""):
+# 🔥 终极版历史查账模块：无序集合比对，防重下且支持多版本共存
+def check_history(drama, file_season, ep, version=""):
     history = load_history()
     ver_tag = f".{version}" if version else ""
-    
-    # 🔥 这一层日常防御留着：防止以后某些奇葩剧名自带点号导致拼接出双点
-    base_name = drama.rstrip(".")
+    base_name = drama.rstrip(".").replace(" ", ".")
     key = f"{base_name}.S{file_season:02d}E{ep:02d}{ver_tag}"
     
-    if key in history: return True
-    history[key] = int(time.time())
-    try:
-        with open(TG_HISTORY_DB, 'w', encoding='utf-8') as f: json.dump(history, f, ensure_ascii=False, indent=2)
-    except Exception: pass
+    # 1. 完美精确命中，直接放行
+    if key in history:
+        return True
+        
+    # 2. 模糊查账逻辑：剥离 SDR 并无视标签顺序
+    prefix = f"{base_name}.S{file_season:02d}E{ep:02d}"
+    
+    current_tags = set(t for t in version.lower().split('.') if t)
+    current_tags.discard("sdr")
+    
+    for hist_key in history:
+        if hist_key.startswith(prefix):
+            hist_version = hist_key[len(prefix):].strip(".")
+            hist_tags = set(t for t in hist_version.lower().split('.') if t)
+            hist_tags.discard("sdr")
+            
+            if current_tags == hist_tags:
+                return True
+                
     return False
+
+# 🔥 严谨入账模块（严格记录实际排队的特征）
+def record_history(drama, file_season, ep, version=""):
+    history = load_history()
+    ver_tag = f".{version}" if version else ""
+    base_name = drama.rstrip(".").replace(" ", ".")
+    key = f"{base_name}.S{file_season:02d}E{ep:02d}{ver_tag}"
+    
+    if key not in history:
+        history[key] = int(time.time())
+        try:
+            with open(TG_HISTORY_DB, 'w', encoding='utf-8') as f: 
+                json.dump(history, f, ensure_ascii=False, indent=2)
+        except Exception: pass
 
 def load_tg_routes():
     if os.path.exists(TG_ROUTE_DB):
@@ -195,34 +222,52 @@ def save_tg_routes(data):
         with open(TG_ROUTE_DB, 'w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception: pass
 
-GLOBAL_ROUTE_CACHE = {"folder_name": "", "category": "", "folder_season": 1, "file_season": 1, "year": "", "expire_time": 0, "manual_ep": None}
-GLOBAL_ACTIVE_LOCKS = set() # 🔥 绝对防撞车全局锁
+# =================================================================
+# 🚦 全局大盘与双轨排队锁 (双车道解耦)
+# =================================================================
+GLOBAL_ROUTE_CACHE = {"folder_name": "", "category": "", "folder_season": 1, "file_season": 1, "year": "", "version": "", "expire_time": 0, "manual_ep": None}
+GLOBAL_ACTIVE_LOCKS = set() 
+GLOBAL_CANCEL_TASKS = set() 
+GLOBAL_TRANSFER_LOCK = asyncio.Semaphore(1) 
+GLOBAL_UPLOAD_LOCK = asyncio.Semaphore(1)   
 
-async def fetch_tmdb_year(cn_title):
-    if not TMDB_API_KEY: return datetime.now().strftime("%Y")
+# 🔥 终极 TMDB 抓取器：一次性获取年份和总集数
+async def fetch_tmdb_details(cn_title):
+    if not TMDB_API_KEY: return datetime.now().strftime("%Y"), 9999
     clean_q = re.sub(r'S\d+$|\s+\d+$', '', cn_title).strip()
     url = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&language=zh-CN&query={quote(clean_q)}&page=1"
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             res = await client.get(url)
             results = res.json().get("results")
-            if results and len(results[0].get("first_air_date") or results[0].get("release_date") or "") >= 4:
-                return (results[0].get("first_air_date") or results[0].get("release_date"))[:4]
+            if results:
+                item = results[0]
+                year = (item.get("first_air_date") or item.get("release_date") or "")[:4]
+                if not year: year = datetime.now().strftime("%Y")
+                
+                tmdb_id = item.get("id")
+                media_type = item.get("media_type", "tv")
+                total_eps = 9999
+                
+                if media_type == "tv" and tmdb_id:
+                    # 获取该剧的详细信息以拿到总集数
+                    det_url = f"https://api.themoviedb.org/3/tv/{tmdb_id}?api_key={TMDB_API_KEY}&language=zh-CN"
+                    det_res = await client.get(det_url)
+                    total_eps = det_res.json().get("number_of_episodes", 9999)
+                    
+                return year, total_eps
     except Exception: pass
-    return datetime.now().strftime("%Y")
+    return datetime.now().strftime("%Y"), 9999
 
 def extract_pure_episode(search_text, drama_anchor=None):
     text = search_text
-    # 1. 斩断剧名干扰
     if drama_anchor and drama_anchor.lower() in text.lower():
         idx = text.lower().find(drama_anchor.lower())
         text = text[idx:]
         
-    # 2. 标准化标记 (优先匹配 E16, EP16)
     m = re.search(r'(?i)E0*(\d+)', text)
     if m: return int(m.group(1))
     
-    # 3. 匹配中文标记：第16集, 16集, 16更, 第16话 (带各种奇怪符号)
     m = re.search(r'第\d+[季部].*?第\s*(\d+)\s*[集话期更]', text)
     if m: return int(m.group(1))
     m = re.search(r'第\s*(\d+)\s*[集话期更]', text)
@@ -230,15 +275,11 @@ def extract_pure_episode(search_text, drama_anchor=None):
     m = re.search(r'(?<![第\d])\s*(\d+)\s*[集话期更]', text)
     if m: return int(m.group(1))
     
-    # 4. 🔥 终极裸数字捕获 (彻底修复劫持与粘连 Bug)
-    # 提前清洗掉 H264, H265, 720p, 1080p 等干扰项，防止把 265 当成 265集！
     clean_text = re.sub(r'(?i)(h264|h265|x264|x265|720p|1080p|2160p|4k|8k|web-dl|webrip)', '', text)
-    # 用 (?<!\d) 和 (?!\d) 代替 \b，完美解决中文字符粘连问题 (如 "雨霖铃16")
     m_trail = re.search(r'(?<!\d)0*(\d{1,3})(?!\d)', clean_text)
     if m_trail and not (1900 < int(m_trail.group(1)) < 2100):
         return int(m_trail.group(1))
         
-    # 5. 纯中文数字转换 (如：第十六集)
     m_cn = re.search(r'第\s*([一二三四五六七八九十零百]+)\s*[集话期更]', text)
     if m_cn:
         cn_str = m_cn.group(1)
@@ -250,6 +291,27 @@ def extract_pure_episode(search_text, drama_anchor=None):
         
     return None
 
+# =================================================================
+# 🏷️ TG生态定制版：媒体标签嗅探引擎 
+# =================================================================
+def extract_media_tags(search_text):
+    text = search_text.upper() 
+    tags = []
+    
+    if re.search(r'(2160P|4K)', text): tags.append("2160p") 
+    elif re.search(r'(1080P)', text): tags.append("1080p")
+    elif re.search(r'(720P)', text): tags.append("720p")
+    
+    if re.search(r'(DV|DOVI|DOLBY VISION)', text): tags.append("DV")
+    if re.search(r'(HDR10\+|HDR10|HDR)', text): tags.append("HDR")
+        
+    if re.search(r'(SDR)', text): tags.append("SDR")
+    if re.search(r'(HQ|HIGH QUALITY)', text): tags.append("HQ")
+    if re.search(r'(IQ)', text): tags.append("IQ")
+    if re.search(r'(60FPS)', text): tags.append("60fps")
+    
+    return ".".join(tags)
+
 async def bg_upload_retry_task(local_path, target_full, total_bytes, clean_base, file_season, ep_num, is_movie, standard_name, version_suffix=""):
     try:
         await asyncio.sleep(600)  
@@ -257,29 +319,36 @@ async def bg_upload_retry_task(local_path, target_full, total_bytes, clean_base,
             try:
                 put_url = f"{OLIST_URL}/api/fs/put"
                 headers = {"Authorization": OLIST_TOKEN, "File-Path": quote(target_full), "Content-Length": str(total_bytes), "Content-Type": "application/octet-stream"}
-                with open(local_path, "rb") as f_upload:
-                    async def file_iter():
-                        while True:
-                            chunk = f_upload.read(1024 * 1024)
-                            if not chunk: break
-                            yield chunk
-                    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=300.0, write=None, pool=None), trust_env=False) as h: 
-                        resp = await h.put(put_url, content=file_iter(), headers=headers)
                 
-                if resp.json().get("code") == 200:
-                    try: os.remove(local_path)
-                    except: pass
-                    if not is_movie and ep_num is not None:
-                        check_and_record_history(clean_base, file_season, ep_num, version_suffix)
-                        ver_tag = f".{version_suffix}" if version_suffix else ""
-                        await notify_steward_log(f"📝 [后台重推-补录] {clean_base}.S{file_season:02d}E{ep_num:02d}{ver_tag}")
-                    break
+                async with GLOBAL_UPLOAD_LOCK:
+                    with open(local_path, "rb") as f_upload:
+                        async def file_iter():
+                            while True:
+                                chunk = f_upload.read(1024 * 1024)
+                                if not chunk: break
+                                yield chunk
+                        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=900.0, write=60.0, pool=None), trust_env=False) as h: 
+                            resp = await h.put(put_url, content=file_iter(), headers=headers)
+                    
+                    if resp.json().get("code") == 200:
+                        try: os.remove(local_path)
+                        except: pass
+                        if not is_movie and ep_num is not None:
+                            record_history(clean_base, file_season, ep_num, version_suffix)
+                            ver_tag = f".{version_suffix}" if version_suffix else ""
+                            await notify_steward_log(f"📝 [后台重推-补录] {clean_base}.S{file_season:02d}E{ep_num:02d}{ver_tag}")
+                        break
             except Exception:
                 pass
             await asyncio.sleep(600)
     finally:
-        GLOBAL_ACTIVE_LOCKS.discard(standard_name)
+        ver_tag = f".{version_suffix}" if version_suffix else ""
+        task_lock_key = f"{clean_base}.S{file_season:02d}E{ep_num:02d}{ver_tag}" if not is_movie else f"{clean_base}{ver_tag}"
+        GLOBAL_ACTIVE_LOCKS.discard(task_lock_key)
 
+# =================================================================
+# 🚀 核心媒体传输引擎
+# =================================================================
 async def process_media_transfer(client, message, status, override_info=None):
     media = message.video or message.document
     if not media: return
@@ -287,21 +356,23 @@ async def process_media_transfer(client, message, status, override_info=None):
     _, ext = os.path.splitext(raw_file)
     if not ext: ext = ".mp4"
     
+    src_chat_id = src_drama_key = src_end_ep = None
+    
     if override_info:
-        # ... (这里是自动订阅的逻辑，不用动)
-        if len(override_info) == 7:
-            folder, cat, folder_season, file_season, year, ep_num, version_suffix = override_info
+        # 支持传参解包扩展，引入频道ID、剧名Key和最终集数用于自动杀青
+        if len(override_info) >= 11:
+            folder, cat, folder_season, file_season, year, ep_num, version_suffix, file_suffix, src_chat_id, src_drama_key, src_end_ep = override_info[:11]
+        elif len(override_info) >= 8:
+            folder, cat, folder_season, file_season, year, ep_num, version_suffix, file_suffix = override_info[:8]
         else:
             folder, cat, folder_season, file_season, year, ep_num = override_info[:6]
-            version_suffix = ""
+            version_suffix = file_suffix = ""
     else:
-        # 👇 这里是手动 /go 发车的逻辑
         folder, cat = GLOBAL_ROUTE_CACHE["folder_name"], GLOBAL_ROUTE_CACHE["category"]
         folder_season, file_season = GLOBAL_ROUTE_CACHE["folder_season"], GLOBAL_ROUTE_CACHE["file_season"]
         year = GLOBAL_ROUTE_CACHE.get("year", "")
-        
-        # 🔥 关键修复：从缓存中读取版本号，不再硬编码为空！
         version_suffix = GLOBAL_ROUTE_CACHE.get("version", "")
+        file_suffix = GLOBAL_ROUTE_CACHE.get("file_version", "") 
         
         if GLOBAL_ROUTE_CACHE["manual_ep"] is not None:
             ep_num = GLOBAL_ROUTE_CACHE["manual_ep"]
@@ -309,296 +380,481 @@ async def process_media_transfer(client, message, status, override_info=None):
         else: 
             ep_num = extract_pure_episode(f"{message.caption or ''} {raw_file}")
             
+    text_to_scan = f"{message.caption or ''} {raw_file}"
+    auto_tags = extract_media_tags(text_to_scan)
+            
     is_movie = "电影" in cat or cat in ["演唱会", "纪录片"]
     
-    # 🔥 剥离引擎：从文件夹名中完美抽离出纯剧名
     clean_base = re.sub(r'\s*\(\d{4}\)', '', folder).strip()
     if version_suffix and clean_base.endswith(version_suffix):
         clean_base = clean_base[:-len(version_suffix)].strip()
     clean_base = clean_base.replace(" ", ".")
     
-    # 生成版本号尾巴
-    ver_tag = f".{version_suffix}" if version_suffix else ""
+    # ==========================================
+    # 🔥 双轨分离制：物理文件名只认 f=，底层账本认全套
+    # ==========================================
     
-    # ✅ 替换为下面这样：
-    current_mount = get_mount_root()  # 🔥 动态获取你刚才设置的目录
+    # A轨道：生成物理文件的标签 (过滤掉了 v= 版本组)
+    raw_physical_tags = []
+    if auto_tags: raw_physical_tags.extend(auto_tags.split('.'))
+    if file_suffix: raw_physical_tags.extend(file_suffix.split('.'))
     
+    final_physical_tags = []
+    for t in raw_physical_tags:
+        if t and t not in final_physical_tags: final_physical_tags.append(t)
+        
+    combined_physical_tags = ".".join(final_physical_tags)
+    ver_tag_physical = f".{combined_physical_tags}" if combined_physical_tags else ""
+    
+    # B轨道：生成历史账本和防撞锁的标签 (包含 v=)
+    raw_history_tags = raw_physical_tags.copy()
+    if version_suffix: raw_history_tags.extend(version_suffix.split('.'))
+    
+    final_history_tags = []
+    for t in raw_history_tags:
+        if t and t not in final_history_tags: final_history_tags.append(t)
+        
+    combined_history_tags = ".".join(final_history_tags)
+    ver_tag_history = f".{combined_history_tags}" if combined_history_tags else ""
+    
+    current_mount = get_mount_root()
+        
     if is_movie:
-        standard_name = f"{clean_base}.{year}{ver_tag}{ext}" if year else f"{clean_base}{ver_tag}{ext}"
+        standard_name = f"{clean_base}.{year}{ver_tag_physical}{ext}" if year else f"{clean_base}{ver_tag_physical}{ext}"
         target_dir = f"{current_mount}/{cat}/{folder}"
     else:
-        ep_str = f"{ep_num:02d}" if ep_num is not None else "00"
+        if ep_num is None:
+            await notify_steward_log(f"⚠️ [过滤跳过] `{clean_base}` 未提取到集数(疑似预告)，已过滤。")
+            try: await status.edit_text(f"⚠️ `{clean_base}` 未能提取到集数，已被防垃圾机制拦截！(可用 #E集数 遥控器强行指派)")
+            except: pass
+            return
+            
+        # 🔥 更新历史拦截查询：使用带有v=的完整B轨道特征码
+        if check_history(clean_base, file_season, ep_num, combined_history_tags):
+            hist_key = f"{clean_base}.S{file_season:02d}E{ep_num:02d}{ver_tag_history}"
+            await notify_steward_log(f"🛡️ [账本拦截] `{hist_key}` 账本中已存在，自动销毁重复发车！")
+            try: await status.delete()  # 静默拦截，不留残骸
+            except: pass
+            return
+            
+        ep_str = f"{ep_num:02d}"
         target_dir = f"{current_mount}/{cat}/{folder}/Season {folder_season}"
-        standard_name = f"{clean_base}.S{file_season:02d}E{ep_str}.{year}{ver_tag}{ext}" if year else f"{clean_base}.S{file_season:02d}E{ep_str}{ver_tag}{ext}"
+        standard_name = f"{clean_base}.S{file_season:02d}E{ep_str}.{year}{ver_tag_physical}{ext}" if year else f"{clean_base}.S{file_season:02d}E{ep_str}{ver_tag_physical}{ext}"
         
-    if standard_name in GLOBAL_ACTIVE_LOCKS:
-        await notify_steward_log(f"🛡️ [防撞锁拦截] `{standard_name}` 正在被施工处理，巡逻哨兵已静默撤退。")
+    task_lock_key = f"{clean_base}.S{file_season:02d}E{ep_num:02d}{ver_tag_history}" if not is_movie else f"{clean_base}{ver_tag_history}"
+    
+    if task_lock_key in GLOBAL_ACTIVE_LOCKS:
+        await notify_steward_log(f"🛡️ [防撞锁拦截] `{task_lock_key}` 正在被施工处理，巡逻哨兵已静默撤退。")
         try:
-            await status.edit_text(f"🛡️ **[防撞锁拦截生效]** `{standard_name}` 已经在下载了，拦截并销毁重复任务！")
-            await asyncio.sleep(3)
             await status.delete()
         except: pass
         return
     
-    GLOBAL_ACTIVE_LOCKS.add(standard_name)
+    GLOBAL_ACTIVE_LOCKS.add(task_lock_key)
     bg_task_spawned = False
     downloaded_bytes = 0
 
     try:
-        local_path = os.path.join(LOCAL_TEMP_DIR, standard_name)
+        # 🔥 本地防撞补丁：为了防止大通铺撞车，本地暂存文件名强制加上老大的名号
+        local_temp_name = f"[{version_suffix}]_{standard_name}" if version_suffix else standard_name
+        local_path = os.path.join(LOCAL_TEMP_DIR, local_temp_name)
+        
         target_full = f"{target_dir}/{standard_name}".replace("//", "/")
         total_bytes = media.file_size
         file_size_mb = total_bytes / (1024 * 1024) if total_bytes else 0
         
-        # 📡 提取真实的来源频道名字
         source_name = message.forward_from_chat.title if message.forward_from_chat and message.forward_from_chat.title else (message.chat.title if message.chat and message.chat.title else "未知来源")
-        
-        await notify_steward_log(f"📥 [涡轮启动] 拉取: {standard_name} | 来源: {source_name} | 大小: {file_size_mb:.2f} MB")
-        
-        # 强制在 TG 聊天框里把来源和大小亮出来！
-        try:
-            await status.edit_text(f"🚀 **[极速拉取]** `{standard_name}`\n📡 来源频道: **{source_name}**\n⚖️ 机器测重: **{file_size_mb:.2f} MB**\n涡轮进度: **0%**")
-        except: pass
-        
-        chunk_size = 1024 * 1024
-        last_pct = 0
-        retry_count = 0
-        max_retries = 15  # 🔥 顺手调大一点，允许它多试几次
-        last_stuck_chunks = -1
-        stuck_loop_count = 0
-        
-        while True:
-            # 🔥 加装致命刹车！重试超过限制，立刻打断施法，跳出死循环！
-            if retry_count >= max_retries:
-                break
-                
-            current_bytes = os.path.getsize(local_path) if os.path.exists(local_path) else 0
             
-            if current_bytes > total_bytes:
-                try: os.remove(local_path)
-                except: pass
-                current_bytes = 0
-                
-            if current_bytes == total_bytes:
-                downloaded_bytes = current_bytes
-                break
-                
-            completed_chunks = current_bytes // chunk_size
-            secure_bytes = completed_chunks * chunk_size
-            if secure_bytes > 0:
-                try:
-                    with open(local_path, "r+b") as f: f.truncate(secure_bytes)
-                except: pass
-                downloaded_bytes = secure_bytes
-                open_mode = "ab"
-            else: 
-                downloaded_bytes = 0
-                completed_chunks = 0
-                open_mode = "wb"
-                
-            try:
-                buffer_queue = asyncio.Queue(maxsize=50)
-                writer_error = None
-                async def disk_writer():
-                    nonlocal writer_error
-                    try:
-                        with open(local_path, open_mode) as f:
-                            while True:
-                                chunk = await buffer_queue.get()
-                                if chunk is None: break 
-                                f.write(chunk); buffer_queue.task_done()
-                    except Exception as e: writer_error = e
+        try: await status.edit_text(f"⏳ **[TG下载排队中]** `{standard_name}`\n🚦 正在等待下载通道空闲...")
+        except: pass
 
-                writer_task = asyncio.create_task(disk_writer())
+        async with GLOBAL_TRANSFER_LOCK:
+            await notify_steward_log(f"📥 [涡轮启动] 拉取: {standard_name} | 来源: {source_name} | 大小: {file_size_mb:.2f} MB")
+            
+            try:
+                await status.edit_text(f"🚀 **[极速拉取]** `{standard_name}`\n📡 来源频道: **{source_name}**\n⚖️ 机器测重: **{file_size_mb:.2f} MB**\n涡轮进度: **0%**")
+            except: pass
+            
+            chunk_size = 1024 * 1024
+            retry_count = 0
+            max_retries = 999999  
+            last_stuck_chunks = -1
+            stuck_loop_count = 0
+            
+            last_ui_time = time.time()
+            last_ui_bytes = 0
+            speed_text = "0.00 MB/s"
+            eta_text = "计算中..."
+            
+            while True:
+                if retry_count >= max_retries: break
+                current_bytes = os.path.getsize(local_path) if os.path.exists(local_path) else 0
                 
-                async for chunk in client.stream_media(message, offset=completed_chunks):
-                    if writer_error: raise writer_error 
-                    await buffer_queue.put(chunk)
-                    downloaded_bytes += len(chunk)
-                    pct = int(downloaded_bytes * 100 / total_bytes)
-                    if (pct // 10) > (last_pct // 10):
-                        last_pct = pct - (pct % 10)
-                        asyncio.create_task(status.edit_text(f"🚀 **[极速拉取]** `{standard_name}`\n📡 来源: **{source_name}** | ⚖️ 大小: **{file_size_mb:.2f} MB**\n涡轮进度: **{last_pct}%**"))
-                        asyncio.create_task(notify_steward_log(f"🚀 [下载进度] {standard_name} ➔ {last_pct}%"))
-                
-                await buffer_queue.put(None)
-                await writer_task
-                
-                if downloaded_bytes >= total_bytes: 
+                if current_bytes > total_bytes:
+                    try: os.remove(local_path)
+                    except: pass
+                    current_bytes = 0
+                    
+                if current_bytes == total_bytes:
+                    downloaded_bytes = current_bytes
                     break
-                else:
+                    
+                completed_chunks = current_bytes // chunk_size
+                secure_bytes = completed_chunks * chunk_size
+                if secure_bytes > 0:
+                    try:
+                        with open(local_path, "r+b") as f: f.truncate(secure_bytes)
+                    except: pass
+                    downloaded_bytes = secure_bytes
+                    open_mode = "ab"
+                else: 
+                    downloaded_bytes = 0
+                    completed_chunks = 0
+                    open_mode = "wb"
+                    
+                try:
+                    buffer_queue = asyncio.Queue(maxsize=50)
+                    writer_error = None
+                    async def disk_writer():
+                        nonlocal writer_error
+                        try:
+                            with open(local_path, open_mode) as f:
+                                while True:
+                                    chunk = await buffer_queue.get()
+                                    if chunk is None: break 
+                                    f.write(chunk); buffer_queue.task_done()
+                        except Exception as e: writer_error = e
+
+                    writer_task = asyncio.create_task(disk_writer())
+                    yielded_any = False
+                    
+                    async for chunk in client.stream_media(message, offset=completed_chunks):
+                        yielded_any = True
+                        if task_lock_key in GLOBAL_CANCEL_TASKS: break 
+                        if writer_error: raise writer_error 
+                        await buffer_queue.put(chunk)
+                        downloaded_bytes += len(chunk)
+                        
+                        now = time.time()
+                        duration = now - last_ui_time
+                        if duration >= 8.0:
+                            bytes_diff = downloaded_bytes - last_ui_bytes
+                            speed_mb = (bytes_diff / duration) / (1024 * 1024)
+                            speed_text = f"{speed_mb:.2f} MB/s"
+                            
+                            rem_bytes = total_bytes - downloaded_bytes
+                            speed_bps = bytes_diff / duration
+                            if speed_bps > 0:
+                                eta_sec = rem_bytes / speed_bps
+                                if eta_sec > 60: eta_text = f"{int(eta_sec // 60)}分{int(eta_sec % 60)}秒"
+                                else: eta_text = f"{int(eta_sec)}秒"
+                            else: eta_text = "卡顿"
+                                
+                            pct = int(downloaded_bytes * 100 / total_bytes)
+                            last_ui_time = now
+                            last_ui_bytes = downloaded_bytes
+                            
+                            try:
+                                asyncio.create_task(status.edit_text(
+                                    f"🚀 **[极速拉取]** `{standard_name}`\n"
+                                    f"📡 来源: **{source_name}** | ⚖️ 大小: **{file_size_mb:.2f} MB**\n"
+                                    f"📈 实时网速: **{speed_text}**\n"
+                                    f"⏳ 预计剩余: **{eta_text}**\n"
+                                    f"⚡ 涡轮进度: **{pct}%**"
+                                ))
+                            except: pass
+                            asyncio.create_task(notify_steward_log(f"🚀 [下载进度] {standard_name} ➔ {pct}% | {speed_text} | 剩余: {eta_text}"))
+                    
+                    await buffer_queue.put(None)
+                    await writer_task
+
+                    if task_lock_key in GLOBAL_CANCEL_TASKS: break 
+                    if downloaded_bytes >= total_bytes: break
+                    else:
+                        retry_count += 1
+                        if not yielded_any:
+                            try: message = await client.get_messages(message.chat.id, message.id)
+                            except: pass
+
+                        if completed_chunks == last_stuck_chunks:
+                            stuck_loop_count += 1
+                            try: await status.edit_text(f"⚠️ **[节点堵塞]** 发现底层断流，正执行信道唤醒...\n🔄 第 **{retry_count}** 次无损断点死磕...")
+                            except: pass
+                        else: 
+                            last_stuck_chunks = completed_chunks; stuck_loop_count = 0
+                        await asyncio.sleep(3.0)
+                        
+                except Exception as e:
+                    if 'writer_task' in locals() and not writer_task.done(): writer_task.cancel()
                     retry_count += 1
-                    if completed_chunks == last_stuck_chunks:
-                        stuck_loop_count += 1
-                        if stuck_loop_count >= 10:
-                            if os.path.exists(local_path): os.remove(local_path)
-                            last_stuck_chunks = -1; stuck_loop_count = 0; continue
-                        await status.edit_text(f"⚠️ **[节点堵塞]** 正在重新校准物理块...\n🔄 第 **{retry_count}** 次死磕底层数据...")
-                    else: 
-                        last_stuck_chunks = completed_chunks; stuck_loop_count = 0
+                    try: 
+                        err_msg = str(e) if str(e) else "底层连接被掐断"
+                        await status.edit_text(f"⚠️ **[网络防御生效]** `{standard_name}` 传输受阻！\n🛑 死因: `{err_msg}`\n🛠️ 第 **{retry_count}** 次无缝重联死磕...")
+                    except: pass
+                    
+                    if retry_count % 5 == 0:
+                        try: message = await client.get_messages(message.chat.id, message.id)
+                        except: pass
                     await asyncio.sleep(3.0)
                     
-            except Exception as e:
-                if 'writer_task' in locals() and not writer_task.done(): writer_task.cancel()
-                retry_count += 1
-                await status.edit_text(f"⚠️ **[网络闪断]** 传输突发中断！\n🛠️ 第 **{retry_count}** 次断点重联死磕...")
-                await asyncio.sleep(3.0)
-                
-        if downloaded_bytes < total_bytes: 
-            if retry_count >= max_retries:
-                try:
-                    if os.path.exists(local_path): os.remove(local_path)
-                except: pass
-                await status.edit_text("❌ 下载尝试彻底耗尽，已自动销毁本地残片。")
-            else:
-                await status.edit_text("⚠️ 节点暂存断点，保留残片。")
-            return
+            if downloaded_bytes < total_bytes: 
+                if retry_count >= max_retries or task_lock_key in GLOBAL_CANCEL_TASKS:
+                    try:
+                        if os.path.exists(local_path): os.remove(local_path)
+                        await status.edit_text("❌ 任务已被手动彻底终止或超时，已连根拔起销毁残片。")
+                    except: pass
+                else:
+                    try: await status.edit_text("⚠️ 节点暂存断点，保留残片。")
+                    except: pass
+                return
+
+        try: await status.edit_text("✅ 本地落盘完成，进入云端上传排队队列 (不阻塞下载)...")
+        except: pass
+
+        if ext.lower() in [".cas", ".zip"]:
+            import shutil
+            import zipfile
             
-        await status.edit_text("✅ 本地落盘完成，正在上传云端...")
+            STAGING_DIR = "/data/data/com.termux/files/home/sharecas"
+            os.makedirs(STAGING_DIR, exist_ok=True)
+            final_cas_path = os.path.join(STAGING_DIR, standard_name.replace(ext, ".cas"))
+            
+            try:
+                if ext.lower() == ".zip":
+                    with zipfile.ZipFile(local_path, "r") as z:
+                        cas_files = [f for f in z.namelist() if f.lower().endswith(".cas")]
+                        if cas_files:
+                            with open(final_cas_path, "wb") as f_out: 
+                                f_out.write(z.read(cas_files[0]))
+                else:
+                    shutil.move(local_path, final_cas_path)
+                
+                try: os.remove(local_path) 
+                except: pass
+                
+                try: await status.edit_text(f"🎉 **CAS截留成功**\n已洗名并存入本地 `{STAGING_DIR}`，等待 auto189 接管。")
+                except: pass
+                return
+            except Exception as e:
+                try: await status.edit_text(f"❌ CAS处理失败: {e}")
+                except: pass
+                return
         
         put_url = f"{OLIST_URL}/api/fs/put"
         headers = {"Authorization": OLIST_TOKEN, "File-Path": quote(target_full), "Content-Length": str(total_bytes), "Content-Type": "application/octet-stream"}
         push_success, up_retries = False, 0
         f_upload = None
         
-        while not push_success and up_retries < 5:
-            try:
-                last_up = 0
-                f_upload = open(local_path, "rb")
-                f_upload.seek(0)
-                async def file_iter():
-                    nonlocal last_up
-                    sent = 0
-                    while True:
-                        chunk = f_upload.read(1024 * 1024)
-                        if not chunk: break
-                        sent += len(chunk)
-                        pct = int(sent * 100 / total_bytes)
-                        if (pct // 10) > (last_up // 10):
-                            last_up = pct - (pct % 10)
-                            asyncio.create_task(status.edit_text(f"🚀 **[直推天翼云]** `{standard_name}`\n📡 来源: **{source_name}** | ⚖️ 大小: **{file_size_mb:.2f} MB**\n云端进度: **{last_up}%**"))
-                            asyncio.create_task(notify_steward_log(f"☁️ [上传进度] {standard_name} ➔ {last_up}%"))
-                        yield chunk
-                # 🔥 修复 1：把 read 延长到 900秒(15分钟)给天翼云合并大文件留足时间，把 write 加锁防止网络假死
-                async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=900.0, write=60.0, pool=None), trust_env=False) as h: 
-                    resp = await h.put(put_url, content=file_iter(), headers=headers)
-                
-                # 🔥 修复 2：逼出天翼云/Alist的真实拦截原因
-                resp_json = resp.json()
-                if resp_json.get("code") == 200: 
-                    push_success = True
-                else: 
-                    err_msg = resp_json.get("message", "未知拦截")
-                    raise Exception(f"云端拒绝落盘: {err_msg}")
-            
-            except Exception as e: 
-                up_retries += 1
-                err_detail = str(e) if str(e) else "网络响应死锁或彻底超时"
-                # 🔥 修复 3：把真实死因打印在 TG 群里，死也要死个明白！
-                await status.edit_text(f"⚠️ 云端传输受阻: {err_detail}\n🔄 正在进行第 {up_retries} 次重连...")
-                await asyncio.sleep(up_retries*4)
-            finally:
-                if f_upload:
-                    try: f_upload.close()
+        async with GLOBAL_UPLOAD_LOCK:
+            while not push_success and up_retries < 5:
+                if task_lock_key in GLOBAL_CANCEL_TASKS:
+                    try: await status.edit_text("❌ 云端直推已被手动彻底终止。")
                     except: pass
-                    f_upload = None
+                    break 
+
+                try:
+                    last_up = 0
+                    f_upload = open(local_path, "rb")
+                    async def file_iter():
+                        nonlocal last_up
+                        sent = 0
+                        while True:
+                            if task_lock_key in GLOBAL_CANCEL_TASKS: break 
+                            chunk = f_upload.read(1024 * 1024)
+                            if not chunk: break
+                            sent += len(chunk)
+                            pct = int(sent * 100 / total_bytes)
+                            if (pct // 10) > (last_up // 10):
+                                last_up = pct - (pct % 10)
+                                if last_up >= 100:
+                                    asyncio.create_task(status.edit_text(f"🚀 **[直推天翼云]** `{standard_name}`\n📡 来源: **{source_name}** | ⚖️ 大小: **{file_size_mb:.2f} MB**\n云端进度: **100% (数据推送完毕，正等待天翼云校验落盘...)**"))
+                                else:
+                                    asyncio.create_task(status.edit_text(f"🚀 **[直推天翼云]** `{standard_name}`\n📡 来源: **{source_name}** | ⚖️ 大小: **{file_size_mb:.2f} MB**\n云端进度: **{last_up}%**"))
+                                asyncio.create_task(notify_steward_log(f"☁️ [上传进度] {standard_name} ➔ {last_up}%"))
+                            yield chunk
+                    
+                    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=900.0, write=60.0, pool=None), trust_env=False) as h: 
+                        resp = await h.put(put_url, content=file_iter(), headers=headers)
+                    
+                    resp_json = resp.json()
+                    if resp_json.get("code") == 200: 
+                        push_success = True
+                    else: 
+                        err_msg = resp_json.get("message", "未知拦截")
+                        raise Exception(f"云端拒绝落盘: {err_msg}")
                 
-        if push_success:
-            if not is_movie and ep_num is not None:
-                check_and_record_history(clean_base, file_season, ep_num, version_suffix)
-                ver_tag = f".{version_suffix}" if version_suffix else ""
-                await notify_steward_log(f"📝 [历史已写入] {clean_base}.S{file_season:02d}E{ep_num:02d}{ver_tag}")
+                except Exception as e: 
+                    up_retries += 1
+                    err_detail = str(e) if str(e) else "网络响应死锁或彻底超时"
+                    try: await status.edit_text(f"⚠️ 云端传输受阻: {err_detail}\n🔄 正在进行第 {up_retries} 次重连...")
+                    except: pass
+                    await asyncio.sleep(up_retries*4)
+                finally:
+                    if f_upload:
+                        try: f_upload.close()
+                        except: pass
+                        f_upload = None
+
+            if push_success:
+                if not is_movie and ep_num is not None:
+                    # 历史记录必须带上完整的B轨道特征码，防止防撞锁失效
+                    record_history(clean_base, file_season, ep_num, combined_history_tags)
+                    await notify_steward_log(f"📝 [历史已写入] {clean_base}.S{file_season:02d}E{ep_num:02d}{ver_tag_history}")
+                    
+                await notify_steward_log(f"🎉 [终极入库成功] ➔ {target_full}")
+                try: await status.edit_text(f"🎉 **终极入库成功** ➔ `{target_full}`")
+                except Exception: 
+                    try: await client.send_message("me", f"🎉 **[备用通道通知] 入库成功** ➔ `{standard_name}`")
+                    except: pass
                 
-            await notify_steward_log(f"🎉 [终极入库成功] ➔ {target_full}")
-            try: await status.edit_text(f"🎉 **终极入库成功** ➔ `{target_full}`")
-            except Exception: await client.send_message("me", f"🎉 **[备用通道通知] 入库成功** ➔ `{standard_name}`")
-            
-            try:
-                if os.path.exists(local_path): os.remove(local_path)
-            except Exception: pass
-        else:
-            asyncio.create_task(bg_upload_retry_task(local_path, target_full, total_bytes, clean_base, file_season, ep_num, is_movie, standard_name, version_suffix))
-            bg_task_spawned = True
-            try: await status.edit_text("⚠️ 云端直推受阻，已强行托管至后台队列，每10分钟自动重试...")
-            except: await client.send_message("me", f"⚠️ 云端直推受阻，已托管至后台重推: `{standard_name}`")
-            
+                try:
+                    STAGING_BASE_DIR = "/storage/emulated/0/Download/189cas"
+                    cas_file_name = f"{standard_name}.cas"
+                    cas_target_full = f"{target_full}.cas"
+                    sub_path = target_dir.replace(current_mount, "", 1)
+                    local_cas_dir = f"{STAGING_BASE_DIR}{sub_path}"
+                    os.makedirs(local_cas_dir, exist_ok=True)
+                    final_cas_path = os.path.join(local_cas_dir, cas_file_name)
+                    
+                    get_info_url = f"{OLIST_URL}/api/fs/get"
+                    headers_get = {"Authorization": OLIST_TOKEN, "Content-Type": "application/json"}
+                    
+                    cas_downloaded = False
+                    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client_get:
+                        for attempt in range(6):
+                            await asyncio.sleep(5) 
+                            resp = await client_get.post(get_info_url, json={"path": cas_target_full}, headers=headers_get)
+                            resp_data = resp.json()
+                            if resp_data.get("code") == 200:
+                                raw_url = resp_data["data"]["raw_url"]
+                                resp_dl = await client_get.get(raw_url)
+                                if resp_dl.status_code == 200:
+                                    with open(final_cas_path, "wb") as f_cas:
+                                        f_cas.write(resp_dl.content)
+                                    await notify_steward_log(f"🔗 [CAS下发] `{sub_path}/{cas_file_name}` 已成功镜像至本地。")
+                                    cas_downloaded = True
+                                    break
+                        if not cas_downloaded:
+                            await notify_steward_log(f"⚠️ [CAS拉取超时] 轮询30秒，云端未吐出 `{cas_file_name}`，或直链被拒绝。")
+                except Exception as e:
+                    await notify_steward_log(f"⚠️ [CAS拉取异常] {str(e)}")
+                
+                try:
+                    if os.path.exists(local_path): os.remove(local_path)
+                except Exception: pass
+
+                # =======================================================
+                # 🔥 杀青清理逻辑 (Auto-Cleanup)
+                # =======================================================
+                if src_drama_key and src_end_ep and ep_num is not None:
+                    if ep_num >= src_end_ep and src_end_ep != 9999:
+                        try:
+                            config = load_listener_config()
+                            if src_chat_id in config.get("trusted_channels", {}):
+                                if src_drama_key in config["trusted_channels"][src_chat_id].get("monitored_dramas", {}):
+                                    del config["trusted_channels"][src_chat_id]["monitored_dramas"][src_drama_key]
+                                    with open(TG_LISTENER_DB, "w", encoding="utf-8") as f:
+                                        json.dump(config, f, ensure_ascii=False, indent=4)
+                                    await notify_steward_log(f"🎉 [全季杀青] `{src_drama_key}` 已达到设定的 {src_end_ep} 集，监听雷达已自动销毁！")
+                                    try: await client.send_message(COMMAND_CENTER_CHAT, f"🎉 **杀青通知**\n🎬 `{src_drama_key}` 全 {src_end_ep} 集已完结入库！\n♻️ 监听雷达已自动回收。")
+                                    except: pass
+                        except Exception as e:
+                            pass
+
+            else:
+                if task_lock_key in GLOBAL_CANCEL_TASKS:
+                    return 
+                    
+                asyncio.create_task(bg_upload_retry_task(local_path, target_full, total_bytes, clean_base, file_season, ep_num, is_movie, standard_name, combined_history_tags))
+                bg_task_spawned = True
+                try: await status.edit_text("⚠️ 云端直推受阻，已强行托管至后台队列，每10分钟自动重试...")
+                except: 
+                    try: await client.send_message("me", f"⚠️ 云端直推受阻，已托管至后台重推: `{standard_name}`")
+                    except: pass
     finally:
         if not bg_task_spawned:
-            GLOBAL_ACTIVE_LOCKS.discard(standard_name)
+            GLOBAL_ACTIVE_LOCKS.discard(task_lock_key)
+        GLOBAL_CANCEL_TASKS.discard(task_lock_key)
 
 # =================================================================
-# 🌟 全自动挖掘引擎 (加入了动态重量拦截)
+# 🌟 全自动挖掘引擎 (已挂载让路网关)
 # =================================================================
-# 把首行定义改成这样，加一个 year=None
 async def sweep_existing_history(client, chat_id, drama_key, category, folder_season, file_season, min_ep, min_mb=0, max_mb=999999, fetch_limit=200, year=None):
     try:
         chat_id_int = int(chat_id) if str(chat_id).lstrip('-').isdigit() else chat_id
-        
-        # 🔥 如果是新结构，解析出真实搜索词和版本；如果是老数据，drama_key 就是剧名
         config = load_listener_config()
         d_info = config.get("trusted_channels", {}).get(str(chat_id), {}).get("monitored_dramas", {}).get(drama_key, {})
         search_kw = d_info.get("search_kw", drama_key)
-        version_suffix = d_info.get("version", "")
+        db_version = d_info.get("version", "")
+        db_file_version = d_info.get("file_version", "")
+        end_ep = d_info.get("end_ep", 9999)
         
-        if not year: year = await fetch_tmdb_year(search_kw)
+        if not year: year, _ = await fetch_tmdb_details(search_kw)
             
-        # 🔥 文件夹物理隔离：将夜 (2026) HDR
-        folder_name = f"{search_kw} ({year})" if year else search_kw
-        if version_suffix: 
-            folder_name = f"{folder_name} {version_suffix}"  # 👈 这里同样只留空格
-        
-        # 账本判定名
-        hist_base = f"{search_kw}_{version_suffix}" if version_suffix else search_kw
-        
         async for old_msg in client.get_chat_history(chat_id_int, limit=fetch_limit):
             media = old_msg.video or old_msg.document
             if not media: continue
             
             text_to_scan = f"{old_msg.caption or ''} {getattr(media, 'file_name', '')}"
-            
-            # 🔥 新增：历史消息扫荡，同样执行上下文缝合术！
             if old_msg.reply_to_message:
                 parent_text = old_msg.reply_to_message.caption or old_msg.reply_to_message.text or ""
                 text_to_scan = f"{text_to_scan} {parent_text}"
-            # 🔥 这里要用真实的剧名 search_kw 去扫描文字
+                
             if search_kw.lower() in text_to_scan.lower():
+                # 🔥 网关让路补丁：如果当前订阅没写 v=，但别人写了，并且别人命中该文案，我必须让路跳过！
+                skip_due_to_exclusive = False
+                if not db_version:
+                    all_dramas = config.get("trusted_channels", {}).get(str(chat_id), {}).get("monitored_dramas", {})
+                    for other_key, other_info in all_dramas.items():
+                        if other_info.get("version") and other_info["version"].lower() in text_to_scan.lower() and other_info.get("search_kw", "").lower() in text_to_scan.lower():
+                            skip_due_to_exclusive = True
+                            break
+                if skip_due_to_exclusive: continue
+
                 ep_num = extract_pure_episode(text_to_scan, drama_anchor=search_kw)
                 if ep_num is None or ep_num < min_ep: continue
                 
                 file_size_mb = media.file_size / (1024 * 1024) if getattr(media, "file_size", 0) else 0
                 if not (min_mb <= file_size_mb <= max_mb): continue
                 
-                # 🔥 使用独立版本账本进行核对
-                ver_tag = f".{version_suffix}" if version_suffix else ""
-                if f"{search_kw}.S{file_season:02d}E{ep_num:02d}{ver_tag}" in load_history(): 
+                auto_tags = extract_media_tags(text_to_scan)
+                temp_tags = []
+                if auto_tags: temp_tags.extend(auto_tags.split('.'))
+                if db_file_version: temp_tags.extend(db_file_version.split('.'))
+                if db_version: temp_tags.extend(db_version.split('.'))
+                
+                preview_tags = ".".join(dict.fromkeys(temp_tags))
+                
+                folder_name = f"{search_kw} ({year})" if year else search_kw
+                if db_version: 
+                    folder_name = f"{folder_name} {db_version}"  
+                
+                if check_history(search_kw, file_season, ep_num, preview_tags):
                     continue
                     
-                override_info = (folder_name, category, folder_season, file_season, year, ep_num, version_suffix)
-                try: status = await client.send_message(COMMAND_CENTER_CHAT, f"🎯 **[哨兵发车]**\n📺 `{search_kw}` ({version_suffix or '默认'}) ➔ S{file_season:02d}E{ep_num:02d}")
-                except Exception: status = await client.send_message("me", f"🎯 **[备用嗅探]**\n📺 `{search_kw}` ({version_suffix or '默认'}) ➔ S{file_season:02d}E{ep_num:02d}")
-                await process_media_transfer(client, old_msg, status, override_info)
+                override_info = (folder_name, category, folder_season, file_season, year, ep_num, db_version, db_file_version, str(chat_id), drama_key, end_ep)
+                try: status = await client.send_message(COMMAND_CENTER_CHAT, f"🎯 **[哨兵发车]**\n📺 `{search_kw}` ({db_version or '默认'}) ➔ S{file_season:02d}E{ep_num:02d}")
+                except Exception: status = await client.send_message("me", f"🎯 **[备用嗅探]**\n📺 `{search_kw}` ({db_version or '默认'}) ➔ S{file_season:02d}E{ep_num:02d}")
+                asyncio.create_task(process_media_transfer(client, old_msg, status, override_info))
                 await asyncio.sleep(5) 
     except Exception as e:
         pass
 
 # =================================================================
-# 🧠 智能安全巡航进程 (完美融合夜间休眠 + 周更日更排班过滤)
+# 🧠 智能安全巡航进程 
 # =================================================================
 async def smart_patrol_daemon(client):
     await asyncio.sleep(60) 
     while True:
         try:
-            # 门禁 1：凌晨 0 点到早上 9 点强制进入深度睡眠，防封号
             current_hour = datetime.now().hour
             if 0 <= current_hour < 9:
                 await notify_steward_log(f"💤 [夜间休眠] 当前 {current_hour} 点，凌晨0-9点不巡逻，打更人深度睡眠中...")
                 await asyncio.sleep(3600) 
                 continue
             
-            # 白天每 15 分钟打更一次
             await asyncio.sleep(900)
             
-            # 门禁 2：计算今天星期几
             weekday_map = {0: "周一", 1: "周二", 2: "周三", 3: "周四", 4: "周五", 5: "周六", 6: "周日"}
             today_cn = weekday_map[datetime.now().weekday()]
             
@@ -613,10 +869,8 @@ async def smart_patrol_daemon(client):
             for chat_id, info in channels.items():
                 for drama_name, d_info in info.get("monitored_dramas", {}).items():
                     
-                    # ⚖️ 核心过滤：如果设置了周更，且今天不是它的更新日，直接一脚踢开！
                     freq = d_info.get("frequency", "日更")
                     if freq != "日更" and freq != today_cn:
-                        # 频率不对，今天不属于它，直接跳过，绝不去骚扰 TG 接口
                         continue
                     
                     folder_s = d_info.get("folder_season", 1)
@@ -653,7 +907,6 @@ async def startup_catchup_sweep(client):
                 file_s = d_info.get("file_season", folder_s)
                 min_ep = d_info.get("min_ep", 1)
                 cat = d_info.get("category", "未分类")
-                # 🔥 读取重量锁
                 min_mb = d_info.get("min_mb", 0)
                 max_mb = d_info.get("max_mb", 999999)
                 
@@ -665,11 +918,11 @@ async def startup_catchup_sweep(client):
         pass
 
 # =================================================================
-# 📡 远程指令总枢 (加入全新的订阅重力门)
+# 📡 远程指令总枢
 # =================================================================
 STANDARD_CATS = ["华语剧", "欧美剧", "日韩剧", "短剧", "华语电影", "欧美电影", "日韩电影", "演唱会", "国漫", "日漫", "综艺", "纪录片"]
 
-@app.on_message(filters.command(["sub", "unsub", "list", "add", "del", "go", "history", "ping", "rm", "clean", "scan", "rmh", "setdir"]) & filters.user("me"))
+@app.on_message(filters.command(["sub", "unsub", "list", "add", "del", "go", "history", "ping", "rm", "clean", "scan", "rmh", "setdir", "cancel"]) & filters.user("me"))
 async def manage_system_commands(client, message):
     command = message.command[0].lower()
     config = load_listener_config()
@@ -694,6 +947,28 @@ async def manage_system_commands(client, message):
                 except: pass
         await message.reply_text(f"🧹 抹除 `{count}` 个遗留碎片！")
         return
+
+    if command == "cancel":
+        if len(message.command) < 2: 
+            return await message.reply_text("⚠️ 语法：`/cancel [关键字]` 或 `/cancel all` (无差别终止所有任务)")
+            
+        kw = " ".join(message.command[1:]).lower()
+        
+        if kw == "all":
+            if not GLOBAL_ACTIVE_LOCKS:
+                return await message.reply_text("📭 当前大盘很干净，没有任何运行中的任务。")
+            matched = list(GLOBAL_ACTIVE_LOCKS)
+        else:
+            kws = kw.split()
+            matched = [name for name in GLOBAL_ACTIVE_LOCKS if all(k in name.lower() for k in kws)]
+            
+        if not matched: 
+            return await message.reply_text(f"❌ 当前运行的任务中，没找到包含 `{kw}` 的。")
+            
+        for name in matched:
+            GLOBAL_CANCEL_TASKS.add(name)
+            
+        return await message.reply_text(f"🛑 已下达最高追杀令，立刻强杀以下任务：\n" + "\n".join([f"`{name}`" for name in matched]))
 
     if command == "rm":
         if len(message.command) < 2: return await message.reply_text("⚠️ 语法：`/rm [航线剧名关键字]`")
@@ -752,7 +1027,6 @@ async def manage_system_commands(client, message):
                     msg_text += "  └ 📭 (空)\n"
                 else:
                     for d_name, d_info in dramas.items(): 
-                        # 🛡️ 强力兜底：用 .get() 获取，即使是旧数据没有这些字段，也会塞一个默认值，绝不报错！
                         f_season = d_info.get('file_season', 1)
                         try: f_season = int(f_season)
                         except: f_season = 1
@@ -760,6 +1034,7 @@ async def manage_system_commands(client, message):
                         min_mb = d_info.get('min_mb', 0)
                         max_mb = d_info.get('max_mb', 999999)
                         freq = d_info.get('frequency', '日更')
+                        end_ep = d_info.get('end_ep', 9999)
                         
                         search_kw = d_info.get('search_kw', d_name)
                         ver = d_info.get('version', '')
@@ -768,10 +1043,10 @@ async def manage_system_commands(client, message):
                         size_txt = f" / {min_mb}-{max_mb if max_mb != 999999 else '上限'}MB" if (min_mb or max_mb != 999999) else ""
                         freq_txt = f" / ⏱️{freq}"
                         ver_txt = f" / 🏷️{ver}" if ver else ""
+                        end_txt = f" / 🏁{end_ep}集杀青" if end_ep != 9999 else " / ♾️连载"
                         
-                        line = f"  └ 🎬 `{search_kw}` ({s_text}{size_txt}{freq_txt}{ver_txt})\n"
+                        line = f"  └ 🎬 `{search_kw}` ({s_text}{size_txt}{freq_txt}{end_txt}{ver_txt})\n"
                         
-                        # 🛡️ 终极防御：TG单条消息有长度限制，超过 4000 字会发不出来装死，这里做分段发送
                         if len(msg_text) + len(line) > 4000:
                             await message.reply_text(msg_text)
                             msg_text = ""
@@ -781,7 +1056,6 @@ async def manage_system_commands(client, message):
                 await message.reply_text(msg_text)
                 
         except Exception as e:
-            # 万一真出了神仙 Bug，逼它把错误打印在 TG 里，死个明白
             await message.reply_text(f"❌ `/list` 读取失败，原因: {str(e)}")
         return
 
@@ -796,7 +1070,6 @@ async def manage_system_commands(client, message):
                 file_s = d_info.get("file_season", folder_s)
                 min_ep = d_info.get("min_ep", 1)
                 cat = d_info.get("category", "未分类")
-                # 🔥 读取重量锁
                 min_mb = d_info.get("min_mb", 0)
                 max_mb = d_info.get("max_mb", 999999)
                 
@@ -806,13 +1079,12 @@ async def manage_system_commands(client, message):
 
     if command == "sub":
         args = message.command[1:]
-        if len(args) < 2: return await message.reply_text("⚠️ 语法：`/sub [剧名] [分类] [最小MB-最大MB] [频率:日更/周一~周日] [v=版本号] [可选:年份/季数/起步集]`")
+        if len(args) < 2: return await message.reply_text("⚠️ 语法：`/sub [剧名] [分类] [频率] [v=版本] [f=参数] [end=完结集数] [可选:年份/季数]`")
             
         cat_idx = next((i for i, arg in enumerate(args) if arg in STANDARD_CATS), -1)
         if cat_idx == -1: return await message.reply_text("⚠️ 请提供有效分类。")
         category = args.pop(cat_idx)
         
-        # 智能提取更新频率
         freq_list = ["日更", "周一", "周二", "周三", "周四", "周五", "周六", "周日"]
         cn_weekday_map = {"星期一": "周一", "星期二": "周二", "星期三": "周三", "星期四": "周四", "星期五": "周五", "星期六": "周六", "星期日": "周日"}
         frequency = "日更"
@@ -820,23 +1092,19 @@ async def manage_system_commands(client, message):
             if arg in freq_list: frequency = args.pop(i); break
             elif arg in cn_weekday_map: frequency = cn_weekday_map[args.pop(i)]; break
         
-        # 提取大小限制区间
         min_mb, max_mb = 0, 999999
         size_idx = next((i for i, arg in enumerate(args) if re.match(r'^\d+-\d+$', arg)), -1)
         if size_idx != -1:
             size_str = args.pop(size_idx)
             min_mb, max_mb = map(int, size_str.split('-'))
         
-        # 🔥🔥🔥 痛点克星：如果你的指令是“回复”给某条转发视频的，自动抠出频道ID并建档！
         replied = message.reply_to_message
         if replied and replied.forward_from_chat:
             specific_channel = str(replied.forward_from_chat.id)
             channel_title = replied.forward_from_chat.title or specific_channel
-            # 自动帮新频道在数据库开户！
             if specific_channel not in config.setdefault("trusted_channels", {}):
                 config["trusted_channels"][specific_channel] = {"channel_name": channel_title, "monitored_dramas": {}}
         else:
-            # 备用方案：如果你没用回复功能，就看看命令里有没有手写的 -100 ID
             specific_channel = next((args.pop(i) for i, arg in enumerate(args) if arg.startswith("-100")), None)
             
         target_pools = [specific_channel] if specific_channel else list(config.get("trusted_channels", {}).keys())
@@ -844,50 +1112,56 @@ async def manage_system_commands(client, message):
         if not target_pools:
             return await message.reply_text("⚠️ 你的大盘里还没有任何频道！请先转发一条频道的视频，并对它【回复】 /sub 指令来自动添加！")
 
-        # 🔥 智能提取年份 (咱们上一轮挪上来的，保持在这别动)
         custom_year = next((args.pop(i) for i, arg in enumerate(args) if arg.isdigit() and len(arg) == 4 and (1900 < int(arg) < 2100)), None)
 
-        # 🔥🔥🔥 智能提取版本标签 (从下面剪切挪上来的！) 
         version_suffix = ""
-        for i, arg in enumerate(args):
-            if arg.lower().startswith("v="):
+        file_suffix = ""
+        end_ep = None
+        
+        for i in range(len(args)-1, -1, -1):
+            if args[i].lower().startswith("v="):
                 version_suffix = args.pop(i)[2:]
-                break
+            elif args[i].lower().startswith("f="):
+                file_suffix = args.pop(i)[2:]
+            elif args[i].lower().startswith("end="):
+                end_ep = int(args.pop(i)[4:])
 
-        # ========================================================
-        # 此时 args 里所有的杂质都被排干净了，只剩下 [剧名] 和 [季数] [集数]
-        # 下面是你原本提取季和集的代码，老老实实放在这兜底
-        # ========================================================
         file_season = int(args.pop(-1)[1:]) if args and re.match(r'^s\d+$', args[-1], re.IGNORECASE) else None
         min_ep = int(args.pop(-1)) if args and args[-1].isdigit() else 1
         folder_season = int(args.pop(-1)) if args and args[-1].isdigit() else 1
         if file_season is None: file_season = folder_season
         
         drama_name = " ".join(args) if args else "未知目标"
-        
-        # 🔥 创建数据库唯一键值，防止两个版本互相覆盖
         drama_key = f"{drama_name}_{version_suffix}" if version_suffix else drama_name
         
-        if not custom_year:
-            custom_year = await fetch_tmdb_year(drama_name)
-            
+        # 🔥 TMDB 自动补全年份与杀青集数
+        fetched_year, fetched_end = await fetch_tmdb_details(drama_name)
+        if not custom_year: custom_year = fetched_year
+        if end_ep is None:
+            if category in ["国漫", "日漫", "综艺"]:
+                end_ep = 9999 # 动漫和综艺自带免死金牌，永远不杀青
+            else:
+                end_ep = fetched_end
+                
         target_pools = [specific_channel] if specific_channel else list(config["trusted_channels"].keys())
         
         for chat_id in target_pools:
             if "monitored_dramas" not in config["trusted_channels"][chat_id]: config["trusted_channels"][chat_id]["monitored_dramas"] = {}
-            # 这里存入的是 drama_key，不是 drama_name
             config["trusted_channels"][chat_id]["monitored_dramas"][drama_key] = {
-                "search_kw": drama_name,  # 🔥 记录真实的搜索词
-                "version": version_suffix, # 🔥 记录版本后缀
+                "search_kw": drama_name,  
+                "version": version_suffix, 
+                "file_version": file_suffix, 
                 "category": category, "folder_season": folder_season, 
                 "file_season": file_season, "min_ep": min_ep,
                 "min_mb": min_mb, "max_mb": max_mb,
                 "frequency": frequency,
-                "year": custom_year
+                "year": custom_year,
+                "end_ep": end_ep
             }
             
         with open(TG_LISTENER_DB, "w", encoding="utf-8") as f: json.dump(config, f, ensure_ascii=False, indent=4)
-        await message.reply_text(f"✅ **订阅成功**: `{drama_name}`\n🏷️ **版本追踪**: `{version_suffix or '默认原版'}`\n⚖️ **画质锁定**: `{min_mb}-{max_mb} MB`\n⏱️ **频率**: `{frequency}`\n📅 **年份**: `{custom_year}`\n🚀 **启动扫荡！**")
+        end_display = "♾️无限连载" if end_ep == 9999 else f"{end_ep} 集杀青"
+        await message.reply_text(f"✅ **订阅成功**: `{drama_name}`\n🏷️ **版本追踪**: `{version_suffix or '默认雷达嗅探'}`\n⚖️ **画质锁定**: `{min_mb}-{max_mb} MB`\n⏱️ **频率**: `{frequency}`\n📅 **年份**: `{custom_year}`\n🏁 **完结设置**: `{end_display}`\n🚀 **启动扫荡！**")
         
         for chat_id in target_pools:
             asyncio.create_task(sweep_existing_history(client, chat_id, drama_key, category, folder_season, file_season, min_ep, min_mb, max_mb, fetch_limit=200, year=custom_year))
@@ -898,12 +1172,10 @@ async def manage_system_commands(client, message):
         if not args: 
             return await message.reply_text("⚠️ 语法：`/unsub [剧名] [可选: v=版本号] [可选:-100开头的频道ID]`")
         
-        # 🎯 提取精准狙击的频道 ID
         specific_channel = next((arg for arg in args if arg.startswith("-100")), None)
         if specific_channel:
             args.remove(specific_channel)
             
-        # 🎯 提取要取消的版本号 (例如 v=HDR)
         version_suffix = ""
         for i, arg in enumerate(args):
             if arg.lower().startswith("v="):
@@ -914,23 +1186,19 @@ async def manage_system_commands(client, message):
         if not drama_name:
             return await message.reply_text("⚠️ 请输入要取消的剧名！")
             
-        # 拼接数据库里的真实 Key
         drama_key = f"{drama_name}_{version_suffix}" if version_suffix else drama_name
         
         config = load_listener_config()
         channels = config.get("trusted_channels", {})
         
         deleted_count = 0
-        # 如果指定了频道，就只杀那个频道；没指定，就全频道通杀！
         target_pools = [specific_channel] if specific_channel else list(channels.keys())
         
         for chat_id in target_pools:
             if chat_id in channels and "monitored_dramas" in channels[chat_id]:
-                # 精准匹配带版本的剧名
                 if drama_key in channels[chat_id]["monitored_dramas"]:
                     del channels[chat_id]["monitored_dramas"][drama_key]
                     deleted_count += 1
-                # 兼容老数据，如果没有版本号，也顺手试着删一下
                 elif drama_name in channels[chat_id]["monitored_dramas"]:
                     del channels[chat_id]["monitored_dramas"][drama_name]
                     deleted_count += 1
@@ -948,19 +1216,18 @@ async def manage_system_commands(client, message):
         if not args: return await message.reply_text("⚠️ 语法：`/go [剧名关键字] [可选:分类/年份/v=版本/季数]`")
         routes = load_tg_routes()
         
-        # 🔥 新增：智能提取版本标签 (例如 v=HDR)
         version_suffix = ""
-        for i, arg in enumerate(args):
-            if arg.lower().startswith("v="):
+        file_suffix = ""
+        for i in range(len(args)-1, -1, -1):
+            if args[i].lower().startswith("v="):
                 version_suffix = args.pop(i)[2:]
-                break
+            elif args[i].lower().startswith("f="):
+                file_suffix = args.pop(i)[2:]
 
-        # 🔥 新增：智能提取年份
         custom_year = next((args.pop(i) for i, arg in enumerate(args) if arg.isdigit() and len(arg) == 4 and (1900 < int(arg) < 2100)), None)
 
         cat_idx = next((i for i, arg in enumerate(args) if arg in STANDARD_CATS), -1)
         
-        # 如果没带分类，说明是老航线唤醒
         if cat_idx == -1:
             search_kw = " ".join(args).lower()
             matched_item = None
@@ -970,37 +1237,30 @@ async def manage_system_commands(client, message):
             if matched_item:
                 folder_s = matched_item.get("folder_season", 1)
                 file_s = matched_item.get("file_season", folder_s)
-                # 🔥 将历史记忆中的版本也压入全局缓存
-                GLOBAL_ROUTE_CACHE.update({"folder_name": matched_item["folder_name"], "category": matched_item["category"], "folder_season": folder_s, "file_season": file_s, "year": matched_item.get("year", ""), "version": matched_item.get("version", ""), "expire_time": time.time() + 3600, "manual_ep": None})
+                GLOBAL_ROUTE_CACHE.update({"folder_name": matched_item["folder_name"], "category": matched_item["category"], "folder_season": folder_s, "file_season": file_s, "year": matched_item.get("year", ""), "version": matched_item.get("version", ""), "expire_time": time.time() + 300, "manual_ep": None})
                 return await message.reply_text(f"✅ 命中记忆航线！已锁定目标: `{matched_item['folder_name']}`\n请直接转发发车！")
             return await message.reply_text("⚠️ 未匹配到历史，如果要开辟新线请提供标准分类。")
         
-        # 下面是开辟新航线的逻辑
         cat = args.pop(cat_idx)
         
-        # 1. 抓 S 标签 (例如 S2)
         file_season = int(args.pop(-1)[1:]) if args and re.match(r'^s\d+$', args[-1], re.IGNORECASE) else None
         
-        # 🔥 2. 抓文件夹季数 (老样子，只抓最后一个数字)
         folder_season = int(args.pop(-1)) if args and args[-1].isdigit() else 1
         
         if file_season is None: file_season = folder_season 
         
-        # 🔥 3. 剩下干干净净的纯剧名！
         pure_title = " ".join(args)
-        year = custom_year if custom_year else await fetch_tmdb_year(pure_title)
+        year, _ = await fetch_tmdb_details(pure_title)
+        if custom_year: year = custom_year
         
-        # 拼装物理主文件夹名
         folder_name = f"{pure_title} ({year})" if year else pure_title
         if version_suffix: 
             folder_name = f"{folder_name} {version_suffix}"
         
-        # 存入数据库并激活全局缓存
-        routes[folder_name] = {"folder_name": folder_name, "category": cat, "folder_season": folder_season, "file_season": file_season, "year": year, "version": version_suffix, "created_at": int(time.time())}
+        routes[folder_name] = {"folder_name": folder_name, "category": cat, "folder_season": folder_season, "file_season": file_season, "year": year, "version": version_suffix, "file_version": file_suffix, "created_at": int(time.time())}
         save_tg_routes(routes)
         
-        # 全局缓存 (manual_ep 保持 None，让机器自己去视频里抓)
-        GLOBAL_ROUTE_CACHE.update({"folder_name": folder_name, "category": cat, "folder_season": folder_season, "file_season": file_season, "year": year, "version": version_suffix, "expire_time": time.time() + 3600, "manual_ep": None})
+        GLOBAL_ROUTE_CACHE.update({"folder_name": folder_name, "category": cat, "folder_season": folder_season, "file_season": file_season, "year": year, "version": version_suffix, "file_version": file_suffix, "expire_time": time.time() + 360, "manual_ep": None})
         
         await message.reply_text(f"✅ 新航线已打通：\n📁 目标锁定: `{folder_name}`\n请直接转发媒体发车！")
         return
@@ -1010,13 +1270,12 @@ async def manage_system_commands(client, message):
             help_text = """🤖 **打更人媒体管家 - 终极参数指南** 🤖
 
 🎬 **1. 自动订阅 (/sub)**
-💬 **语法**: `/sub [剧名] [分类] [最小-最大MB] [频率] [年份] [v=版本] [文件夹季] [S文件季]`
-👉 **示例**: `/sub 将夜 国漫 400-1500 周四 2026 v=HDR 1 S2`
-💡 **秘籍**: 直接回复频道的视频发送此命令，自动免填频道ID！
+💬 **语法**: `/sub [剧名] [分类] [最小-最大MB] [频率] [年份] [v=版本] [f=参数] [end=完结集] [S文件季]`
+👉 **示例**: `/sub 将夜 国漫 400-1500 周四 end=36 v=霸王龙 f=H265`
 
 🗑️ **2. 取消订阅 (/unsub)**
 💬 **语法**: `/unsub [剧名] [v=版本] [-100频道ID]`
-👉 **示例**: `/unsub 将夜 v=HDR` (精准取消HDR版)
+👉 **示例**: `/unsub 将夜 v=霸王龙` (精准取消此压制组)
 
 🚀 **3. 手动发车 (/go)**
 💬 **语法**: `/go [剧名] [分类] [年份] [v=版本] [文件夹季]`
@@ -1025,7 +1284,7 @@ async def manage_system_commands(client, message):
 👉 **步骤3**: 狂发视频，自动重命名入库！
 
 📡 **4. 大盘与扫荡**
-👉 `/list` : 查看各频道监听排班表
+👉 `/list` : 查看各频道监听排班表，以及何时杀青。
 👉 `/scan` : 强行触发一次全网补漏扫荡
 
 ❌ **5. 删除记录**
@@ -1038,12 +1297,11 @@ async def manage_system_commands(client, message):
         return
 
 # =================================================================
-# 🎛️ 航线遥控器：手动霸权重塑文件名 (绝对不碰底层文件夹)
+# 🎛️ 航线遥控器：手动霸权重塑文件名
 # =================================================================
 @app.on_message(filters.text & ~filters.media & filters.user("me"))
 async def override_episode(client, message):
     text = message.text.strip().upper()
-    # 只有在 /go 航线开启且未过期时，遥控器才生效
     if text.startswith("#") and GLOBAL_ROUTE_CACHE.get("expire_time", 0) > time.time():
         m_se = re.search(r'^#S(\d+)E(\d+)', text)
         m_s = re.search(r'^#S(\d+)$', text)
@@ -1052,12 +1310,10 @@ async def override_episode(client, message):
         reply_msg = ""
         if m_se:
             GLOBAL_ROUTE_CACHE["file_season"] = int(m_se.group(1))
-            # ❌ 砍掉了这里修改 folder_season 的代码，物理文件夹彻底死锁保护！
             GLOBAL_ROUTE_CACHE["manual_ep"] = int(m_se.group(2))
             reply_msg = f"🎛️ **文件名重塑**: 季数 ➔ S{int(m_se.group(1)):02d} | 集数 ➔ E{int(m_se.group(2)):02d}\n🔒 (物理文件夹维持原位不变)"
         elif m_s:
             GLOBAL_ROUTE_CACHE["file_season"] = int(m_s.group(1))
-            # ❌ 砍掉了这里修改 folder_season 的代码！
             reply_msg = f"🎛️ **文件名重塑**: 季数 ➔ S{int(m_s.group(1)):02d}\n🔒 (物理文件夹维持原位不变)"
         elif m_e:
             GLOBAL_ROUTE_CACHE["manual_ep"] = int(m_e.group(1))
@@ -1067,7 +1323,7 @@ async def override_episode(client, message):
             await message.reply_text(reply_msg)
 
 # =================================================================
-# 🎯 被动网关双保险拦截 (穿透评论区结界版)
+# 🎯 被动网关双保险拦截 (已挂载让路网关)
 # =================================================================
 @app.on_message(filters.video | filters.document)
 @app.on_edited_message(filters.video | filters.document)
@@ -1078,22 +1334,18 @@ async def media_routing_gateway(client, message):
     original_channel_id = ""
     parent_text = ""
     
-    # 🔥 核心穿透术：如果是评论区消息，精准提取它的“主频道户口”和“主贴文案”！
     if message.reply_to_message:
         parent = message.reply_to_message
         parent_text = parent.caption or parent.text or ""
         
-        # 兼容 TG 最新底层逻辑：评论区主贴的身份其实是 sender_chat！
         if parent.forward_from_chat:
             original_channel_id = str(parent.forward_from_chat.id)
         elif parent.sender_chat:
-            original_channel_id = str(parent.sender_chat.id) # 👈 加了这行，瞬间打通！
+            original_channel_id = str(parent.sender_chat.id) 
             
-        # 防御极端的“楼中楼”回复（回复了评论区的某个人）
         if parent.reply_to_message:
             parent_text += f" {parent.reply_to_message.caption or parent.reply_to_message.text or ''}"
 
-    # 🕵️‍♂️ 身份双重核验：当前群聊ID 或 背后主频道ID，只要有一个在订阅列表里，就放行！
     matched_channel = None
     for k in config.get("trusted_channels", {}):
         if chat_id_to_check and (k in chat_id_to_check or chat_id_to_check in k):
@@ -1103,64 +1355,87 @@ async def media_routing_gateway(client, message):
             matched_channel = k
             break
 
-    # 🚪 第一道门：只处理订阅频道的自动拦截与质检
     if matched_channel:
         channel_info = config["trusted_channels"][matched_channel]
         media = message.video or message.document
         
-        # 🔥 将当前无字视频，强行与主频道文案缝合！
         text_to_scan = f"{message.caption or ''} {getattr(media, 'file_name', '')} {parent_text}"
 
-        # 注意这里从字典取出的是 drama_key
+        matched_routes = []
         for drama_key, route_info in channel_info.get("monitored_dramas", {}).items():
-            # 🔥 优先使用真实的搜索词监听，兼容旧数据
             search_kw = route_info.get("search_kw", drama_key)
-            version_suffix = route_info.get("version", "")
-            
             if search_kw.lower() in text_to_scan.lower():
-                ep_num = extract_pure_episode(text_to_scan, drama_anchor=search_kw)
-                if ep_num is not None and ep_num < route_info.get("min_ep", 1): return 
+                matched_routes.append((drama_key, route_info))
                 
-                min_mb = route_info.get("min_mb", 0)
-                max_mb = route_info.get("max_mb", 999999)
-                file_size_mb = media.file_size / (1024 * 1024) if getattr(media, "file_size", 0) else 0
-                source_name = message.forward_from_chat.title if message.forward_from_chat and message.forward_from_chat.title else (message.chat.title if message.chat and message.chat.title else "未知来源")
+        if not matched_routes: return
+        
+        # 🔥 网关让路补丁：如果有带v=的订阅命中了关键词，普通订阅必须让路！
+        best_match = None
+        for key, route in matched_routes:
+            db_ver = route.get("version", "")
+            if db_ver and db_ver.lower() in text_to_scan.lower():
+                best_match = (key, route)
+                break
                 
-                if not (min_mb <= file_size_mb <= max_mb):
-                    asyncio.create_task(notify_steward_log(f"🚫 [画质拦截] {search_kw} E{ep_num} ({version_suffix or '默认'}) | 大小: {file_size_mb:.1f}MB (要求: {min_mb}-{max_mb}MB)", level="WARNING"))
-                    return 
-                
-                folder_season = route_info.get("folder_season", 1)
-                file_season = route_info.get("file_season", folder_season)
-                year = route_info.get("year")
-                if not year: year = await fetch_tmdb_year(search_kw)
-                
-                # 🔥 文件夹物理隔离：将夜 (2026) HDR
-                folder_name = f"{search_kw} ({year})" if year else search_kw
-                if version_suffix: 
-                    folder_name = f"{folder_name} {version_suffix}"  # 👈 这里！中间只留一个空格
-                
-                # 🔥 标准账本核对：剧名.S01E01.HQ
-                ver_tag = f".{version_suffix}" if version_suffix else ""
-                if ep_num is not None and f"{search_kw}.S{file_season:02d}E{ep_num:02d}{ver_tag}" in load_history(): 
-                    return
-                
-                override_info = (folder_name, route_info["category"], folder_season, file_season, year, ep_num, version_suffix)
-                try:
-                    status = await client.send_message(COMMAND_CENTER_CHAT, f"🎯 **[实时发车]**\n📺 `{search_kw}` ({version_suffix or '默认'}) ➔ S{file_season:02d}E{ep_num:02d}")
-                except Exception:
-                    status = await client.send_message("me", f"🎯 **[备用发车]**\n📺 `{search_kw}` ({version_suffix or '默认'}) ➔ S{file_season:02d}E{ep_num:02d}")
-                await process_media_transfer(client, message, status, override_info)
-                return
+        if not best_match:
+            for key, route in matched_routes:
+                if not route.get("version", ""):
+                    best_match = (key, route)
+                    break
+                    
+        if not best_match: return
+        drama_key, route_info = best_match
+
+        db_version = route_info.get("version", "")
+        db_file_version = route_info.get("file_version", "") 
+        end_ep = route_info.get("end_ep", 9999)
+        search_kw = route_info.get("search_kw", drama_key)
+        
+        ep_num = extract_pure_episode(text_to_scan, drama_anchor=search_kw)
+        if ep_num is not None and ep_num < route_info.get("min_ep", 1): return 
+        
+        min_mb = route_info.get("min_mb", 0)
+        max_mb = route_info.get("max_mb", 999999)
+        file_size_mb = media.file_size / (1024 * 1024) if getattr(media, "file_size", 0) else 0
+        
+        if not (min_mb <= file_size_mb <= max_mb):
+            asyncio.create_task(notify_steward_log(f"🚫 [画质拦截] {search_kw} E{ep_num} | 大小: {file_size_mb:.1f}MB", level="WARNING"))
+            return 
+        
+        auto_tags = extract_media_tags(text_to_scan)
+        temp_tags = []
+        if auto_tags: temp_tags.extend(auto_tags.split('.'))
+        if db_file_version: temp_tags.extend(db_file_version.split('.'))
+        if db_version: temp_tags.extend(db_version.split('.'))
+        
+        preview_tags = ".".join(dict.fromkeys(temp_tags))
+            
+        folder_season = route_info.get("folder_season", 1)
+        file_season = route_info.get("file_season", folder_season)
+        year = route_info.get("year")
+        if not year: year, _ = await fetch_tmdb_details(search_kw)
+        
+        folder_name = f"{search_kw} ({year})" if year else search_kw
+        if db_version: 
+            folder_name = f"{folder_name} {db_version}"
+        
+        if ep_num is not None and check_history(search_kw, file_season, ep_num, preview_tags): 
+            return
+        
+        override_info = (folder_name, route_info["category"], folder_season, file_season, year, ep_num, db_version, db_file_version, matched_channel, drama_key, end_ep)
+        try:
+            status = await client.send_message(COMMAND_CENTER_CHAT, f"🎯 **[实时发车]**\n📺 `{search_kw}` ({db_version or '默认'}) ➔ S{file_season:02d}E{ep_num:02d}")
+        except Exception:
+            status = await client.send_message("me", f"🎯 **[备用发车]**\n📺 `{search_kw}` ({db_version or '默认'}) ➔ S{file_season:02d}E{ep_num:02d}")
+        asyncio.create_task(process_media_transfer(client, message, status, override_info))
         return
 
-    # 🚪 第二道门：纯手动 /go 引流通道 
-    # 🔥 修复重点：兼容 ChatType.BOT 和 ChatType.PRIVATE，杜绝转发给机器人时假死！
     if message.chat and message.chat.type in [enums.ChatType.PRIVATE, enums.ChatType.BOT]:
         if time.time() > GLOBAL_ROUTE_CACHE["expire_time"] or not GLOBAL_ROUTE_CACHE["folder_name"]:
             return
-        status = await message.reply_text("⚡ 转发航线认证通过，正向引流拉取...")
-        await process_media_transfer(client, message, status)
+        try: status = await message.reply_text("⚡ 转发航线认证通过，正向引流拉取...")
+        except: return
+        asyncio.create_task(process_media_transfer(client, message, status))
 
 # =================================================================
 # 🚀 引擎启动 
@@ -1224,7 +1499,7 @@ Enter password (hint: ***):
 
 /sub [分类] [剧名] [季数] [起步集] ➔ 🎯 部署雷达！（分类和剧名谁在前都可以，闭眼发）。
 
-完整语法：/sub [剧名关键字] [分类] [文件夹季数] [起步集数] [可选: 文件大小范围] [可选: 文件名季数] [可选: 剧名年份] [可选: v=版本号] [可选: 频道ID]
+完整语法：/sub [剧名关键字] [分类] [文件夹季数] [起步集数] [可选: 文件大小范围] [可选: 文件名季数] [可选: 剧名年份] [可选: v=剧名文件夹版本号] [可选: f=文件名参数] [可选: 频道ID] [可选: end=剧总集数]
 
 (例：/sub 国漫 凡人修仙传 1 15 ➔ 从第15集开始死盯凡人修仙传)
 
@@ -1322,6 +1597,7 @@ history - 📋 查看曾经发过车的历史航线记录
 rm - ❌ 删除历史航线！ 把不再需要的死档从history 里永久抹除
 rmh - ❎ 删除下载历史记录
 clean - ⭕️ 清除下载碎片
+cancel - ⭕️ 终止下载 (all/剧名(+e01/s01)/.mp4)
 setdir - ❇️ 设置上传目录
 ping - 💓 查看系统是否活着、存活时间、雷达正在盯防多少部剧
 help - 📖 查看随身说明书与指令语法
