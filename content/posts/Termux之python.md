@@ -1361,11 +1361,14 @@ def scan_local_dropbox():
             category_key = parts[0] if len(parts) > 1 else None
             show_folder_name = filename.rsplit('.', 1)[0] # 兜底名
 
-            # 🌟 核心修复：聪明地向上找剧名，强行跳过 Season 目录干扰
+            # 🌟 修复：聪明地向上找剧名，同时提取物理文件夹的真实季数
+            local_season_num = None
             if len(parts) > 1:
                 for part in reversed(parts[:-1]):
-                    # 如果这层文件夹叫 Season 1 或 S1，直接无视，继续往上一层找
-                    if re.match(r'(?i)^(season\s*\d+|s\d+)$', part.strip()):
+                    # 侦测本地文件夹是否叫 Season 2 或 S2
+                    s_match_dir = re.match(r'(?i)^(?:season\s*|s)(\d+)$', part.strip())
+                    if s_match_dir:
+                        local_season_num = int(s_match_dir.group(1))
                         continue
                     show_folder_name = part.strip()
                     break
@@ -1403,12 +1406,18 @@ def scan_local_dropbox():
 
             # 组装虚拟路径 (骗过生成函数，拿到完美结果)
             virtual_cloud_path = f"{DIR_CAS_ROOT}/{b_large}/{b_sub}/{current_ym}/{show_folder_name}".replace("//", "/")
-            s_match = re.search(r'(?i)S0*(\d+)', filename)
-            season_num = int(s_match.group(1)) if s_match else 1
+            
+            # 🎯 核心修复：对齐订阅收割逻辑！优先遵从本地物理文件夹的季数
+            if local_season_num is not None:
+                season_num = local_season_num
+            else:
+                s_match_file = re.search(r'(?i)S0*(\d+)', filename)
+                season_num = int(s_match_file.group(1)) if s_match_file else 1
+                
             if b_large in ["电视剧", "动漫", "短剧"] or season_num > 1:
                 virtual_cloud_path = f"{virtual_cloud_path}/Season {season_num}"
 
-            # 核心算命：白嫖你写好的洗名函数！
+            # 核心算命：扔给洗名大脑，由于它会读文件名里的 S01，所以名字里的 S01 会被完美保留！
             final_name = generate_smart_name(filename, virtual_cloud_path) or filename
             strm_name = final_name.rsplit('.', 1)[0] + ".strm"
 
