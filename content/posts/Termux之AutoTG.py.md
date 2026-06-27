@@ -105,6 +105,14 @@ START_TIME = time.time()
 
 TG_SETTINGS_DB = os.path.join(BASE_DIR, "tg_settings.json")
 
+# ----------------------- 添加这一段 -----------------------
+TG_PROXY = {
+    "scheme": "http",
+    "hostname": "127.0.0.1",
+    "port": 7890
+}
+# --------------------------------------------------------
+
 def get_mount_root():
     if os.path.exists(TG_SETTINGS_DB):
         try:
@@ -132,7 +140,12 @@ logging.getLogger("pyrogram").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger("TGEngine")
 
-app = Client("tg_robust_leecher_v15", api_id=API_ID, api_hash=API_HASH)
+app = Client(
+    "tg_robust_leecher_v15", 
+    api_id=API_ID, 
+    api_hash=API_HASH, 
+    proxy=TG_PROXY  # <--- 加入这一行
+)
 
 async def notify_steward_log(msg, level="INFO"):
     logger.info(f"[{level}] {msg}")
@@ -338,12 +351,14 @@ async def bg_upload_retry_task(local_path, target_full, total_bytes, clean_base,
                             record_history(clean_base, file_season, ep_num, version_suffix)
                             await notify_steward_log(f"📝 [后台重推-补录] {clean_base}.S{file_season:02d}E{ep_num:02d}{ver_tag}")
                         
-                        # 🔥 修复：后台重传成功后弹窗汇报！
+                        # 🔥 终极弹窗修复：加入多重备用通道，死磕到底必须把捷报告诉你！
+                        success_msg = f"🎉 **[后台重推成功]** ➔ `{standard_name}`\n✅ 历经波折，该文件已成功补传至天翼云，并已入账！"
                         try:
-                            await app.send_message(COMMAND_CENTER_CHAT, f"🎉 **[后台重推成功]** ➔ `{standard_name}`\n✅ 历经波折，该文件已成功补传至天翼云！")
-                        except: pass
+                            await app.send_message(COMMAND_CENTER_CHAT, success_msg)
+                        except Exception:
+                            try: await app.send_message("me", success_msg)
+                            except: pass
                         
-                        # 🔥 修复：后台重传成功后唤醒猎犬拉取CAS！
                         try:
                             target_dir = os.path.dirname(target_full)
                             current_mount = get_mount_root()
@@ -913,9 +928,15 @@ async def sweep_existing_history(client, chat_id, drama_key, category, folder_se
                 
                 preview_tags = ".".join(dict.fromkeys(temp_tags))
                 
-                folder_name = f"{search_kw} ({year})" if year else search_kw
+                # 🔥 修复1：提取真实的大名（剔除版本后缀）
+                pure_drama_name = drama_key
+                if db_version and drama_key.endswith(f"_{db_version}"):
+                    pure_drama_name = drama_key[:-len(f"_{db_version}")]
+                    
+                # 🔥 修复1：强制使用 pure_drama_name 而不是 search_kw 来建夹和命名！
+                folder_name = f"{pure_drama_name} ({year})" if year else pure_drama_name
                 if db_version: 
-                    folder_name = f"{folder_name} {db_version}"  
+                    folder_name = f"{folder_name} {db_version}" 
                 
                 if check_history(search_kw, file_season, ep_num, preview_tags):
                     continue
@@ -1249,7 +1270,7 @@ async def manage_system_commands(client, message):
         if folder_season is None: folder_season = file_season if file_season is not None else 1
         if file_season is None: file_season = folder_season
         
-        # 🔥 新增：别名分身解析器 (搜索词|标准名)
+        # ▼▼▼ 别名解析与入库逻辑 (完整替换这一块) ▼▼▼
         raw_input = " ".join(args) if args else "未知目标"
         if "|" in raw_input:
             search_kw, drama_name = [x.strip() for x in raw_input.split("|", 1)]
@@ -1271,7 +1292,7 @@ async def manage_system_commands(client, message):
         for chat_id in target_pools:
             if "monitored_dramas" not in config["trusted_channels"][chat_id]: config["trusted_channels"][chat_id]["monitored_dramas"] = {}
             config["trusted_channels"][chat_id]["monitored_dramas"][drama_key] = {
-                "search_kw": search_kw,  # 🔥 确保这里用的是 search_kw，而不是 drama_name
+                "search_kw": search_kw,  # 🔥 核心：这里存的是用于侦察的“小名”
                 "version": version_suffix, 
                 "file_version": file_suffix, 
                 "category": category, "folder_season": folder_season, 
@@ -1289,6 +1310,7 @@ async def manage_system_commands(client, message):
         for chat_id in target_pools:
             asyncio.create_task(sweep_existing_history(client, chat_id, drama_key, category, folder_season, file_season, min_ep, min_mb, max_mb, fetch_limit=200, year=custom_year))
         return
+        # ▲▲▲ 替换到 return 这里结束 ▲▲▲
     
     if command in ["unsub", "del"]:
         args = message.command[1:]
@@ -1545,7 +1567,13 @@ async def media_routing_gateway(client, message):
             if not year:
                 year, _ = await fetch_tmdb_details(search_kw)
 
-            folder_name = f"{search_kw} ({year})" if year else search_kw
+            # 🔥 修复2：提取真实的大名（剔除版本后缀）
+            pure_drama_name = drama_key
+            if db_version and drama_key.endswith(f"_{db_version}"):
+                pure_drama_name = drama_key[:-len(f"_{db_version}")]
+                
+            # 🔥 修复2：强制使用 pure_drama_name 而不是 search_kw 来建夹和命名！
+            folder_name = f"{pure_drama_name} ({year})" if year else pure_drama_name
             if db_version: 
                 folder_name = f"{folder_name} {db_version}"  
             

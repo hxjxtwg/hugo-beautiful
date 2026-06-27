@@ -18,41 +18,6 @@ tags:
 
 ---
 
-Termux中安装emby服务端
-
-<!--more-->
-
----
-title: 手机搭建emby服务四
-cover: 
-swiper_index: 10
-top_group_index: 10
-background: '#fff'
-date: 2026-04-05 22:19:54
-updated:
-tags:
-categories:
-keywords:
-description:
-top:
-top_img:
-comments:
-toc:
-toc_number:
-toc_style_simple:
-copyright:
-copyright_author:
-copyright_author_href:
-copyright_url:
-copyright_info:
-mathjax:
-katex:
-aplayer:
-highlight_shrink:
-aside:
-ai:
----
-
 
 Termux中安装emby服务端
 
@@ -331,4 +296,30 @@ exit
 
 # 4. 全新启动！
 pm2 start emby
+```
+### 三、代理排除Termux后启动方案
+
+1.start_emby.sh
+```
+#!/bin/bash
+proot-distro login ubuntu -- /bin/bash -c "
+export HTTP_PROXY=http://192.168.0.199:7890
+export HTTPS_PROXY=http://192.168.0.199:7890
+export ALL_PROXY=http://192.168.0.199:7890
+export http_proxy=http://192.168.0.199:7890
+export https_proxy=http://192.168.0.199:7890
+export no_proxy=localhost,127.0.0.1,192.168.0.0/16
+export DOTNET_GCHeapHardLimit=0x80000000
+export DOTNET_GCHeapHardLimitPercent=80
+export COMPlus_GCHeapHardLimit=0x80000000
+/opt/emby-server/bin/emby-server
+"
+```
+2.flclash开启允许局域网连接
+
+3.启动emby
+```
+chmod +x ~/start_emby.sh
+pm2 start ~/start_emby.sh --name "emby"
+pm2 save --force
 ```
