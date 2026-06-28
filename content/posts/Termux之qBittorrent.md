@@ -264,6 +264,22 @@ pm2 env 5
 
     对以下订阅源应用规则勾选订阅源
 
+1.5配置 qBittorrent 接力开关
+
+* 代码搞定后，去 qBittorrent 的网页端，只需要做这一个动作：
+
+* 点击网页端顶部的 齿轮（选项卡）。
+
+* 左侧点击 下载 (Downloads)，拉到页面最底下。
+
+* 勾选 “Torrent 完成时运行外部程序”。
+
+* 在文本框里，完整复制并粘贴这行命令（注意后面加入了 %G 标签参数）：
+```
+python /data/data/com.termux/files/home/189py/qbt_delivery.py "%N" "%F" "%L" "%G"
+```
+* 点击最下方的 “保存”。
+
 2.脚本
 ```
 import os
@@ -286,11 +302,19 @@ TMDB_API_KEY = "9c88e18e43543c8ff195c631aaa0d2fa"
 STAGING_BASE_DIR = "/storage/emulated/0/Download/189cas"
 TG_SETTINGS_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tg_settings.json")
 
+# 🔔 【新增配置】独立推送网关与局部代理
+PUSHPLUS_TOKEN = "" 
+TG_BOT_TOKEN = "7548615667:AAHn0ls4aBPKBPI2-gpwykwVdEKd0ywOlsc"
+TG_CHAT_ID = "-1002906711199"
+# 🎯 局部代理：由于 Termux 被直连，这里单独给 TG 和 TMDB 指定 FlClash 的本地代理端口。
+# 注意：核对你的 FlClash 设置里的 HTTP 端口，通常是 7890 或 8080
+PROXY_URL = "http://127.0.0.1:8080" 
+
 def get_mount_root():
     if os.path.exists(TG_SETTINGS_DB):
         try:
             with open(TG_SETTINGS_DB, "r", encoding="utf-8") as f:
-                return json.load(f).get("mount_root", "/f180/177_cas") # 👈 这里已经帮你改好你的实际挂载点
+                return json.load(f).get("mount_root", "/f180/177_cas")
         except: pass
     return "/f180/177_cas"
 
@@ -298,9 +322,36 @@ async def notify_steward_log(msg, level="INFO"):
     """安全桥梁：走打更人本地Web中枢上报，规避SQLite数据库锁死"""
     print(f"[{level}] {msg}")
     try:
+        # 本地汇报，绝对不走代理
         async with httpx.AsyncClient(timeout=2.0) as client:
             await client.post(f"{STEWARD_BASE_URL}/api/remote_log", json={"level": level, "msg": msg})
     except Exception: pass
+
+async def send_push_notification(title, content):
+    """独立的微信/TG消息推送通道，只推送核心成功/失败结果"""
+    # 1. 微信 PushPlus 推送 (国内网络，无需代理)
+    if PUSHPLUS_TOKEN:
+        try:
+            url = "http://www.pushplus.plus/send"
+            data = {"token": PUSHPLUS_TOKEN, "title": title, "content": content, "template": "html"}
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                await client.post(url, json=data)
+        except: pass
+        
+    # 2. TG 推送 (需要翻墙，注入局部代理)
+    if TG_BOT_TOKEN and TG_CHAT_ID:
+        try:
+            # 💡 核心修复：TG 的 HTML 模式不支持 <br> 标签，将其替换为标准的 \n 换行符
+            tg_content = content.replace("<br>", "\n")
+            url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
+            data = {"chat_id": TG_CHAT_ID, "text": f"{title}\n\n{tg_content}", "parse_mode": "HTML"}
+            # 这里挂载代理，让 TG 消息强行穿过 FlClash 发出去
+            async with httpx.AsyncClient(timeout=10.0, proxy=PROXY_URL if PROXY_URL else None) as client:
+                resp = await client.post(url, json=data)
+                if resp.status_code != 200:
+                    await notify_steward_log(f"⚠️ [TG推送失败] 状态码: {resp.status_code}, 详情: {resp.text}", level="WARNING")
+        except Exception as e:
+            await notify_steward_log(f"⚠️ [TG推送异常] 网络或代理出错: {e}", level="WARNING")
 
 # =================================================================
 # 🧠 智能属性提取引擎
@@ -326,6 +377,7 @@ async def fetch_tmdb_year(title):
     clean_q = re.sub(r'S\d+$|\s+\d+$', '', title).strip()
     url = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&language=zh-CN&query={quote(clean_q)}&page=1"
     try:
+        # 恢复你原来正常的直连模式，去掉了 proxy 参数
         async with httpx.AsyncClient(timeout=5.0) as client:
             res = await client.get(url)
             results = res.json().get("results")
@@ -350,6 +402,7 @@ async def bg_fetch_cas_task(cas_target_full, final_cas_path, sub_path, cas_file_
     
     for attempt in range(max_attempts):
         try:
+            # 本地获取 CAS，走直连
             async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
                 resp = await client.post(get_info_url, json={"path": cas_target_full}, headers=headers_get)
                 resp_data = resp.json()
@@ -458,7 +511,7 @@ async def main():
         
         if os.path.exists(final_cas_path):
             await notify_steward_log(f"⏭️ [智能跳过] 侦测到本地已存在镜像 `{cas_file_name}`，该集已上传过，执行跳过处理。")
-            continue # 直接跳入下一集的循环
+            continue 
         # ========================================================
 
         await notify_steward_log(f"🚚 [队列流转] 正在原样运送: `{actual_video_name}` ➔ 云端")
@@ -471,24 +524,53 @@ async def main():
             "Content-Type": "application/octet-stream"
         }
 
-        try:
-            with open(actual_video_path, "rb") as f_in:
-                async def file_iter():
-                    while True:
-                        chunk = f_in.read(2 * 1024 * 1024)
-                        if not chunk: break
-                        yield chunk
+        # ========================================================
+        # 🛡️ 核心新增：带推送的异步后台重试机制 (最多试5次)
+        # ========================================================
+        max_upload_retries = 5
+        upload_success = False
+        
+        for attempt in range(max_upload_retries):
+            try:
+                with open(actual_video_path, "rb") as f_in:
+                    async def file_iter():
+                        while True:
+                            chunk = f_in.read(2 * 1024 * 1024)
+                            if not chunk: break
+                            yield chunk
 
-                async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=1800.0, write=60.0, pool=None)) as client:
-                    resp = await client.put(put_url, content=file_iter(), headers=headers)
+                    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=1800.0, write=60.0, pool=None)) as client:
+                        resp = await client.put(put_url, content=file_iter(), headers=headers)
+                        
+                if resp.json().get("code") == 200:
+                    upload_success = True
+                    os.makedirs(local_cas_dir, exist_ok=True)
                     
-            if resp.json().get("code") == 200:
-                os.makedirs(local_cas_dir, exist_ok=True)
-                await bg_fetch_cas_task(cas_target_full, final_cas_path, sub_path, cas_file_name)
-            else:
-                await notify_steward_log(f"❌ [openlist拒绝] 视频 `{actual_video_name}` 遭拒: {resp.json().get('message')}", level="ERROR")
-        except Exception as e:
-            await notify_steward_log(f"❌ [单集传输崩溃] `{actual_video_name}` 详情: {e}", level="ERROR")
+                    # 🎉 【关键修改】：使用 create_task 让推送在后台独立运行，绝不卡死主线程
+                    success_msg = f"<b>{actual_video_name}</b><br>在第 {attempt + 1} 次尝试后成功传至云端！"
+                    asyncio.create_task(send_push_notification("✅ PT入库成功", success_msg))
+                    
+                    # 就算上面的推送失败了，也绝对不影响下面拉取 CAS
+                    await bg_fetch_cas_task(cas_target_full, final_cas_path, sub_path, cas_file_name)
+                    break 
+                else:
+                    err_json = resp.json().get('message')
+                    await notify_steward_log(f"⚠️ [上传遭拒] `{actual_video_name}` 第 {attempt+1} 次失败: {err_json}", level="WARNING")
+                    
+            except Exception as e:
+                await notify_steward_log(f"⚠️ [网络异常] `{actual_video_name}` 第 {attempt+1} 次崩溃: {e}", level="WARNING")
+                
+            if attempt < max_upload_retries - 1:
+                wait_sec = 2 ** (attempt + 1)
+                await notify_steward_log(f"⏳ 正在后台打盹等待 {wait_sec} 秒后进行第 {attempt+2} 次重试...")
+                await asyncio.sleep(wait_sec)
+
+        if not upload_success:
+            err_msg = f"<b>{actual_video_name}</b><br>经过 {max_upload_retries} 次重试依旧崩溃！请速查日志，疑似网盘断开或网络阻断。"
+            await notify_steward_log(f"❌ [彻底失败] {err_msg}", level="ERROR")
+            # 失败推送同样丢进后台
+            asyncio.create_task(send_push_notification("🚨 PT入库彻底失败", err_msg))
+        # ========================================================
             
     await notify_steward_log(f"🏁 [大包搬运完毕] 该种子的所有有效增量视频文件已全部完成云端接力！")
 
