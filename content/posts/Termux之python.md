@@ -188,6 +188,14 @@ TG_BOT_TOKEN = os.getenv("ENV_TG_BOT_TOKEN", "")
 TG_ADMIN_USER_ID = os.getenv("ENV_TG_ADMIN_USER_ID", "")
 
 # ==========================================
+# 🌟 精准局部代理通道 (只给境外 API 开小灶)
+# ==========================================
+LOCAL_PROXIES = {
+    "http": "http://127.0.0.1:7890",
+    "https": "http://127.0.0.1:7890"
+}
+
+# ==========================================
 # 🎬 新增：TMDB 终极翻译与扩搜引擎 (带拼音与英文反查)
 # ==========================================
 TMDB_API_KEY = os.getenv("ENV_TMDB_API_KEY", "")
@@ -215,7 +223,7 @@ def get_tmdb_info(keyword):
     # 2. 第一次请求：用中文去查，拿到正确的 ID
     url_cn = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&language=zh-CN&query={parse.quote(keyword)}&page=1"
     try:
-        res_cn = requests.get(url_cn, timeout=5).json()
+        res_en = requests.get(url_en, timeout=5, proxies=LOCAL_PROXIES).json()
         if res_cn.get("results"):
             top = res_cn["results"][0]
             media_type = top.get("media_type", "tv") # 判断是电影还是剧集
@@ -245,7 +253,7 @@ def translate_folder_name(folder_name):
     tmdb_id = match.group(1)
     try:
         # 先按剧集查
-        res_tv = requests.get(f"https://api.themoviedb.org/3/tv/{tmdb_id}?api_key={TMDB_API_KEY}&language=zh-CN", timeout=3).json()
+        res_tv = requests.get(f"https://api.themoviedb.org/3/tv/{tmdb_id}?api_key={TMDB_API_KEY}&language=zh-CN", timeout=3, proxies=LOCAL_PROXIES).json()
         if "name" in res_tv:
             cn_name = res_tv["name"]
             s_match = re.search(r'(?i)(S\d+|Season\s*\d+)', folder_name)
@@ -253,7 +261,7 @@ def translate_folder_name(folder_name):
             return f"📺 {cn_name}{s_tag} (TMDB-{tmdb_id})"
             
         # 查不到再按电影查
-        res_movie = requests.get(f"https://api.themoviedb.org/3/movie/{tmdb_id}?api_key={TMDB_API_KEY}&language=zh-CN", timeout=3).json()
+        res_movie = requests.get(f"https://api.themoviedb.org/3/movie/{tmdb_id}?api_key={TMDB_API_KEY}&language=zh-CN", timeout=3, proxies=LOCAL_PROXIES).json()
         if "title" in res_movie:
             return f"🎬 {res_movie['title']} (TMDB-{tmdb_id})"
     except: pass
@@ -267,7 +275,7 @@ def fetch_tmdb_rich_info(keyword):
     try:
         # 1. 基础搜索，先锁定是最贴合的那部戏
         url_search = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&language=zh-CN&query={parse.quote(keyword)}&page=1"
-        res = requests.get(url_search, timeout=5).json()
+        res = requests.get(url_search, timeout=5, proxies=LOCAL_PROXIES).json()
         if not res.get("results"):
             return f"📭 TMDB 数据库中未找到关于【{keyword}】的信息。"
             
@@ -277,7 +285,7 @@ def fetch_tmdb_rich_info(keyword):
         
         # 2. 根据 ID 拿取极其详尽的完整档案
         detail_url = f"https://api.themoviedb.org/3/{media_type}/{tmdb_id}?api_key={TMDB_API_KEY}&language=zh-CN"
-        detail_res = requests.get(detail_url, timeout=5).json()
+        detail_res = requests.get(detail_url, timeout=5, proxies=LOCAL_PROXIES).json()
         
         # 3. 基础共用信息清洗
         title = detail_res.get("name") or detail_res.get("title", "未知")
@@ -517,7 +525,7 @@ class TelegramNotifier:
         payload = {"chat_id": self.user_id, "text": message, "parse_mode": "HTML"}
         if reply_markup: payload["reply_markup"] = json.dumps(reply_markup)
         try:
-            res = requests.post(f"{self.base_url}sendMessage", json=payload, timeout=10).json()
+            res = requests.post(f"{self.base_url}sendMessage", json=payload, timeout=10, proxies=LOCAL_PROXIES).json()
             return res.get("result", {}).get("message_id")
         except: return None
 
@@ -525,12 +533,12 @@ class TelegramNotifier:
         if not self.bot_token: return
         payload = {"chat_id": self.user_id, "message_id": message_id, "text": text, "parse_mode": "HTML"}
         if reply_markup: payload["reply_markup"] = json.dumps(reply_markup)
-        try: requests.post(f"{self.base_url}editMessageText", json=payload, timeout=10)
+        try: requests.post(f"{self.base_url}editMessageText", json=payload, timeout=10, proxies=LOCAL_PROXIES)
         except: pass
 
     def answer_callback(self, callback_query_id, text=""):
         if not self.bot_token: return
-        try: requests.post(f"{self.base_url}answerCallbackQuery", json={"callback_query_id": callback_query_id, "text": text}, timeout=5)
+        try: requests.post(f"{self.base_url}answerCallbackQuery", json={"callback_query_id": callback_query_id, "text": text}, timeout=5, proxies=LOCAL_PROXIES)
         except: pass
 
 class Cloud189ShareInfo:
@@ -857,30 +865,16 @@ def process_cas_via_olist_api():
 
         # ====== 🥈 第二优先：查“订阅库” ======
         if not best_match_path:
-            # 查本地库 (升级版：防止乱认亲戚截胡)
-            db_possible_matches = []
             for sid, info_dict in subs.items():
                 if isinstance(info_dict, dict):
                     db_path = info_dict.get("path", "")
                     if DIR_CAS_ROOT not in db_path: continue 
-                    db_folders = db_path.split('/')
-                    for idx, f_name in enumerate(db_folders):
-                        pure_f = get_match_key(f_name)
-                        if not pure_f or len(pure_f) < 2: continue
-                        if re.match(r'^\d{4,6}$', pure_f) or pure_f in ignore_words: continue
-                        if search_key == pure_f: 
-                            db_possible_matches.append("/".join(db_folders[:idx+1]))
-                            break
-                            
-            if db_possible_matches:
-                # 同样祭出立体打分，防止记忆库瞎认亲
-                db_possible_matches.sort(key=lambda p: (
-                    0 if p.split('/')[-1].lower() == show_folder_name.lower() else 1, # 1. 名字完全一样绝对优先
-                    len(p.split('/')[-1])                                             # 2. 名字越短越干净越优先
-                ))
-                best_match_path = db_possible_matches[0]
+                    # 🛑 绝对严格匹配：拒绝模糊认亲！文件夹名字必须一模一样！
+                    if db_path.split('/')[-1].strip().lower() == show_folder_name.strip().lower():
+                        best_match_path = db_path
+                        break
 
-        # ====== 🥉 第三优先：查雷达（跨月份全局扫描精准优选 + HDR原配优先装甲） ======
+        # ====== 🥉 第三优先：查雷达（跨月精确扫描） ======
         if not best_match_path:
             try:
                 search_roots = []
@@ -896,32 +890,22 @@ def process_cas_via_olist_api():
                         ym_nodes = [item["name"] for item in (r.json().get("data") or {}).get("content", []) if item["is_dir"] and re.match(r'^\d{4,6}$', item["name"])]
                         ym_nodes.sort(reverse=True)
                         
-                        # 🌟 把备选池提到外面，准备收集所有月份的匹配项
                         all_months_matches = []
-                        
                         for ym in ym_nodes:
                             ym_path = f"{root_path}/{ym}"
                             r2 = requests.post(f"{OLIST_URL}/api/fs/list", json={"path": ym_path, "password": "", "page": 1, "per_page": 1000, "refresh": True}, headers=headers, timeout=20)
                             if r2.json().get("code") == 200:
                                 for item in (r2.json().get("data") or {}).get("content", []):
-                                    if item["is_dir"] and search_key == get_match_key(item["name"]):
-                                        # 记录下它在哪个月份叫什么名字
+                                    # 🛑 致命修正：彻底抛弃 get_match_key！只要名字有任何不同（带了不同标签），立刻当成不同版本！
+                                    if item["is_dir"] and item["name"].strip().lower() == show_folder_name.strip().lower():
                                         all_months_matches.append({"ym": ym, "name": item["name"]})
                         
-                        # 🌟 全盘月份扫描结束，开始三维立体全局优选
                         if all_months_matches:
-                            # show_folder_name 就是你传进来的源文件夹原名（比如：搜神记 (2026) HDR）
-                            all_months_matches.sort(key=lambda x: (
-                                0 if x["name"].lower() == show_folder_name.lower() else 1,  # 第一维：名字完全一样，优先级绝对最高（门当户对）
-                                len(x["name"]),                                             # 第二维：名字越短越干净越优先（过滤杂牌标签）
-                                -int(x["ym"])                                               # 第三维：年份月份越新越优先
-                            ))
-                            
+                            # 既然名字是一模一样的，只需要拿最新的月份即可合并
+                            all_months_matches.sort(key=lambda x: -int(x["ym"]))
                             best_share = all_months_matches[0]
                             best_match_path = f"{DIR_CAS_ROOT}/{b_large}/{b_sub}/{best_share['ym']}/{best_share['name']}".replace("//", "/")
-                            
-                    if best_match_path:
-                        break
+                            break
             except:
                 pass
 
@@ -956,6 +940,12 @@ def process_cas_via_olist_api():
     # =================================================================
     # 🚀 效率跃迁步骤 2：以整部剧/整季为单位，执行极速合并洗名与一波流搬运
     # =================================================================
+    
+    # 🌟 载入跨维度账本
+    ledger_file = os.path.join(DB_DIR, "strm_ledger.json")
+    strm_ledger = load_json(ledger_file)
+    ledger_changed = False
+
     for (raw_dir, final_target_dir, base_notify_path), file_items in batch_groups.items():
         # 打基建
         if final_target_dir not in created_dirs:
@@ -991,7 +981,19 @@ def process_cas_via_olist_api():
         if mov_res.get("code") == 200:
             logger.info(f"✅ [搬运] 批量整组移动成功！")
             processed_names.extend(names_to_move)
-            updated_paths.add(base_notify_path)
+            
+            # 🌟 查账本防重复：只给没在本地生成过 STRM 的文件发云端同步通知
+            need_sync = False
+            for name in names_to_move:
+                if name in strm_ledger:
+                    logger.info(f"🤫 [静默防重] 识别到本地已提前生成 STRM，跳过管家二次强刷: {name}")
+                    del strm_ledger[name]
+                    ledger_changed = True
+                else:
+                    need_sync = True
+                    
+            if need_sync:
+                updated_paths.add(base_notify_path)
         else:
             err_msg = mov_res.get('message', str(mov_res))
             logger.warning(f"⚠️ [搬运] 批量移动受阻: {err_msg}。启动单件排查与强制清理模式...")
@@ -1005,18 +1007,33 @@ def process_cas_via_olist_api():
                 if single_res.get("code") == 200:
                     logger.info(f"✅ [搬运] 单件扫尾移动成功: {name}")
                     processed_names.append(name)
-                    updated_paths.add(base_notify_path)
+                    # 🌟 查账
+                    if name in strm_ledger:
+                        logger.info(f"🤫 [静默防重] 识别到本地已提前生成 STRM，跳过管家二次强刷: {name}")
+                        del strm_ledger[name]
+                        ledger_changed = True
+                    else:
+                        updated_paths.add(base_notify_path)
                 else:
                     single_err = single_res.get("message", "").lower()
                     # 如果提示文件已存在，说明上次已经挪过去了，目前只是个没删掉的缓存幽灵
                     if "exist" in single_err:
                         logger.info(f"🗑️ [清理] 目标端已安全存在 [{name}]，正在强行斩杀残留的源文件...")
                         requests.post(f"{OLIST_URL}/api/fs/remove", json={"dir": raw_dir, "names": [name]}, headers=headers).close()
-                        # 文件既然已经在那边了，正常将其加入已处理列表，确保后续能照常通知 5000 管家强刷
                         processed_names.append(name)
-                        updated_paths.add(base_notify_path)
+                        
+                        # 🌟 查账
+                        if name in strm_ledger:
+                            del strm_ledger[name]
+                            ledger_changed = True
+                        else:
+                            updated_paths.add(base_notify_path)
                     else:
                         logger.error(f"❌ [搬运] 单件移动彻底失败: {name} - {single_res.get('message')}")
+    
+    # 🌟 循环结束，如果有核销账目，保存回硬盘
+    if ledger_changed:
+        save_json(ledger_file, strm_ledger)
 
     # =================================================================
     # 🚨 通知管家收尾 (极致精准 - 影剧双修通吃版)
@@ -1446,7 +1463,13 @@ def scan_local_dropbox():
                         "status": "success"
                     }
                     changed = True
-                    updated_dirs.add(target_local_dir) # 🌟 新增：丢进聚合池
+                    updated_dirs.add(target_local_dir) 
+                    
+                    # 👇 🌟 新增：向跨维度账本写入记录，防止云端收割重复触发
+                    ledger_file = os.path.join(DB_DIR, "strm_ledger.json")
+                    ledger = load_json(ledger_file)
+                    ledger[final_name] = True
+                    save_json(ledger_file, ledger)
                 else:
                     logger.error(f"❌ [投递箱] API 拒绝: {res.text}")
             except Exception as e:
@@ -1498,11 +1521,31 @@ def main_control_loop(client_obj):
     scheduled_task()
     schedule.every(6).hours.do(auto_relogin, client_obj)
 
+    # ==========================================
+    # 🌟 新增：跨月防断层，每日 23:30 强制保底收割
+    # ==========================================
+    def daily_force_harvest():
+        logger.info("⏰ [定时任务] 触发 23:30 跨月保底强行收割...")
+        notifier.send_message("⏰ 触发 23:30 每日保底收割，防止跨月断层...")
+        
+        # 无视设置开关，直接硬调用收割核心函数
+        p_names = process_cas_via_olist_api()
+        
+        if p_names:
+            msg_str = "\n".join([f" └ {n}" for n in p_names[:20]])
+            if len(p_names) > 20: msg_str += f"\n...等共 {len(p_names)} 个文件"
+            notifier.send_message(f"✅ 每日保底收割完成:\n{msg_str}")
+        else:
+            notifier.send_message("✅ 每日保底收割完成，投递箱/云端暂无新文件。")
+
+    # 设定时间点（支持字符串格式）
+    schedule.every().day.at("23:30").do(daily_force_harvest)
+
     while True:
         schedule.run_pending()
         try:
             url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/getUpdates?offset={offset}&timeout=10"
-            res = requests.get(url, timeout=15).json()
+            res = requests.get(url, timeout=15, proxies=LOCAL_PROXIES).json()
             if res.get('ok'):
                 for item in res['result']:
                     offset = item['update_id'] + 1
@@ -3029,7 +3072,21 @@ def send_push(title, content):
             try: requests.get(f"http://www.pushplus.plus/send?token={cfg['pushplus_token']}&title={urllib.parse.quote(title)}&content={urllib.parse.quote(content)}&template=html", timeout=5)
             except Exception as e: logger.error(f"微信推送失败: {e}")
         if cfg.get('tg_bot_token') and cfg.get('tg_chat_id'):
-            try: requests.post(f"https://api.telegram.org/bot{cfg['tg_bot_token']}/sendMessage", data={"chat_id": cfg['tg_chat_id'], "text": f"🚨 <b>{title}</b>\n\n{content.replace('<br>', '\n')}", "parse_mode": "HTML"}, timeout=5)
+            
+            # === 💡 新增：专供 TG 使用的 FLClash 代理配置 ===
+            # 如果你的 FLClash 端口改过（不是默认的 7890），请把 7890 改成你的真实端口
+            proxy_config = {
+                "http": "http://127.0.0.1:7890",
+                "https": "http://127.0.0.1:7890"
+            }
+            
+            try: 
+                requests.post(
+                    f"https://api.telegram.org/bot{cfg['tg_bot_token']}/sendMessage", 
+                    data={"chat_id": cfg['tg_chat_id'], "text": f"🚨 <b>{title}</b>\n\n{content.replace('<br>', '\n')}", "parse_mode": "HTML"}, 
+                    proxies=proxy_config,  # 👈 关键点：强行让 TG 请求抄近道走 FLClash 代理
+                    timeout=5
+                )
             except Exception as e: logger.error(f"TG推送失败: {e}")
     threading.Thread(target=_do_push, daemon=True).start()
 
@@ -3719,6 +3776,23 @@ def play():
         if tag_str:
             if safe_name.endswith(ext): safe_name = safe_name[:-len(ext)] + tag_str + ext
             else: safe_name = safe_name + tag_str + ext
+
+        # === 🚨 针对多版本特性的防撞车安全闸口 ===
+        # 如果是同部剧/同部电影，但为了防止内部因标签缺失导致 safe_name 撞车，
+        # 我们检测 upload_cache 里是否已经有同名但不同 MD5 的老大哥存在
+        with cache_lock:
+            name_collided = any(
+                v.get('fid') != 'processing' and f_md5 != k and safe_name == (v.get('show_name') + ext if 'show_name' in v else "")
+                for k, v in upload_cache.items()
+            )
+            # 如果名字撞了，但 MD5 不同，强行为新版本的文件名挂上大小标签（如 .980MB.mp4）进行物理区分
+            if name_collided:
+                size_tag = f".{human_size.replace(' ', '')}"
+                if safe_name.endswith(ext): 
+                    safe_name = safe_name[:-len(ext)] + size_tag + ext
+                else: 
+                    safe_name = safe_name + size_tag + ext
+                logger.info(f"⚠️ 探测到多版本文件名严重撞车！已启动应急防护，重命名为: [{safe_name}]")
                 
         # --- 下面的逻辑完全是你最原始的代码，一行未动 ---
         cfg = read_config()

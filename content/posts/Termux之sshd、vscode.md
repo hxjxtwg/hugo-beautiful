@@ -151,3 +151,15 @@ pm2 start "code-server --bind-addr 0.0.0.0:8088 --auth none" --name "vscode"
 pm2 save
 pm2 list
 ```
+
+### 三、HTTP Server
+
+使用 pm2 来托管 Python 自带的 HTTP Server 是一种非常聪明且常见的做法。它能让你关闭 SSH 终端后，服务依然在后台稳稳运行，还能实现开机自启
+
+```
+pm2 start "python3 -m http.server 9999 -d /storage/emulated/0/Download/189cas" --name "fcas"
+```
+```
+pm2 save
+pm2 startup
+```

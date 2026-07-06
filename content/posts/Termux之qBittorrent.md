@@ -306,9 +306,8 @@ TG_SETTINGS_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tg_se
 PUSHPLUS_TOKEN = "" 
 TG_BOT_TOKEN = "7548615667:AAHn0ls4aBPKBPI2-gpwykwVdEKd0ywOlsc"
 TG_CHAT_ID = "-1002906711199"
-# 🎯 局部代理：由于 Termux 被直连，这里单独给 TG 和 TMDB 指定 FlClash 的本地代理端口。
-# 注意：核对你的 FlClash 设置里的 HTTP 端口，通常是 7890 或 8080
-PROXY_URL = "http://127.0.0.1:8080" 
+# 🎯 局部代理：已为你修正为测试成功的 FlClash 端口 7890
+PROXY_URL = "http://127.0.0.1:7890" 
 
 def get_mount_root():
     if os.path.exists(TG_SETTINGS_DB):
@@ -377,8 +376,8 @@ async def fetch_tmdb_year(title):
     clean_q = re.sub(r'S\d+$|\s+\d+$', '', title).strip()
     url = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&language=zh-CN&query={quote(clean_q)}&page=1"
     try:
-        # 恢复你原来正常的直连模式，去掉了 proxy 参数
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        # 🛡️ 这里也挂载局部代理，确保 TMDB 搜刮即使在直连失效时依然坚挺
+        async with httpx.AsyncClient(timeout=5.0, proxy=PROXY_URL if PROXY_URL else None) as client:
             res = await client.get(url)
             results = res.json().get("results")
             if results:
@@ -439,20 +438,34 @@ async def main():
     category = sys.argv[3]
     custom_tag = sys.argv[4].strip() if len(sys.argv) > 4 else ""
 
-    # 1. 基础剧名洗白
+    # 1. 基础剧名洗白 (修复剧名提取导致的空名字和非法空格Bug)
     pure_drama_name = re.sub(r'^\[.*?\]|\(.*?\)', '', torrent_name).strip()
+    # 🔥 核心修复点：删掉残留的引导点，防止切分后变成空字符串
+    pure_drama_name = pure_drama_name.lstrip('.').strip() 
     pure_drama_name = pure_drama_name.split('.')[0].split(' ')[0].strip()
     pure_drama_name = re.sub(r'第.*?季|S\d+', '', pure_drama_name, flags=re.IGNORECASE).strip()
 
     m_season = re.search(r'(?i)S(\d+)', torrent_name)
     folder_season = int(m_season.group(1)) if m_season else 1
     
-    year = await fetch_tmdb_year(pure_drama_name)
+    # =================================================================
+    # 🎯 核心升级：优先从种子原名提取准确年份，防止 TMDB 同名误判
+    # =================================================================
+    year = ""
+    # 找寻 19xx 或 20xx 这种标准的四位年份，并且排除掉分辨率(如1080没在这个正则里, 2160也不会被匹配)
+    year_match = re.search(r'\b(19\d{2}|20\d{2})\b', torrent_name)
+    
+    if year_match:
+        year = year_match.group(1)
+    else:
+        # 只有当种子名字里实在没有年份时，才去 TMDB 盲猜兜底
+        year = await fetch_tmdb_year(pure_drama_name)
     current_mount = get_mount_root()
     is_movie = "电影" in category or category in ["演唱会", "纪录片"]
 
     # 2. 剧名文件夹标准化决策 (坚如磐石的地基 + 自定义后缀)
-    clean_base = pure_drama_name.replace(" ", ".")
+    # 增加双重保险，如果极特殊情况连 pure_drama_name 也没了，用年份或默认名兜底
+    clean_base = pure_drama_name.replace(" ", ".") if pure_drama_name else "Unknown.Drama"
     base_folder = f"{clean_base} ({year})" if year else clean_base
     
     if custom_tag:
