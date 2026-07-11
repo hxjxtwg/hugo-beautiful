@@ -30,6 +30,8 @@ import json
 import base64
 import hashlib
 import time
+import argparse
+import sys
 from flask import Flask, request, jsonify, render_template_string
 
 app = Flask(__name__)
@@ -37,9 +39,13 @@ app = Flask(__name__)
 # ==========================================
 # 核心配置区
 # ==========================================
-# Termux 服务器本地 CAS 文件暂存根目录
-CAS_OUTPUT_DIR = "/storage/emulated/0/Download/189cas"
-os.makedirs(CAS_OUTPUT_DIR, exist_ok=True)
+# Termux 服务器本地 CAS 文件暂存根目录 (分别独立配置)
+CAS_BASE_DIRS = {
+    "189": "/storage/emulated/0/Download/189cas",
+    "139": "/storage/emulated/0/Download/139cas"
+}
+for d in CAS_BASE_DIRS.values():
+    os.makedirs(d, exist_ok=True)
 
 # 28GB 阈值（字节），超过此大小自动切换为 20MB 分片
 LARGE_FILE_THRESHOLD = 26 * 1024 * 1024 * 1024  
@@ -53,14 +59,35 @@ def get_dynamic_slice_size(file_size):
         return 20 * 1024 * 1024  # >26G 自动启用 20MB 分片
     return 10 * 1024 * 1024      # 普通文件使用 10MB 分片
 
-def calculate_single_file_cas(file_path):
-    """核心底层算法：全速解构单个物理文件并计算标准级联哈希"""
+def calculate_single_file_cas(file_path, cloud_type="189"):
+    """核心底层算法：全速解构单个物理文件并计算标准级联哈希或SHA256"""
     if not os.path.exists(file_path) or os.path.isdir(file_path):
         return None
 
     file_size = os.path.getsize(file_path)
     file_name = os.path.basename(file_path)
     
+    # ======== 139 移动云盘逻辑 ========
+    if cloud_type == "139":
+        sha256_algo = hashlib.sha256()
+        with open(file_path, 'rb') as f:
+            while True:
+                chunk = f.read(4 * 1024 * 1024)
+                if not chunk:
+                    break
+                sha256_algo.update(chunk)
+                
+        return {
+            "name": file_name,
+            "size": file_size,
+            "md5": "",
+            "sliceMd5": "",
+            "sha256": sha256_algo.hexdigest().lower(),
+            "create_time": str(int(time.time())),
+            "part_size_used": "139无需分片"
+        }
+    
+    # ======== 189 天翼云盘逻辑 ========
     current_slice_size = get_dynamic_slice_size(file_size)
     chunk_size = 4 * 1024 * 1024  # 4MB 流式读取缓冲区
 
@@ -115,9 +142,10 @@ HTML_TEMPLATE = r"""
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>天翼云盘 CAS 远程集成控制中心</title>
+<title>天翼/移动云盘 CAS 双擎控制中心</title>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/spark-md5@3.0.2/spark-md5.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/js-sha256/0.9.0/sha256.min.js"></script>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 :root { --bg: #0f172a; --card: #1e293b; --border: #334155; --text: #e2e8f0; --dim: #94a3b8; --accent: #3b82f6; --accent-h: #2563eb; --ok: #22c55e; --err: #ef4444; }
@@ -182,8 +210,8 @@ h1 { font-size: 22px; margin-bottom: 4px; color: #facc15; }
 </head>
 <body>
 <div class="wrap">
-  <h1>⚡ 天翼CAS服务器控制中心</h1>
-  <p class="sub">支持大文件（>28G）自动切换 20M 分片逻辑 · 完美保留明文 JSON 结构与 Base64 统一输出</p>
+  <h1>⚡ 双擎云盘 CAS 远程集成控制中心</h1>
+  <p class="sub">全面支持 189天翼云(分片拼装) & 139移动云盘(SHA256) · 物理目录严格隔离存放</p>
 
   <!-- 1. Emby 路径配置 -->
   <div class="card">
@@ -203,7 +231,7 @@ h1 { font-size: 22px; margin-bottom: 4px; color: #facc15; }
       <div class="pb-group" id="seasonGroup"><label>季数</label><input type="text" id="catSeason" class="pb-input" placeholder="1" oninput="buildPath()"></div>
     </div>
     <div class="final-path-box">
-      <label>即将落盘的物理相对目录：</label>
+      <label>即将落盘的物理相对目录 (挂载在对应云盘基础目录下)：</label>
       <div class="final-path-text" id="finalPathDisplay"></div>
       <input type="hidden" id="categoryInput">
     </div>
@@ -211,8 +239,12 @@ h1 { font-size: 22px; margin-bottom: 4px; color: #facc15; }
 
   <!-- 2. 操作模式切换与执行域 -->
   <div class="card">
-    <div class="card-t">⚙️ 2. 选择工作引擎与提取源</div>
+    <div class="card-t">⚙️ 2. 选择工作引擎与目标云盘</div>
     <div class="mode-tabs">
+      <select id="cloudType" class="pb-input" style="background:var(--accent); color:white; font-weight:bold; border:none; margin-right:15px; cursor:pointer;" onchange="buildPath()">
+          <option value="189">☁️ 天翼云盘 (189)</option>
+          <option value="139">☁️ 移动云盘 (139)</option>
+      </select>
       <button class="tab active" id="tabLocal" onclick="switchMode('local')">🌐 跨网络计算 </button>
       <button class="tab" id="tabServer" onclick="switchMode('server')">🖥️ 服务器本地 </button>
     </div>
@@ -332,7 +364,9 @@ function buildPath() {
             }
         }
         
-        $('finalPathDisplay').innerText = path + '/';
+        // 界面预览路径加上云盘名称以作区分
+        const cloudType = $('cloudType').value;
+        $('finalPathDisplay').innerText = cloudType + 'cas/' + path + '/';
         $('categoryInput').value = path;
     } catch (e) {
         console.error("路径构建失败:", e);
@@ -392,7 +426,7 @@ function handleLocalFiles(e) {
     smartExtract(files[0].name);
     
     for (let i = 0; i < files.length; i++) {
-        localQueue.push({ file: files[i], state: 'wait', progress: 0, md5: '', sliceMd5: '', backendObj: null });
+        localQueue.push({ file: files[i], state: 'wait', progress: 0, md5: '', sliceMd5: '', backendObj: null, casObj: null });
     }
     renderLocalList();
     $('finput').value = '';
@@ -429,6 +463,8 @@ function renderLocalList() {
 async function executeTasks() {
     if (isRunning) return;
     
+    const ct = $('cloudType').value;
+    
     if (activeMode === 'local') {
         if (localQueue.length === 0) {
             alert("请先添加视频文件到列表！");
@@ -453,24 +489,62 @@ async function executeTasks() {
             renderLocalList();
             
             try {
-                const hashes = await readLocalFileMd5(item.file, function(p) {
-                    item.progress = p;
-                    renderLocalList();
-                });
-                item.md5 = hashes.md5;
-                item.sliceMd5 = hashes.sliceMd5;
+                let casPayload = {};
                 
-                const casPayload = { name: item.file.name, size: item.file.size, md5: item.md5, sliceMd5: item.sliceMd5, create_time: String(Math.floor(Date.now() / 1000)), cloud: '189' };
+                // --- 139 移动云盘逻辑 ---
+                if (ct === '139') {
+                    const shaAlgo = sha256.create();
+                    let off = 0;
+                    while (off < item.file.size) {
+                        const end = Math.min(off + CHUNK_SIZE, item.file.size);
+                        const buf = await item.file.slice(off, end).arrayBuffer();
+                        shaAlgo.update(buf);
+                        off = end;
+                        item.progress = off / item.file.size;
+                        renderLocalList();
+                        await new Promise(r => setTimeout(r, 0));
+                    }
+                    casPayload = { 
+                        name: item.file.name, 
+                        size: item.file.size, 
+                        md5: "", 
+                        sliceMd5: "", 
+                        sha256: shaAlgo.hex().toLowerCase(), 
+                        create_time: String(Math.floor(Date.now() / 1000)) 
+                    };
+                } 
+                // --- 189 天翼云盘逻辑 ---
+                else {
+                    const hashes = await readLocalFileMd5(item.file, function(p) {
+                        item.progress = p;
+                        renderLocalList();
+                    });
+                    casPayload = { 
+                        name: item.file.name, 
+                        size: item.file.size, 
+                        md5: hashes.md5, 
+                        sliceMd5: hashes.sliceMd5, 
+                        create_time: String(Math.floor(Date.now() / 1000)), 
+                        cloud: '189' 
+                    };
+                }
+                
                 const b64Str = btoa(unescape(encodeURIComponent(JSON.stringify(casPayload))));
 
-                // 向后端发起写入指令
+                // 向后端发起写入指令，传递 cloud_type 进行物理隔离
                 const res = await fetch('/api/save_cas_only', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ cas_data: casPayload, b64: b64Str, category: $('categoryInput').value })
+                    body: JSON.stringify({ 
+                        cas_data: casPayload, 
+                        b64: b64Str, 
+                        category: $('categoryInput').value, 
+                        cloud_type: ct 
+                    })
                 });
                 const data = await res.json();
                 item.backendObj = data;
+                item.casObj = casPayload; // 保存起来供展示
                 item.state = 'done';
             } catch (e) {
                 item.state = 'fail';
@@ -479,9 +553,7 @@ async function executeTasks() {
             renderLocalList();
         }
         
-        currentPayloads = localQueue.filter(q => q.state === 'done').map(q => ({
-            name: q.file.name, size: q.file.size, md5: q.md5, sliceMd5: q.sliceMd5, create_time: String(Math.floor(Date.now() / 1000)), cloud: '189'
-        }));
+        currentPayloads = localQueue.filter(q => q.state === 'done').map(q => q.casObj);
         
         isRunning = false;
         $('btnGo').disabled = false;
@@ -508,7 +580,8 @@ async function executeTasks() {
                     base_path: bp, 
                     sub_path: sp, 
                     specific_file: $('serverSpecificFile').value.trim(), 
-                    category: $('categoryInput').value 
+                    category: $('categoryInput').value,
+                    cloud_type: ct
                 })
             });
             const data = await res.json();
@@ -522,7 +595,7 @@ async function executeTasks() {
                     if (r.error) {
                         $('flist').innerHTML += '<div class="frow fail"><span class="name">❌ 解析失败: ' + esc(r.file_name) + ' - ' + esc(r.error) + '</span></div>';
                     } else {
-                        $('flist').innerHTML += '<div class="frow done"><span class="name">✓ [服务器高速解析完成] ' + esc(r.cas_data.name) + ' (单片:' + r.cas_data.part_size_used + ')</span><span style="color:var(--ok)">[已物理归档]</span></div>';
+                        $('flist').innerHTML += '<div class="frow done"><span class="name">✓ [服务器高速解析完成] ' + esc(r.cas_data.name) + ' (' + r.cas_data.part_size_used + ')</span><span style="color:var(--ok)">[已物理归档]</span></div>';
                     }
                 }
                 currentPayloads = data.results.filter(r => !r.error).map(r => r.cas_data);
@@ -538,7 +611,7 @@ async function executeTasks() {
     }
 }
 
-// ==== 浏览器纯前端哈希计算底层算法 (精准保留\n拼接) ====
+// ==== 浏览器纯前端哈希计算底层算法 (189 专用) ====
 async function readLocalFileMd5(file, onProgress) {
     const fileSize = file.size;
     const currentSliceSize = getPartSize(fileSize);
@@ -620,7 +693,7 @@ function downloadCasFile() {
     zip.generateAsync({ type: 'blob', compression: 'STORE' }).then(function(blob) {
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = 'cas_files_' + new Date().getTime() + '.zip';
+        a.download = 'cas_' + $('cloudType').value + '_' + new Date().getTime() + '.zip';
         a.click();
         URL.revokeObjectURL(a.href);
     });
@@ -668,6 +741,7 @@ def api_process_server_folder():
     sub_path = req.get('sub_path', '').strip()
     specific_file = req.get('specific_file', '').strip()
     category_path = req.get('category', 'default')
+    cloud_type = req.get('cloud_type', '189')
     
     if not base_path:
         return jsonify({"error": "基础路径不可为空"}), 400
@@ -697,14 +771,15 @@ def api_process_server_folder():
     if not target_files:
         return jsonify({"results": []})
         
-    # 执行批量计算与归档
-    category_dir = os.path.join(CAS_OUTPUT_DIR, category_path)
+    # 根据云盘类型获取对应的基础落盘路径
+    base_out_dir = CAS_BASE_DIRS.get(cloud_type, CAS_BASE_DIRS["189"])
+    category_dir = os.path.join(base_out_dir, category_path)
     os.makedirs(category_dir, exist_ok=True)
     
     results = []
     for f_path in target_files:
         try:
-            cas_data = calculate_single_file_cas(f_path)
+            cas_data = calculate_single_file_cas(f_path, cloud_type)
             if cas_data:
                 # 转换 Base64 落盘
                 json_str = json.dumps(cas_data, ensure_ascii=False)
@@ -732,10 +807,13 @@ def api_save_cas_only():
     cas_data = req.get('cas_data', {})
     b64_str = req.get('b64', '')
     category_path = req.get('category', 'default')
+    cloud_type = req.get('cloud_type', '189')
     
     try:
         file_name = cas_data.get('name', 'unknown')
-        category_dir = os.path.join(CAS_OUTPUT_DIR, category_path)
+        # 根据云盘类型获取对应的基础落盘路径
+        base_out_dir = CAS_BASE_DIRS.get(cloud_type, CAS_BASE_DIRS["189"])
+        category_dir = os.path.join(base_out_dir, category_path)
         os.makedirs(category_dir, exist_ok=True)
         
         saved_cas_path = os.path.join(category_dir, f"{file_name}.cas")
@@ -745,8 +823,49 @@ def api_save_cas_only():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
+# ==========================================
+# 命令行 (CLI) 入口配置
+# ==========================================
 if __name__ == '__main__':
-    # 允许局域网远程操控
-    app.run(host='0.0.0.0', port=5050)
+    parser = argparse.ArgumentParser(description="双擎云盘 CAS 控制中心")
+    parser.add_argument('--cli', action='store_true', help='启用纯命令行模式（不在后台启动Web服务器）')
+    parser.add_argument('--file', type=str, help='媒体文件的绝对路径（必须与 --cli 配合使用）')
+    parser.add_argument('--cloud', type=str, default='139', choices=['189', '139'], help='目标云盘类型 (189 默认 或 139)')
+    parser.add_argument('--category', type=str, default='default', help='落盘分类路径 (如 华语剧/剧名/Season 1)')
+    
+    args = parser.parse_args()
+
+    # 当 TG 脚本等外部程序传入 --cli 参数时，不启动 Web 服务，直接纯命令流式运算
+    if args.cli:
+        if not args.file or not os.path.exists(args.file):
+            print(f"❌ 错误: 找不到指定的物理文件 -> {args.file}")
+            sys.exit(1)
+            
+        print(f"\n🚀 开始纯命令行流式计算 CAS (目标云盘: {args.cloud})")
+        print(f"📄 目标文件: {args.file}")
+        
+        cas_data = calculate_single_file_cas(args.file, args.cloud)
+        
+        if cas_data:
+            json_str = json.dumps(cas_data, ensure_ascii=False)
+            b64_str = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
+            
+            # 获取基础输出目录并建立完整路径
+            base_out_dir = CAS_BASE_DIRS.get(args.cloud, CAS_BASE_DIRS["189"])
+            category_dir = os.path.join(base_out_dir, args.category)
+            os.makedirs(category_dir, exist_ok=True)
+            
+            saved_cas_path = os.path.join(category_dir, f"{cas_data['name']}.cas")
+            with open(saved_cas_path, 'w', encoding='utf-8') as f:
+                f.write(b64_str)
+                
+            print("\n✨ CAS 锻造闭环完成 ✨")
+            print(f"📦 物理文件已安全归档至: {saved_cas_path}")
+        else:
+            print("\n❌ 计算异常，未能生成特征负载。")
+            sys.exit(1)
+    else:
+        # 默认模式：正常启动网页服务端
+        print("启动 Web 远程管理平台 (端口 5050)...")
+        app.run(host='0.0.0.0', port=5050)
 ```
