@@ -1,12 +1,12 @@
 ---
 
-title: "Termux之AutoTG.py"
+title: "Termux之双上传autotg.py"
 
 author: "xxsky"
 
 type: "posts"
 
-date: 2026-05-12T19:31:24+08:00
+date: 2026-07-14T12:22:55+08:00
 
 subtitle: ""
 
@@ -18,56 +18,44 @@ tags:
 
 ---
 
-咱们利用 Python 的 Pyrogram 库作为接头人伪装成 TG 客户端（或 Bot），直接从 TG 服务器实时拉取视频流数据块（Chunk），拿到一块就立刻通过异步管道通过 PUT 请求直接灌入 Openlist 的上传接口 (/api/fs/put)。
+双下载双上传
 
 <!--more-->
-### 一、安装环境
-在 Termux 里安装所需的现代异步网络库：
+
+### 一、机器人指令菜单
+
+1.@BotFather
+
+2.在对话框里发送指令：/mybots
+
+3.屏幕上会弹出你创建过的机器人列表，点击咱们正在用的这个机器人的名字
+
+4.接着点击弹出面板上的 Edit Bot
+
+5.然后点击 Edit Commands
+
+6.把这套菜单直接喂给它
 ```
-pip install pyrogram tgcrypto httpx
+sub - ➕ 自动订阅 (可直接回复视频抓取频道)
+unsub - 🗑️ 取消订阅 (全网通杀或精准单杀)
+go - 🚀 手动发车 (开辟航线并锁死文件夹)
+mag - 🧲[磁力链接]
+reup - 🚀 [剧名关键字] [分类] [可选:年份] [c139|only139]
+list - 📡 查看雷达大盘排班与状态
+scan - 🔍 强行触发一次全网补漏扫荡
+history - 📋 查看曾经发过车的历史航线记录
+rm - ❌ 删除历史航线！ 把不再需要的死档从history 里永久抹除
+rmh - ❎ 带剧名删除下载历史记录
+clh - ❎ 清除没订阅的下载历史记录
+clean - ⭕️ 清除下载碎片
+cancel - ⭕️ 终止下载 (all/剧名(+e01/s01)/.mp4)
+setdir - ❇️ 设置上传目录
+ping - 💓 查看系统是否活着、存活时间、雷达正在盯防多少部剧
+help - 📖 查看随身说明书与指令语法
 ```
 
-### 二、Telegram 的 API_ID 和 API_HASH
+### 二、脚本
 
-手把手拿下 Telegram 的 API_ID 和 API_HASH
-
-Telegram 官方要求任何第三方自动化脚本（无论是普通客户端还是 Bot）必须绑定一组开发者身份凭证。申请过程完全免费，但必须走官方开发者后台。
-
-📝 极简申请步骤
-
-1.准备高稳定全局网络：打开你的代理软件（务必开启全局路由模式，避开频繁抖动的免费 CDN 节点，确保访问顺畅）。
-
-2.进入官方后台：浏览器直接打开开发者门户网址 👉 [my.telegram.org](https://my.telegram.org/auth)
-
-3.安全登录：
-
-* 在输入框填入你绑定的 Telegram 手机号（务必带上国际区号，例如中国大陆号码填 +86138xxxx）。
-
-* 点击 Next 后，千万别等短信，直接打开你的 Telegram 客户端，官方服务号（Service Notifications）会实时发给你一串长文本验证码。复制粘贴回网页完成登录。
-
-4.进入开发配置：登录成功后，点击页面核心菜单里的 API development tools。
-
-5.填写应用表单（首次进入需创建应用）：
-
-* App title：随便起个名字（比如 AutoLeecherPro）。
-
-* Short name：必须全网唯一，且只能用纯英文字母和数字（比如 mytermuxleecher2026）。
-
-* URL：直接留空不管。
-
-* Platform：下拉选择 Desktop 或 Android 均可。
-
-* Description：留空，直接点击底部的 Create application 提交。
-
-6.提取终极密钥：
-
-* 提交成功后，页面当场刷新，显示出你的 App api_id（一串纯数字）和 App api_hash（一串极长的混合字符）。
-
-* ⚠️ 铁律：直接把这两个值复制贴进咱们脚本的配置项里。绝对绝不泄露给任何人，这是你账号操控权的底层凭证。
-
-### 三、autotg.py
-
-1.脚本：
 ```
 import os
 import re
@@ -1365,7 +1353,7 @@ async def handle_magnet_execution(client, message, magnet_link, config_text, res
 # =================================================================
 STANDARD_CATS = ["华语剧", "欧美剧", "日韩剧", "短剧", "华语电影", "欧美电影", "日韩电影", "演唱会", "国漫", "日漫", "综艺", "纪录片"]
 
-@app.on_message(filters.chat(COMMAND_CENTER_CHAT) & filters.command(["sub", "unsub", "list", "add", "del", "go", "history", "ping", "rm", "clean", "scan", "rmh", "setdir", "cancel", "mag", "reup"]) & filters.user("me"))
+@app.on_message(filters.chat(COMMAND_CENTER_CHAT) & filters.command(["sub", "unsub", "list", "add", "del", "go", "history", "ping", "rm", "clean", "scan", "rmh", "setdir", "cancel", "mag", "reup", "clh"]) & filters.user("me"))
 async def manage_system_commands(client, message):
     global GLOBAL_STOP_SWEEP
     command = message.command[0].lower()
@@ -1489,6 +1477,13 @@ async def manage_system_commands(client, message):
             GLOBAL_STOP_SWEEP = True
             GLOBAL_CANCEL_TASKS.add("ALL")
             GLOBAL_ACTIVE_LOCKS.clear()
+            
+            # 🔥 修复补丁：5秒后自动解除全局封印，防止永久阻塞后续新任务
+            async def clear_all_lock():
+                await asyncio.sleep(5)
+                GLOBAL_CANCEL_TASKS.discard("ALL")
+            asyncio.create_task(clear_all_lock())
+            
             return await message.reply_text("🛑 已下达最高追杀令：全局清空 TG 队列、拉闸后台扫荡、销毁底层 Aria2 任务！")
         else:
             kws = kw.split()
@@ -1537,6 +1532,45 @@ async def manage_system_commands(client, message):
             time_str = datetime.fromtimestamp(v).strftime('%m-%d %H:%M')
             msg_text += f"🔹 `{k}`  *(于 {time_str})*\n"
         return await message.reply_text(msg_text)
+    
+    if command == "clh":
+        config = load_listener_config()
+        history = load_history()
+        
+        if not history: 
+            return await message.reply_text("📭 历史账本目前是空的，无需清理。")
+        
+        # 1. 提取当前所有在追订阅的剧名基准 (剔除版本号后缀，并转换为历史记录的 '.' 格式)
+        active_bases = set()
+        for chat_id, info in config.get("trusted_channels", {}).items():
+            for drama_key, d_info in info.get("monitored_dramas", {}).items():
+                db_version = d_info.get("version", "")
+                pure_drama = drama_key[:-len(f"_{db_version}")] if db_version and drama_key.endswith(f"_{db_version}") else drama_key
+                active_bases.add(pure_drama.replace(" ", "."))
+                
+        # 2. 遍历历史记录，找出已退订或不存在的孤儿记录
+        keys_to_delete = []
+        for hist_key in history.keys():
+            is_active = False
+            for base in active_bases:
+                # 兼容历史键值格式：剧集通常带 .SxxExx，电影可能是纯名或带版本号
+                if hist_key.startswith(base + ".") or hist_key == base:
+                    is_active = True
+                    break
+            if not is_active:
+                keys_to_delete.append(hist_key)
+                
+        # 3. 执行物理抹除并落盘保存
+        if not keys_to_delete:
+            return await message.reply_text("✅ 历史账本很干净，所有记录均匹配当前订阅，无陈旧孤儿记录。")
+            
+        for k in keys_to_delete:
+            del history[k]
+            
+        with open(TG_HISTORY_DB, 'w', encoding='utf-8') as f:
+            json.dump(history, f, ensure_ascii=False, indent=2)
+            
+        return await message.reply_text(f"🧹 **[无情清道夫]** 交叉比对完毕！\n🗑️ 共抹除了 `{len(keys_to_delete)}` 条已退订或陈旧的历史记录。")
 
     if command == "add":
         if len(message.command) < 3: return await message.reply_text("⚠️ `/add [频道ID] [别名]`")
@@ -1583,6 +1617,7 @@ async def manage_system_commands(client, message):
 
     if command == "scan":
         GLOBAL_STOP_SWEEP = False
+        GLOBAL_CANCEL_TASKS.discard("ALL")  # 🔥 修复补丁：启动扫荡前，强制清空全局追杀标记
         args = message.command[1:]
         target_kw = " ".join(args).lower() if args else None
         await message.reply_text("🔍 **[手动扫荡触发]** ➔ 正在全自动翻找目标漏网之鱼...")
@@ -2414,203 +2449,3 @@ if __name__ == "__main__":
         await app.stop()
     app.run(start_system())
 ```
-2.登陆帐号
-在前台手动点火，直接用 Python 原生命令把代码跑起来，让它把输出打在你的屏幕上：
-```
-python3 ~/189py/autotg.py
-```
-回车之后，盯着屏幕，你会看到 Pyrogram 极度硬核的认证提示依次弹出：
-
-Enter phone number or bot token:
-👉 既然注释了 token，直接输入你的 Telegram 注册手机号，必须带国际区号！比如中国大陆就输入 +8613800138000，然后回车。
-
-Is "+86 138 0013 8000" correct? (y/N):
-👉 输入 y 回车确认。
-
-Enter confirmation code:
-👉 此时，你的 Telegram 官方客户端（手机或电脑版）会收到一条系统发来的 5 位数验证码。在 Termux 里敲进去并回车。
-
-Enter password (hint: ***):
-👉 (注意：只有你开了两步验证密码才会有这一步)。如果有，输入你的两步验证密码（注意：Linux 终端输入密码时屏幕上不会显示任何字符，这是正常的防偷窥保护，凭感觉盲打完直接回车即可）。
-
-一旦认证成功，屏幕上会刷出一堆日志，最后显示：
-🤖 工业级全栖搬运中枢 (V15 三维雷达全自动版) 满血上线！
-并且你的目录里会自动生成一个极其珍贵的授权凭证文件：tg_robust_leecher_v15.session。
-
-有了这个文件，脚本以后就彻底记住了你是谁，再也不用输密码了。
-
-现在，按下键盘上的 Ctrl + C，强行把前台运行的脚本关掉。
-
-#### 3.指令说明：
-📖 V15.10 核心遥控指令清单
-📡 一、 雷达全自动阵列（适用于未来更新的剧集）
-/ping ➔ 💓 查看系统是否活着、存活时间、雷达正在盯防多少部剧。
-
-/list ➔ 📋 查看当前所有雷达监控大名单。
-
-/add [频道ID] [别名] ➔ 🏢 把一个发资源的群加入信任大名单。
-
-(例：/add_channel -1001234567 顶级原盘群)
-
-/del [频道ID] ➔ 🗑️ 把某个群从大名单里踢出去。
-
-/sub [分类] [剧名] [季数] [起步集] ➔ 🎯 部署雷达！（分类和剧名谁在前都可以，闭眼发）。
-
-完整语法：/sub [剧名关键字] [分类] [文件夹季数] [起步集数] [可选: 文件大小范围] [可选: 文件名季数] [可选: 剧名年份] [可选: v=剧名文件夹版本号] [可选: f=文件名参数] [可选: 频道ID] [可选: end=剧总集数]
-
-别名：/sub 仙剑奇侠传三|仙剑奇侠传叁 国漫
-
-(例：/sub 国漫 凡人修仙传 1 15 ➔ 从第15集开始死盯凡人修仙传)
-
-/unsub [剧名] ➔ ⛔ 剧追完了？取消雷达监控。
-
-(例：/unsub 凡人修仙传)
-
-🎫 二、 手工霸王发车（适用于补以前的旧视频）
-/history ➔ 📂 查看曾经发过车的历史航线记录（方便你想复用）。
-
-/go [关键字] ➔ 🚀 秒开旧车！ 模糊搜索历史记录，一秒复用。
-
-(例：发 /go 卧底，自动匹配《宗门里除了我都是卧底》，直接发车)
-
-/go [分类] [新剧名] ➔ 🆕 秒开新车！ 历史里没有的剧，直接强行建档。
-
-(例：/go 日漫 咒术回战)
-
-#E[数字] ➔ 🔢 强行纠正/覆写下一集的集数。
-
-完整语法：/go [剧名关键字] [分类] [文件夹季数] [可选: 文件名季数]
-
-(例：视频名字太乱提取不出集数，你直接发 #E12，下一集强制按 12 集命名)
-
-🧹 三、 清理与维护（本次为你紧急加装！）
-/rm [剧名关键字] ➔ 💥 删除历史航线！ 把不再需要的死档从 /history 里永久抹除。
-
-(例：/rm 卧底 ➔ 瞬间清理账本，保持后台极度干净)
-/rmh [剧名关键字] ➔ 删除下载历史记录
-/clean 清除下载碎片
-
-/scan 拉取订阅下载（+剧名可直接拉取单剧）
-
-```
-终极备忘录：全指令参数详解图鉴
-你可以把这段保存在你的记事本里，随时查阅：
-
-/sub - ➕ 自动订阅 (可直接回复视频抓取频道)
-
-完整语法：/sub [剧名] [分类] [最小MB-最大MB] [频率:日更/周一~周日] [可选:年份] [可选:v=版本号] [可选:文件夹季数] [可选:S文件名季数]
-
-实战举例：/sub 将夜 国漫 1500-3000 周四 2026 v=HDR 1 S2
-
-快捷玩法：直接转发目标频道的视频，对它点击【回复】，然后输入上述参数（此时无需手填频道ID，机器自动抓取建档）。
-
-/unsub - 🗑️ 取消订阅 (全网通杀或精准单杀)
-
-完整语法：/unsub [剧名] [可选:v=版本号] [可选:-100开头的频道ID]
-
-实战举例：/unsub 将夜 v=HDR (只取消所有频道的HDR版本)
-
-实战举例：/unsub 将夜 -1001234567 (只踢掉某个发垃圾画质的频道)
-
-/go - 🚀 手动发车 (开辟航线并锁死物理文件夹)
-
-完整语法：/go [剧名关键字] [可选:分类] [可选:年份] [可选:v=版本号] [可选:文件夹季数] [可选:S文件名季数]
-
-实战举例：/go 绝命毒师 欧美剧 2018 v=4K 1 (将后续文件死锁进 Season 1 文件夹)
-
-配合遥控：发车后，发送 #S2E8 (只改变文件的刮削名字为第二季第八集，绝不改变刚才锁死的 Season 1 文件夹)。
-
-/list - 📡 查看雷达大盘排班与状态
-
-语法：直接发送 /list 即可，无参数。
-
-/scan - 🔍 强行触发一次全网补漏扫荡
-
-语法：直接发送 /scan 即可，无参数。
-
-/help - 📖 查看随身说明书与指令语法
-
-语法：直接发送 /help 或 /h 即可。
-
-```
-### 五、机器人指令菜单
-
-1.@BotFather
-
-2.在对话框里发送指令：/mybots
-
-3.屏幕上会弹出你创建过的机器人列表，点击咱们正在用的这个机器人的名字
-
-4.接着点击弹出面板上的 Edit Bot
-
-5.然后点击 Edit Commands
-
-6.把这套菜单直接喂给它
-```
-sub - ➕ 自动订阅 (可直接回复视频抓取频道)
-unsub - 🗑️ 取消订阅 (全网通杀或精准单杀)
-go - 🚀 手动发车 (开辟航线并锁死文件夹)
-mag - 🧲[磁力链接]
-reup - 🚀 [剧名关键字] [分类] [可选:年份] [c139|only139]
-list - 📡 查看雷达大盘排班与状态
-scan - 🔍 强行触发一次全网补漏扫荡
-history - 📋 查看曾经发过车的历史航线记录
-rm - ❌ 删除历史航线！ 把不再需要的死档从history 里永久抹除
-rmh - ❎ 删除下载历史记录
-clean - ⭕️ 清除下载碎片
-cancel - ⭕️ 终止下载 (all/剧名(+e01/s01)/.mp4)
-setdir - ❇️ 设置上传目录
-ping - 💓 查看系统是否活着、存活时间、雷达正在盯防多少部剧
-help - 📖 查看随身说明书与指令语法
-```
-
-#### 六、新填磁力下载
-
-1.cancel+剧名  终止下载与清理文件
-
-2.使用 Python 获取所有 GID
-
-请在你的服务器上创建一个名为 get_aria2_tasks.py 的文件，并将下方代码填入（确保已安装 aria2p 库，若未安装可运行 pip install aria2p）：
-
-```
-import aria2p
-
-# 这里的配置请根据你的实际 Aria2 设置修改
-# 如果是本地运行，通常 host='localhost', port=6800, secret=''
-aria2 = aria2p.API(
-    aria2p.Client(
-        host="http://localhost",
-        port=6800,
-        secret="xxsky1127"  # 如果你有设置 RPC 密钥，请填在这里
-    )
-)
-
-def list_all_tasks():
-    # 获取所有正在下载的任务
-    downloads = aria2.get_downloads()
-    
-    print(f"{'任务名称 (文件名)':<40} | {'GID':<20}")
-    print("-" * 65)
-    
-    for download in downloads:
-        # download.name 是文件名，download.gid 是我们要找的那个 ID
-        print(f"{download.name:<40} | {download.gid:<20}")
-
-if __name__ == "__main__":
-    list_all_tasks()
-```
-启动
-```
-python3 ~/189py/get_aria2_tasks.py
-```
-查看结果： 你会看到类似这样的输出：
-```
-任务名称 (文件名)                          | GID                 
------------------------------------------------------------------
-灿如繁星 1080p...                         | 7d4a...5a91         
-逝爱迷局 S1...                            | ed83...a2           
-暗金 S1...                                | 0bbf...47           
-3.  **获取数据：** 找到“灿如繁星”那一栏，后面那一串长字符就是你缺失的 `GID`。
-```
-更新配置文件
-拿到这个 7d4a...5a91（假设值）之后，你就可以把它手动填回tg_magnet_tasks.json里的JSON 文件了

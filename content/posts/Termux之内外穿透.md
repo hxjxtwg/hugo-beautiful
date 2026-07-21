@@ -107,6 +107,79 @@ pm2 start cloudflared --name "cloudflared" -- tunnel --edge-ip-version 4 --proto
 ```
 pm2 start cloudflared --name "cloudflared" -- tunnel --edge-ip-version 4 --protocol quic --config /data/data/com.termux/files/home/.cloudflared/config.yml run xxsky_tunnel
 ```
+8.解决quic启动dns解析超时错误的问题
+
+8.1在 Termux 中运行以下命令来写入DNS配置
+```
+mkdir -p $PREFIX/etc
+echo "nameserver 1.1.1.1" > $PREFIX/etc/resolv.conf
+echo "nameserver 8.8.8.8" >> $PREFIX/etc/resolv.conf
+```
+或者添加阿里与腾讯的DNS
+```
+echo "nameserver 223.5.5.5" > $PREFIX/etc/resolv.conf
+echo "nameserver 119.29.29.29" >> $PREFIX/etc/resolv.conf
+```
+8.2安装虚拟环境包
+
+termux-chroot 是 Termux 官方提供的一个环境模拟工具。它可以将 Termux 的 $PREFIX/ 目录挂载为虚拟的根目录。加上它之后，cloudflared 就能成功把 $PREFIX/etc/resolv.conf 当作 /etc/resolv.conf 读取了。
+
+运行以下命令安装 proot
+```
+pkg install proot -y
+```
+8.3清理错误的进程
+```
+pm2 delete cloudflared
+```
+
+8.4.创建一个专门的启动脚本
+```
+cat << 'EOF' > tunnel.sh
+#!/bin/bash
+termux-chroot cloudflared tunnel --edge-ip-version 4 --protocol quic --config /data/data/com.termux/files/home/.cloudflared/config.yml run xxsky_tunnel
+EOF
+```
+8.5赋予脚本执行权限
+```
+chmod +x tunnel.sh
+```
+8.6使用 PM2 启动该脚本
+```
+pm2 start ./tunnel.sh --name "cloudflared"
+```
+8.7保存状态
+```
+pm2 save
+```
+8.8附http2启动的config.yaml配置
+```
+tunnel: xxsky_tunnel
+credentials-file: /data/data/com.termux/files/home/.cloudflared/14d1f28d-0655-406a-940e-d92c72d84778.json
+protocol: http2
+
+ingress:
+  - hostname: emby.363689.xyz
+    service: http://192.168.0.199:8097
+    originRequest:
+      httpHostHeader: "192.168.0.199"
+  - hostname: oplist.363689.xyz
+    service: http://192.168.0.199:5244
+  - hostname: play.363689.xyz
+    service: http://192.168.0.199:5000
+  - hostname: xxsky.363689.xyz
+    service: http://192.168.0.199:8097
+    originRequest:
+      httpHostHeader: "192.168.0.199"
+  - hostname: qbt.363689.xyz
+    service: http://192.168.0.199:8080
+  - hostname: cas.363689.xyz
+    service: http://192.168.0.199:5050
+  - hostname: ftp.363689.xyz
+    service: http://192.168.0.199:9999
+  - service: http_status:404
+```
+本地回环断流被真实IP解决
 
 ### 二、FRP
 ### VPS部署服务端 frps

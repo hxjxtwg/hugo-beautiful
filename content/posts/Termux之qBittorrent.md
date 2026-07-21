@@ -280,7 +280,7 @@ python /data/data/com.termux/files/home/189py/qbt_delivery.py "%N" "%F" "%L" "%G
 ```
 * 点击最下方的 “保存”。
 
-2.脚本
+2.脚本之单天翼上传
 ```
 import os
 import re
@@ -591,5 +591,971 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
+3.脚本之双端口双上传
+
+5244、5255、189、139
+
+```
+import os
+import re
+import sys
+import time
+import json
+import asyncio
+from urllib.parse import quote
+import httpx
+
+# =================================================================
+# ⚙️ 核心网关与路径映射配置 (天翼主盘)
+# =================================================================
+OLIST_URL = "http://127.0.0.1:5244"
+OLIST_TOKEN = "openlist-4ba3bee7-2112-42bd-92e7-6f3a7c67a83a7CIOwhmfYpB9Hi8HX1NYfRJUn1iWvyPnyuoOUPC5Fqn5FGxTwNuKHwRSYCT6OZC2"
+STAGING_BASE_DIR = "/storage/emulated/0/Download/189cas"
+
+# =================================================================
+# ⚙️ 独立网关与路径映射配置 (移动备盘 - 双传专属)
+# =================================================================
+MOBILE_OLIST_URL = "http://127.0.0.1:5255"
+MOBILE_OLIST_TOKEN = "openlist-335c8982-5c97-40b4-824e-117636cfc94eBHbD3HZOWdNeMUWOiXFUxJGtWXOh0P1jxqH2jAInjHvF5umwVU4If8ifEnrIkjMl"
+MOBILE_MOUNT_ROOT = "/139/139cas"
+MOBILE_STAGING_BASE_DIR = "/storage/emulated/0/Download/139cas"
+
+# =================================================================
+# 🔔 基础通知与推送网关
+# =================================================================
+STEWARD_BASE_URL = "http://192.168.0.199:5000" 
+TMDB_API_KEY = "9c88e18e43543c8ff195c631aaa0d2fa"
+
+TG_SETTINGS_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tg_settings.json")
+
+PUSHPLUS_TOKEN = "" 
+TG_BOT_TOKEN = "7548615667:AAHn0ls4aBPKBPI2-gpwykwVdEKd0ywOlsc"
+TG_CHAT_ID = "-1002906711199"
+PROXY_URL = "http://127.0.0.1:7890" 
+
+def get_mount_root():
+    if os.path.exists(TG_SETTINGS_DB):
+        try:
+            with open(TG_SETTINGS_DB, "r", encoding="utf-8") as f:
+                return json.load(f).get("mount_root", "/135/189cas")
+        except: pass
+    return "/135/189cas"
+
+async def notify_steward_log(msg, level="INFO"):
+    """安全桥梁：走打更人本地Web中枢上报，规避SQLite数据库锁死"""
+    print(f"[{level}] {msg}")
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            await client.post(f"{STEWARD_BASE_URL}/api/remote_log", json={"level": level, "msg": msg})
+    except Exception: pass
+
+async def send_push_notification(title, content):
+    """独立的微信/TG消息推送通道，只推送核心成功/失败结果"""
+    if PUSHPLUS_TOKEN:
+        try:
+            url = "http://www.pushplus.plus/send"
+            data = {"token": PUSHPLUS_TOKEN, "title": title, "content": content, "template": "html"}
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                await client.post(url, json=data)
+        except: pass
+        
+    if TG_BOT_TOKEN and TG_CHAT_ID:
+        try:
+            tg_content = content.replace("<br>", "\n")
+            url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
+            data = {"chat_id": TG_CHAT_ID, "text": f"{title}\n\n{tg_content}", "parse_mode": "HTML"}
+            async with httpx.AsyncClient(timeout=10.0, proxy=PROXY_URL if PROXY_URL else None) as client:
+                resp = await client.post(url, json=data)
+                if resp.status_code != 200:
+                    await notify_steward_log(f"⚠️ [TG推送失败] 状态码: {resp.status_code}, 详情: {resp.text}", level="WARNING")
+        except Exception as e:
+            await notify_steward_log(f"⚠️ [TG推送异常] 网络或代理出错: {e}", level="WARNING")
+
+async def trigger_strm_sync(drive, folder_path):
+    """🌟 新增：通知打更人 (5000端口) 局部扫描并生成 STRM"""
+    url = f"{STEWARD_BASE_URL}/api/sync"
+    params = {"drive": str(drive), "path": folder_path}
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(url, params=params)
+            if resp.status_code == 200:
+                await notify_steward_log(f"🎬 [STRM触发-{drive}] 已成功通知中枢更新目录: `{folder_path}`")
+            else:
+                await notify_steward_log(f"⚠️ [STRM触发-{drive}] 通知失败，状态码: {resp.status_code}", level="WARNING")
+    except Exception as e:
+        await notify_steward_log(f"⚠️ [STRM触发-{drive}] 请求异常: {e}", level="WARNING")
+
+# =================================================================
+# 🧠 智能属性提取引擎
+# =================================================================
+def get_hdr_sdr_tag(torrent_name):
+    t = torrent_name.upper()
+    if re.search(r'(DV|DOVI|DOLBY VISION|HDR10\+|HDR10|HDR)', t): return "HDR"
+    if re.search(r'(SDR)', t): return "SDR"
+    return ""
+
+def extract_pure_episode(text, drama_anchor=None):
+    if drama_anchor:
+        try: text = re.compile(re.escape(drama_anchor), re.IGNORECASE).sub(' ', text)
+        except: pass
+    m = re.search(r'(?i)E(?:P)?0*(\d+)', text)
+    if m: return int(m.group(1))
+    m = re.search(r'第\s*(\d+)\s*[集话期更]', text)
+    if m: return int(m.group(1))
+    return None
+
+async def fetch_tmdb_year(title):
+    if not TMDB_API_KEY: return time.strftime("%Y")
+    clean_q = re.sub(r'S\d+$|\s+\d+$', '', title).strip()
+    url = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&language=zh-CN&query={quote(clean_q)}&page=1"
+    try:
+        async with httpx.AsyncClient(timeout=5.0, proxy=PROXY_URL if PROXY_URL else None) as client:
+            res = await client.get(url)
+            results = res.json().get("results")
+            if results:
+                item = results[0]
+                year = (item.get("first_air_date") or item.get("release_date") or "")[:4]
+                if year: return year
+    except: pass
+    return time.strftime("%Y")
+
+# =================================================================
+# 🛡️ 猎犬级 CAS 强力镜像下发引擎 (支持双网盘独立拉取)
+# =================================================================
+async def bg_fetch_cas_task(cas_target_full, final_cas_path, sub_path, cas_file_name, olist_url, olist_token, disk_name):
+    await notify_steward_log(f"🔎 [CAS嗅探启动-{disk_name}] 正在捕获云端特征码: `{cas_file_name}`")
+    await asyncio.sleep(15) 
+    get_info_url = f"{olist_url}/api/fs/get"
+    headers_get = {"Authorization": olist_token, "Content-Type": "application/json"}
+    
+    max_attempts = 45 
+    cas_downloaded = False
+    
+    for attempt in range(max_attempts):
+        try:
+            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+                resp = await client.post(get_info_url, json={"path": cas_target_full}, headers=headers_get)
+                resp_data = resp.json()
+                
+                if resp_data.get("code") == 200:
+                    raw_url = resp_data["data"]["raw_url"]
+                    resp_dl = await client.get(raw_url)
+                    
+                    if resp_dl.status_code == 200:
+                        temp_cas_path = final_cas_path + ".tmp"
+                        with open(temp_cas_path, "wb") as f:
+                            f.write(resp_dl.content)
+                        os.rename(temp_cas_path, final_cas_path)
+                        
+                        await notify_steward_log(f"🔗 [CAS镜像成功-{disk_name}] ➔ `{sub_path}/{cas_file_name}` (耗时: {(attempt+1) * 10 + 15}秒)")
+                        cas_downloaded = True
+                        break
+        except: pass
+        await asyncio.sleep(10)
+        
+    if not cas_downloaded:
+        await notify_steward_log(f"🚨🚨 [CAS拉取彻底失败-{disk_name}] 降级放弃！目标: `{cas_file_name}`", level="CRITICAL")
+
+# =================================================================
+# 🚀 核心装卸接力赛
+# =================================================================
+async def main():
+    if len(sys.argv) < 4:
+        print("⚠️ 语法规范: python qbt_delivery.py [种子名] [保存路径] [分类] [可选:标签]")
+        return
+
+    torrent_name = sys.argv[1]
+    save_path = sys.argv[2]
+    category = sys.argv[3]
+    custom_tag = sys.argv[4].strip() if len(sys.argv) > 4 else ""
+
+    # ========================================================
+    # 🚦 双传暗号拦截与逗号深度清洗机制
+    # ========================================================
+    is_double_upload = False
+    if "双传" in custom_tag:
+        is_double_upload = True
+        custom_tag = custom_tag.replace("双传", "")
+        
+    # 彻底清理可能残留的逗号(中/英文)以及多余的连续空格，保证后缀名绝对纯净
+    # 例如："HQ,双传" 会被洗成 "HQ"；"HQ,双传,1080p" 会被洗成 "HQ 1080p"
+    custom_tag = custom_tag.replace(",", " ").replace("，", " ")
+    custom_tag = " ".join(custom_tag.split())
+
+    # 1. 基础剧名洗白
+    cn_bracket = re.search(r'\[([\u4e00-\u9fa5]+.*?)\]|【([\u4e00-\u9fa5]+.*?)】', torrent_name)
+    if cn_bracket:
+        pure_drama_name = cn_bracket.group(1) or cn_bracket.group(2)
+    else:
+        cn_front = re.search(r'([\u4e00-\u9fa5]+)', torrent_name.split('.')[0])
+        if cn_front:
+            pure_drama_name = cn_front.group(1)
+        else:
+            clean_name = re.sub(r'^\[.*?\]|\(.*?\)', '', torrent_name).strip().lstrip('.')
+            pure_drama_name = clean_name.split('.')[0].split(' ')[0].strip()
+
+    pure_drama_name = re.sub(r'第.*?季|S\d+', '', pure_drama_name, flags=re.IGNORECASE).strip()
+    m_season = re.search(r'(?i)S(\d+)', torrent_name)
+    folder_season = int(m_season.group(1)) if m_season else 1
+    
+    year = ""
+    year_match = re.search(r'\b(19\d{2}|20\d{2})\b', torrent_name)
+    if year_match:
+        year = year_match.group(1)
+    else:
+        year = await fetch_tmdb_year(pure_drama_name)
+        
+    current_mount = get_mount_root()
+    is_movie = "电影" in category or category in ["演唱会", "纪录片"]
+
+    # 2. 剧名文件夹标准化决策
+    clean_base = pure_drama_name.replace(" ", ".") if pure_drama_name else "Unknown.Drama"
+    base_folder = f"{clean_base} ({year})" if year else clean_base
+    
+    if custom_tag:
+        folder_name = f"{base_folder} {custom_tag}"
+    else:
+        folder_name = base_folder
+
+    # 3. 扫描捕获视频实体文件
+    video_tasks = []
+    if os.path.isdir(save_path):
+        for root, dirs, files in os.walk(save_path):
+            for f in files:
+                if f.lower().endswith(('.mp4', '.mkv', '.ts', '.flv')):
+                    video_tasks.append((os.path.join(root, f), f))
+        video_tasks.sort(key=lambda x: x[1])
+    else:
+        if save_path.lower().endswith(('.mp4', '.mkv', '.ts', '.flv')):
+            video_tasks.append((save_path, os.path.basename(save_path)))
+
+    if not video_tasks:
+        await notify_steward_log(f"⚠️ [交接终止] 未在路径 `{save_path}` 下发现任何有效视频文件。")
+        return
+
+    # ========================================================
+    # 🏁 阶段一：全力保障天翼主盘 (极速串行，不受其他盘干扰)
+    # ========================================================
+    await notify_steward_log(f"📦 [主盘交接启动] 共 {len(video_tasks)} 个视频，优先全力送入天翼...")
+
+    for actual_video_path, actual_video_name in video_tasks:
+        if not os.path.exists(actual_video_path):
+            continue
+            
+        total_bytes = os.path.getsize(actual_video_path)
+        ep_num = extract_pure_episode(actual_video_name, drama_anchor=pure_drama_name)
+        if ep_num is None:
+            ep_num = extract_pure_episode(torrent_name, drama_anchor=pure_drama_name)
+
+        if is_movie:
+            target_dir = f"{current_mount}/{category}/{folder_name}"
+        else:
+            if ep_num is None:
+                await notify_steward_log(f"⚠️ [单集跳过] 文件 `{actual_video_name}` 无法识别集数。", level="WARNING")
+                continue
+            target_dir = f"{current_mount}/{category}/{folder_name}/Season {folder_season}"
+
+        target_full = f"{target_dir}/{actual_video_name}".replace("//", "/")
+        
+        # [天翼盘] 本地 CAS 检查
+        cas_file_name = f"{actual_video_name}.cas"
+        cas_target_full = f"{target_full}.cas"
+        sub_path = target_dir.replace(current_mount, "", 1)
+        local_cas_dir = f"{STAGING_BASE_DIR}{sub_path}".replace("//", "/")
+        final_cas_path = os.path.join(local_cas_dir, cas_file_name)
+        
+        if os.path.exists(final_cas_path):
+            await notify_steward_log(f"⏭️ [天翼跳过] 侦测到本地已存在镜像 `{cas_file_name}`，执行跳过处理。")
+            continue 
+
+        await notify_steward_log(f"🚚 [主盘流转] 正在原样运送: `{actual_video_name}` ➔ 天翼云端 (5244)")
+        
+        put_url = f"{OLIST_URL}/api/fs/put"
+        headers = {
+            "Authorization": OLIST_TOKEN,
+            "File-Path": quote(target_full),
+            "Content-Length": str(total_bytes),
+            "Content-Type": "application/octet-stream"
+        }
+
+        max_upload_retries = 5
+        upload_success = False
+        
+        for attempt in range(max_upload_retries):
+            try:
+                with open(actual_video_path, "rb") as f_in:
+                    async def file_iter():
+                        while True:
+                            chunk = f_in.read(2 * 1024 * 1024)
+                            if not chunk: break
+                            yield chunk
+
+                    # 🛡️ 核心修改：read=None (无限期耐心等待，防止139等慢速网盘超时卡死报错)
+                    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=None, write=120.0, pool=None)) as client:
+                        resp = await client.put(put_url, content=file_iter(), headers=headers)
+                        
+                if resp.json().get("code") == 200:
+                    upload_success = True
+                    os.makedirs(local_cas_dir, exist_ok=True)
+                    
+                    success_msg = f"<b>{actual_video_name}</b><br>在第 {attempt + 1} 次尝试后成功传至云端！"
+                    asyncio.create_task(send_push_notification("✅ PT入库成功", success_msg))
+                    
+                    # 拉取天翼的CAS
+                    await bg_fetch_cas_task(cas_target_full, final_cas_path, sub_path, cas_file_name, OLIST_URL, OLIST_TOKEN, "天翼")
+                    break 
+                else:
+                    err_json = resp.json().get('message')
+                    await notify_steward_log(f"⚠️ [天翼拒收] `{actual_video_name}` 第 {attempt+1} 次失败: {err_json}", level="WARNING")
+                    
+            except Exception as e:
+                await notify_steward_log(f"⚠️ [网络异常] `{actual_video_name}` 第 {attempt+1} 次崩溃: {e}", level="WARNING")
+                
+            if attempt < max_upload_retries - 1:
+                wait_sec = 300 * (attempt + 1)
+                await notify_steward_log(f"⏳ [防风控保护] 天翼通道后台打盹 {wait_sec // 60} 分钟后重试...")
+                await asyncio.sleep(wait_sec)
+
+        if not upload_success:
+            err_msg = f"<b>{actual_video_name}</b><br>天翼主盘经过 {max_upload_retries} 次重试依旧崩溃！"
+            await notify_steward_log(f"❌ [彻底失败] {err_msg}", level="ERROR")
+            asyncio.create_task(send_push_notification("🚨 PT入库彻底失败", err_msg))
+
+    await notify_steward_log(f"🏁 [天翼主盘完毕] 该种子的所有有效增量视频文件已全部完成天翼入库！")
+
+
+    # ========================================================
+    # 🏁 阶段二：移动备盘独立双传队列 (慢火细熬，绝不拖累主盘)
+    # ========================================================
+    if is_double_upload:
+        await notify_steward_log(f"🚀 [备盘交接启动] 开始将刚才的剧集排队备份至移动云盘 (慢慢传不着急)...")
+        
+        for actual_video_path, actual_video_name in video_tasks:
+            if not os.path.exists(actual_video_path):
+                continue
+                
+            total_bytes = os.path.getsize(actual_video_path)
+            ep_num = extract_pure_episode(actual_video_name, drama_anchor=pure_drama_name)
+            if ep_num is None:
+                ep_num = extract_pure_episode(torrent_name, drama_anchor=pure_drama_name)
+
+            if is_movie:
+                m_target_dir = f"{MOBILE_MOUNT_ROOT}/{category}/{folder_name}"
+            else:
+                if ep_num is None:
+                    continue 
+                m_target_dir = f"{MOBILE_MOUNT_ROOT}/{category}/{folder_name}/Season {folder_season}"
+
+            m_target_full = f"{m_target_dir}/{actual_video_name}".replace("//", "/")
+            
+            # [移动盘] 本地 CAS 检查
+            cas_file_name = f"{actual_video_name}.cas"
+            m_cas_target_full = f"{m_target_full}.cas"
+            m_sub_path = m_target_dir.replace(MOBILE_MOUNT_ROOT, "", 1)
+            m_local_cas_dir = f"{MOBILE_STAGING_BASE_DIR}{m_sub_path}".replace("//", "/")
+            m_final_cas_path = os.path.join(m_local_cas_dir, cas_file_name)
+            
+            if os.path.exists(m_final_cas_path):
+                await notify_steward_log(f"⏭️ [移动跳过] 侦测到本地已存在移动镜像 `{cas_file_name}`，执行跳过处理。")
+                continue
+
+            await notify_steward_log(f"🚚 [备盘流转] 正在原样运送: `{actual_video_name}` ➔ 移动云端 (5255)")
+            
+            m_put_url = f"{MOBILE_OLIST_URL}/api/fs/put"
+            m_headers = {
+                "Authorization": MOBILE_OLIST_TOKEN,
+                "File-Path": quote(m_target_full),
+                "Content-Length": str(total_bytes),
+                "Content-Type": "application/octet-stream"
+            }
+            
+            m_upload_success = False
+            for m_attempt in range(max_upload_retries):
+                try:
+                    with open(actual_video_path, "rb") as f_in_m:
+                        async def file_iter_m():
+                            while True:
+                                chunk_m = f_in_m.read(2 * 1024 * 1024)
+                                if not chunk_m: break
+                                yield chunk_m
+                                
+                        # 🛡️ 核心修改：read=None (移动盘特供，无限期等待响应)
+                        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=None, write=120.0, pool=None)) as m_client:
+                            m_resp = await m_client.put(m_put_url, content=file_iter_m(), headers=m_headers)
+                            
+                    if m_resp.json().get("code") == 200:
+                        m_upload_success = True
+                        os.makedirs(m_local_cas_dir, exist_ok=True)
+                        await notify_steward_log(f"✅ [双传完毕] `{actual_video_name}` 移动云盘接收成功！")
+                        # 拉取移动盘专属的 CAS
+                        await bg_fetch_cas_task(m_cas_target_full, m_final_cas_path, m_sub_path, cas_file_name, MOBILE_OLIST_URL, MOBILE_OLIST_TOKEN, "移动")
+                        
+                        # 🌟 新增：触发移动盘 STRM 局部生成
+                        await trigger_strm_sync("139", m_target_dir)
+                        break
+                    else:
+                        m_err_json = m_resp.json().get('message')
+                        await notify_steward_log(f"⚠️ [移动盘拒收] `{actual_video_name}` 第 {m_attempt+1} 次失败: {m_err_json}", level="WARNING")
+                except Exception as e:
+                    await notify_steward_log(f"⚠️ [移动盘异常] `{actual_video_name}` 第 {m_attempt+1} 次崩溃: {e}", level="WARNING")
+                    
+                if m_attempt < max_upload_retries - 1:
+                    m_wait_sec = 300 * (m_attempt + 1)
+                    await notify_steward_log(f"⏳ [防风控保护-移动] 等待 {m_wait_sec // 60} 分钟后重试...")
+                    await asyncio.sleep(m_wait_sec)
+                    
+            if not m_upload_success:
+                await notify_steward_log(f"❌ [双传失败] `{actual_video_name}` 移动盘最终上传失败。", level="ERROR")
+                
+        await notify_steward_log(f"🏁 [移动备盘完毕] 该种子的所有增量视频也已全部完成移动云盘备份！")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+4.脚本之单端口双上传
+
+```
+import os
+import re
+import sys
+import time
+import json
+import asyncio
+import shutil
+from urllib.parse import quote
+import httpx
+
+# =================================================================
+# ⚙️ 核心网关与路径映射配置 (统一 5244 端口)
+# =================================================================
+OLIST_URL = "http://127.0.0.1:5244"
+OLIST_TOKEN = "openlist-a87614da-32dd-4b80-9150-6447de823da8f33x53ymkrx0aPKG0HUcsFHmjFRYTKFhSADLRhoQLkXa7ogaiByhWRNEXCjpblp9"
+
+# 天翼主盘物理归档特征码存放地
+STAGING_BASE_DIR = "/storage/emulated/0/Download/189cas"
+
+# 移动备盘独立配置 (路径依然保留，上传统一走 5244 端口进行 140 占位调度)
+MOBILE_MOUNT_ROOT = "/139/139cas"
+MOBILE_STAGING_BASE_DIR = "/storage/emulated/0/Download/139cas"
+
+# =================================================================
+# 🔔 基础通知与推送网关
+# =================================================================
+STEWARD_BASE_URL = "http://127.0.0.1:5000" 
+RELAY_BASE_URL = "http://127.0.0.1:5555"  # 🌟 新增：远端 5555 中继器地址 (如果不在这台机器请自行修改 IP)
+TMDB_API_KEY = "9c88e18e43543c8ff195c631aaa0d2fa"
+
+TG_SETTINGS_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tg_settings.json")
+
+PUSHPLUS_TOKEN = "" 
+TG_BOT_TOKEN = "7548615667:AAHn0ls4aBPKBPI2-gpwykwVdEKd0ywOlsc"
+TG_CHAT_ID = "-1002906711199"
+PROXY_URL = "http://127.0.0.1:7890" 
+
+def get_mount_root():
+    if os.path.exists(TG_SETTINGS_DB):
+        try:
+            with open(TG_SETTINGS_DB, "r", encoding="utf-8") as f:
+                return json.load(f).get("mount_root", "/135/189cas")
+        except: pass
+    return "/135/189cas"
+
+async def notify_steward_log(msg, level="INFO"):
+    """安全桥梁：走打更人本地Web中枢上报，规避SQLite数据库锁死"""
+    print(f"[{level}] {msg}")
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            await client.post(f"{STEWARD_BASE_URL}/api/remote_log", json={"level": level, "msg": msg})
+    except Exception: pass
+
+async def send_push_notification(title, content):
+    """独立的微信/TG消息推送通道，只推送核心成功/失败结果"""
+    if PUSHPLUS_TOKEN:
+        try:
+            url = "http://www.pushplus.plus/send"
+            data = {"token": PUSHPLUS_TOKEN, "title": title, "content": content, "template": "html"}
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                await client.post(url, json=data)
+        except: pass
+        
+    if TG_BOT_TOKEN and TG_CHAT_ID:
+        try:
+            tg_content = content.replace("<br>", "\n")
+            url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
+            data = {"chat_id": TG_CHAT_ID, "text": f"{title}\n\n{tg_content}", "parse_mode": "HTML"}
+            async with httpx.AsyncClient(timeout=10.0, proxy=PROXY_URL if PROXY_URL else None) as client:
+                resp = await client.post(url, json=data)
+                if resp.status_code != 200:
+                    await notify_steward_log(f"⚠️ [TG推送失败] 状态码: {resp.status_code}, 详情: {resp.text}", level="WARNING")
+        except Exception as e:
+            await notify_steward_log(f"⚠️ [TG推送异常] 网络或代理出错: {e}", level="WARNING")
+
+async def trigger_strm_sync(drive, folder_path):
+    """通知管家 (5000端口) 局部扫描并生成 STRM"""
+    url = f"{STEWARD_BASE_URL}/api/sync"
+    params = {"drive": str(drive), "path": folder_path}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url, params=params)
+            if resp.status_code == 200:
+                await notify_steward_log(f"🎬 [STRM同步成功-{drive}] 目录: `{folder_path}`")
+            else:
+                await notify_steward_log(f"⚠️ [STRM同步异常-{drive}] HTTP {resp.status_code}", level="WARNING")
+    except Exception as e:
+        await notify_steward_log(f"⚠️ [STRM同步失败-{drive}]: {e}", level="WARNING")
+
+async def trigger_189_local_script(folder_path):
+    """🌟 修正：通知远端 5555 端口中继器去接管 189 盘后续工作"""
+    url = f"{RELAY_BASE_URL}/force_harvest"
+    params = {"path": folder_path}
+    try:
+        # 🛡️ 核心修复：增加 proxy=None 和 trust_env=False，绝对防止请求被翻墙软件劫持
+        async with httpx.AsyncClient(timeout=10.0, proxy=None, trust_env=False) as client:
+            resp = await client.get(url, params=params)
+            if resp.status_code == 200:
+                await notify_steward_log(f"🚀 [189后续触发] 成功通知 5555 中继器接管目录: `{folder_path}`")
+            else:
+                await notify_steward_log(f"⚠️ [189后续触发异常] HTTP {resp.status_code}", level="WARNING")
+    except Exception as e:
+        await notify_steward_log(f"⚠️ [189后续触发失败]: {e}", level="WARNING")
+
+# =================================================================
+# 🧠 智能属性提取引擎
+# =================================================================
+def get_hdr_sdr_tag(torrent_name):
+    t = torrent_name.upper()
+    if re.search(r'(DV|DOVI|DOLBY VISION|HDR10\+|HDR10|HDR)', t): return "HDR"
+    if re.search(r'(SDR)', t): return "SDR"
+    return ""
+
+def extract_pure_episode(text, drama_anchor=None):
+    if drama_anchor:
+        try: text = re.compile(re.escape(drama_anchor), re.IGNORECASE).sub(' ', text)
+        except: pass
+    m = re.search(r'(?i)E(?:P)?0*(\d+)', text)
+    if m: return int(m.group(1))
+    m = re.search(r'第\s*(\d+)\s*[集话期更]', text)
+    if m: return int(m.group(1))
+    return None
+
+async def fetch_tmdb_year(title):
+    if not TMDB_API_KEY: return time.strftime("%Y")
+    clean_q = re.sub(r'S\d+$|\s+\d+$', '', title).strip()
+    url = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&language=zh-CN&query={quote(clean_q)}&page=1"
+    try:
+        async with httpx.AsyncClient(timeout=5.0, proxy=PROXY_URL if PROXY_URL else None) as client:
+            res = await client.get(url)
+            results = res.json().get("results")
+            if results:
+                item = results[0]
+                year = (item.get("first_air_date") or item.get("release_date") or "")[:4]
+                if year: return year
+    except: pass
+    return time.strftime("%Y")
+
+# =================================================================
+# 🛡️ 猎犬级 CAS 强力镜像下发引擎 (仅用于天翼主盘同步拉取)
+# =================================================================
+async def bg_fetch_cas_task(cas_target_full, final_cas_path, sub_path, cas_file_name, olist_url, olist_token, disk_name):
+    await notify_steward_log(f"🔎 [CAS嗅探启动-{disk_name}] 正在捕获云端特征码: `{cas_file_name}`")
+    await asyncio.sleep(15) 
+    get_info_url = f"{olist_url}/api/fs/get"
+    headers_get = {"Authorization": olist_token, "Content-Type": "application/json"}
+    
+    max_attempts = 45 
+    cas_downloaded = False
+    
+    for attempt in range(max_attempts):
+        try:
+            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+                resp = await client.post(get_info_url, json={"path": cas_target_full}, headers=headers_get)
+                resp_data = resp.json()
+                
+                if resp_data.get("code") == 200:
+                    raw_url = resp_data["data"]["raw_url"]
+                    resp_dl = await client.get(raw_url)
+                    
+                    if resp_dl.status_code == 200:
+                        temp_cas_path = final_cas_path + ".tmp"
+                        with open(temp_cas_path, "wb") as f:
+                            f.write(resp_dl.content)
+                        os.rename(temp_cas_path, final_cas_path)
+                        
+                        await notify_steward_log(f"🔗 [CAS镜像成功-{disk_name}] ➔ `{sub_path}/{cas_file_name}` (耗时: {(attempt+1) * 10 + 15}秒)")
+                        cas_downloaded = True
+                        break
+        except: pass
+        await asyncio.sleep(10)
+        
+    if not cas_downloaded:
+        await notify_steward_log(f"🚨🚨 [CAS拉取彻底失败-{disk_name}] 降级放弃！目标: `{cas_file_name}`", level="CRITICAL")
+
+# =================================================================
+# 🚀 核心装卸接力赛
+# =================================================================
+async def main():
+    if len(sys.argv) < 4:
+        print("⚠️ 语法规范: python qbt_delivery.py [种子名] [保存路径] [分类] [可选:标签]")
+        return
+
+    torrent_name = sys.argv[1]
+    save_path = sys.argv[2]
+    category = sys.argv[3]
+    custom_tag = sys.argv[4].strip() if len(sys.argv) > 4 else ""
+
+    # ========================================================
+    # 🚦 双传暗号拦截与逗号深度清洗机制
+    # ========================================================
+    is_double_upload = False
+    if "双传" in custom_tag:
+        is_double_upload = True
+        custom_tag = custom_tag.replace("双传", "")
+        
+    custom_tag = custom_tag.replace(",", " ").replace("，", " ")
+    custom_tag = " ".join(custom_tag.split())
+
+    # ========================================================
+    # 🎯 提取优化：有中文只用中文，没中文才保留英文
+    # ========================================================
+    cleaned_search = re.sub(r'\[剧集\]|【剧集】|\[更新\]|【更新】|\[高清.*?\]|【高清制作.*?】', '', torrent_name)
+    cn_match = re.search(r'([\u4e00-\u9fa5][\u4e00-\u9fa50-9：·！，—、\s]*)', cleaned_search)
+    
+    if cn_match and cn_match.group(1).strip():
+        pure_drama_name = cn_match.group(1).strip()
+    else:
+        clean_name = re.sub(r'^\[.*?\]|【.*?】|\(.*?\)', '', torrent_name).strip().lstrip('.')
+        pure_drama_name = clean_name.split('.')[0].strip()
+        
+    pure_drama_name = re.sub(r'第.*?季|S\d+|Season\s*\d+', '', pure_drama_name, flags=re.IGNORECASE).strip()
+
+    m_season = re.search(r'(?i)S(\d+)', torrent_name)
+    folder_season = int(m_season.group(1)) if m_season else 1
+    
+    year = ""
+    year_match = re.search(r'\b(19\d{2}|20\d{2})\b', torrent_name)
+    if year_match:
+        year = year_match.group(1)
+    else:
+        year = await fetch_tmdb_year(pure_drama_name)
+        
+    current_mount = get_mount_root()
+    is_movie = "电影" in category or category in ["演唱会", "纪录片"]
+
+    # 2. 剧名文件夹标准化决策
+    clean_base = pure_drama_name.replace(" ", ".") if pure_drama_name else "Unknown.Drama"
+    base_folder = f"{clean_base} ({year})" if year else clean_base
+    
+    if custom_tag:
+        folder_name = f"{base_folder} {custom_tag}"
+    else:
+        folder_name = base_folder
+
+    # 3. 扫描捕获视频实体文件
+    video_tasks = []
+    if os.path.isdir(save_path):
+        for root, dirs, files in os.walk(save_path):
+            for f in files:
+                if f.lower().endswith(('.mp4', '.mkv', '.ts', '.flv')):
+                    video_tasks.append((os.path.join(root, f), f))
+        video_tasks.sort(key=lambda x: x[1])
+    else:
+        if save_path.lower().endswith(('.mp4', '.mkv', '.ts', '.flv')):
+            video_tasks.append((save_path, os.path.basename(save_path)))
+
+    if not video_tasks:
+        await notify_steward_log(f"⚠️ [交接终止] 未在路径 `{save_path}` 下发现任何有效视频文件。")
+        return
+
+    # ========================================================
+    # 🏁 阶段一：全力保障天翼主盘 (极速串行，不受其他盘干扰)
+    # ========================================================
+    await notify_steward_log(f"📦 [主盘交接启动] 共 {len(video_tasks)} 个视频，优先全力送入天翼...")
+
+    for actual_video_path, actual_video_name in video_tasks:
+        if not os.path.exists(actual_video_path):
+            continue
+            
+        total_bytes = os.path.getsize(actual_video_path)
+        ep_num = extract_pure_episode(actual_video_name, drama_anchor=pure_drama_name)
+        if ep_num is None:
+            ep_num = extract_pure_episode(torrent_name, drama_anchor=pure_drama_name)
+
+        if is_movie:
+            target_dir = f"{current_mount}/{category}/{folder_name}"
+        else:
+            if ep_num is None:
+                await notify_steward_log(f"⚠️ [单集跳过] 文件 `{actual_video_name}` 无法识别集数。", level="WARNING")
+                continue
+            target_dir = f"{current_mount}/{category}/{folder_name}/Season {folder_season}"
+
+        target_full = f"{target_dir}/{actual_video_name}".replace("//", "/")
+        
+        # [天翼盘] 本地 CAS 检查
+        cas_file_name = f"{actual_video_name}.cas"
+        cas_target_full = f"{target_full}.cas"
+        sub_path = target_dir.replace(current_mount, "", 1)
+        local_cas_dir = f"{STAGING_BASE_DIR}{sub_path}".replace("//", "/")
+        final_cas_path = os.path.join(local_cas_dir, cas_file_name)
+        
+        if os.path.exists(final_cas_path):
+            await notify_steward_log(f"⏭️ [天翼跳过] 侦测到本地已存在镜像 `{cas_file_name}`，执行跳过处理。")
+            # 💡 补丁：即使跳过上传，也要强制去拉响 5555 管家的警报！
+            await trigger_189_local_script(local_cas_dir)
+            continue 
+
+        await notify_steward_log(f"🚚 [主盘流转] 正在原样运送: `{actual_video_name}` ➔ 天翼云端 (5244)")
+        
+        put_url = f"{OLIST_URL}/api/fs/put"
+        headers = {
+            "Authorization": OLIST_TOKEN,
+            "File-Path": quote(target_full),
+            "Content-Length": str(total_bytes),
+            "Content-Type": "application/octet-stream"
+        }
+
+        max_upload_retries = 5
+        upload_success = False
+        
+        for attempt in range(max_upload_retries):
+            try:
+                with open(actual_video_path, "rb") as f_in:
+                    async def file_iter():
+                        while True:
+                            chunk = f_in.read(2 * 1024 * 1024)
+                            if not chunk: break
+                            yield chunk
+
+                    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=None, write=120.0, pool=None)) as client:
+                        resp = await client.put(put_url, content=file_iter(), headers=headers)
+                        
+                if resp.json().get("code") == 200:
+                    upload_success = True
+                    os.makedirs(local_cas_dir, exist_ok=True)
+                    
+                    success_msg = f"<b>{actual_video_name}</b><br>在第 {attempt + 1} 次尝试后成功传至云端！"
+                    asyncio.create_task(send_push_notification("✅ PT入库成功", success_msg))
+                    
+                    await bg_fetch_cas_task(cas_target_full, final_cas_path, sub_path, cas_file_name, OLIST_URL, OLIST_TOKEN, "天翼")
+                    
+                    # 🌟 修正：传完并拿到 CAS 后，把本地真实的 CAS 文件夹路径喂给 5555 脚本
+                    await trigger_189_local_script(local_cas_dir)
+                    
+                    break 
+                else:
+                    err_json = resp.json().get('message')
+                    await notify_steward_log(f"⚠️ [天翼遭拒] `{actual_video_name}` 第 {attempt+1} 次失败: {err_json}", level="WARNING")
+                    
+            except Exception as e:
+                await notify_steward_log(f"⚠️ [网络异常] `{actual_video_name}` 第 {attempt+1} 次崩溃: {e}", level="WARNING")
+                
+            if attempt < max_upload_retries - 1:
+                wait_sec = 300 * (attempt + 1)
+                await notify_steward_log(f"⏳ [防风控保护] 天翼通道后台打盹 {wait_sec // 60} 分钟后重试...")
+                await asyncio.sleep(wait_sec)
+
+        if not upload_success:
+            err_msg = f"<b>{actual_video_name}</b><br>天翼主盘经过 {max_upload_retries} 次重试依旧崩溃！"
+            await notify_steward_log(f"❌ [彻底失败] {err_msg}", level="ERROR")
+            asyncio.create_task(send_push_notification("🚨 PT入库彻底失败", err_msg))
+
+    await notify_steward_log(f"🏁 [天翼主盘完毕] 该种子的所有有效增量视频文件已全部完成天翼入库！")
+
+
+    # ========================================================
+    # 🏁 阶段二：移动备盘独立双传队列 (140占位 + 本地CAS秒算 + 狸猫换太子)
+    # ========================================================
+    if is_double_upload:
+        await notify_steward_log(f"🚀 [备盘战术启动] 拦截到双传信号，启动140极速占位及骤死级分步重试流...")
+        
+        for actual_video_path, actual_video_name in video_tasks:
+            if not os.path.exists(actual_video_path):
+                continue
+                
+            total_bytes = os.path.getsize(actual_video_path)
+            ep_num = extract_pure_episode(actual_video_name, drama_anchor=pure_drama_name)
+            if ep_num is None:
+                ep_num = extract_pure_episode(torrent_name, drama_anchor=pure_drama_name)
+
+            if is_movie:
+                m_target_dir = f"{MOBILE_MOUNT_ROOT}/{category}/{folder_name}"
+            else:
+                if ep_num is None:
+                    continue 
+                m_target_dir = f"{MOBILE_MOUNT_ROOT}/{category}/{folder_name}/Season {folder_season}"
+
+            m_target_full = f"{m_target_dir}/{actual_video_name}".replace("//", "/")
+            
+            # 本地 139cas 特征码真实落盘路径
+            cas_file_name = f"{actual_video_name}.cas"
+            m_cas_target_full = f"{m_target_full}.cas"
+            m_sub_path = m_target_dir.replace(MOBILE_MOUNT_ROOT, "", 1).lstrip("/")
+            m_local_cas_dir = f"{MOBILE_STAGING_BASE_DIR}/{m_sub_path}".replace("//", "/")
+            m_final_cas_path = os.path.join(m_local_cas_dir, cas_file_name)
+            
+            # 查重：若本地已存该集移动指纹，代表双传已圆满，直接跳过
+            if os.path.exists(m_final_cas_path):
+                await notify_steward_log(f"⏭️ [移动跳过] 侦测到本地已存在移动镜像 `{cas_file_name}`，不再重复生成。")
+                # 💡 补丁：即使跳过移动双传，也要强制去拉响 5000 管家的警报！
+                await trigger_strm_sync("139", m_target_dir)
+                continue
+
+            # ========================================================
+            # 🚦 独立五轨级步骤链与就地重试状态机
+            # ========================================================
+            step_139 = 1
+            max_step_retries = 5
+            step_retry_count = 0
+            
+            while step_139 <= 5:
+                try:
+                    # ----------------------------------------------------
+                    # Step 1: 140 极速占位大文件上传 (走5244主端口)
+                    # ----------------------------------------------------
+                    if step_139 == 1:
+                        await notify_steward_log(f"🚚 [139战术-步骤1] 正在原样运送大包 ➔ 140占位目录...")
+                        temp_cloud_dir = "/140/139cas"
+                        temp_cloud_path = f"{temp_cloud_dir}/{actual_video_name}".replace("//", "/")
+                        
+                        put_url = f"{OLIST_URL}/api/fs/put"
+                        m_headers = {
+                            "Authorization": OLIST_TOKEN,
+                            "File-Path": quote(temp_cloud_path),
+                            "Content-Length": str(total_bytes),
+                            "Content-Type": "application/octet-stream"
+                        }
+                        
+                        with open(actual_video_path, "rb") as f_in_m:
+                            async def file_iter_m():
+                                while True:
+                                    chunk_m = f_in_m.read(2 * 1024 * 1024)
+                                    if not chunk_m: break
+                                    yield chunk_m
+                                    
+                            async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=None, write=120.0, pool=None)) as m_client:
+                                m_resp = await m_client.put(put_url, content=file_iter_m(), headers=m_headers)
+                                
+                        if m_resp.json().get("code") == 200:
+                            await notify_steward_log(f"✅ [139战术-步骤1] 140占位大包落盘成功！")
+                            step_139 = 2
+                            step_retry_count = 0  # 步进成功，清空重试计数
+                        else:
+                            m_err_json = m_resp.json().get('message')
+                            raise Exception(f"140占位区因接口问题拒收: {m_err_json}")
+
+                    # ----------------------------------------------------
+                    # Step 2: 唤醒本地子进程，计算秒级指纹 (.cas)
+                    # ----------------------------------------------------
+                    elif step_139 == 2:
+                        await notify_steward_log(f"⚙️ [139战术-步骤2] 呼叫本地 cas_server.py 提取微型指纹...")
+                        
+                        cas_script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cas_server.py")
+                        cmd_cas = [
+                            "python3", cas_script_path,
+                            "--cli", "--file", actual_video_path,
+                            "--cloud", "139", "--category", m_sub_path
+                        ]
+                        
+                        proc_cas = await asyncio.create_subprocess_exec(*cmd_cas, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                        stdout_data, stderr_data = await proc_cas.communicate()
+                        
+                        out_log = stdout_data.decode('utf-8', errors='ignore').strip()
+                        err_log = stderr_data.decode('utf-8', errors='ignore').strip()
+                        
+                        if err_log or "error" in out_log.lower() or "failed" in out_log.lower():
+                            raise Exception(f"本地哈希碰撞服务器报错: {err_log or out_log}")
+                            
+                        await notify_steward_log(f"✅ [139战术-步骤2] 本地特征码全量解析完毕！")
+                        step_139 = 3
+                        step_retry_count = 0
+
+                    # ----------------------------------------------------
+                    # Step 3: 上传微型特征码到 139 真正归档路径 (5244端口)
+                    # ----------------------------------------------------
+                    elif step_139 == 3:
+                        await notify_steward_log(f"📤 [139战术-步骤3] 正在投递微型特征指纹 ➔ 139真实归档区...")
+                        
+                        # 兼容多重可能的输出地址，确保提取到生成的 .cas
+                        local_cas_final_path = m_final_cas_path
+                        if not os.path.exists(local_cas_final_path):
+                            alt_path = actual_video_path + ".cas"
+                            if os.path.exists(alt_path):
+                                local_cas_final_path = alt_path
+                            else:
+                                alt_path_2 = os.path.splitext(actual_video_path)[0] + ".cas"
+                                if os.path.exists(alt_path_2):
+                                    local_cas_final_path = alt_path_2
+                                else:
+                                    raise Exception("本地CAS散列文件不存在，指纹疑似被系统吞掉")
+                                    
+                        cas_bytes = os.path.getsize(local_cas_final_path)
+                        put_url = f"{OLIST_URL}/api/fs/put"
+                        headers_cas = {
+                            "Authorization": OLIST_TOKEN,
+                            "File-Path": quote(m_cas_target_full),
+                            "Content-Length": str(cas_bytes),
+                            "Content-Type": "application/octet-stream"
+                        }
+                        
+                        async with httpx.AsyncClient(timeout=30.0) as h:
+                            with open(local_cas_final_path, "rb") as f_cas:
+                                cas_resp = await h.put(put_url, content=f_cas.read(), headers=headers_cas)
+                                
+                        if cas_resp.status_code == 200 and cas_resp.json().get("code") == 200:
+                            # 补充落盘迁移，确保本地检查文件不丢失
+                            if local_cas_final_path != m_final_cas_path:
+                                os.makedirs(os.path.dirname(m_final_cas_path), exist_ok=True)
+                                shutil.copy(local_cas_final_path, m_final_cas_path)
+                                
+                            await notify_steward_log(f"✅ [139战术-步骤3] 微型特征码落盘，移动端成功秒传挂载！")
+                            step_139 = 4
+                            step_retry_count = 0
+                        else:
+                            raise Exception(f"云端拒绝接收指纹包: {cas_resp.json().get('message')}")
+
+                    # ----------------------------------------------------
+                    # Step 4: 毁灭占位资产（大包无缝斩杀，过河拆桥）
+                    # ----------------------------------------------------
+                    elif step_139 == 4:
+                        await notify_steward_log(f"🗑️ [139战术-步骤4] 狸猫换太子完成！正在斩杀 140 占位大包...")
+                        
+                        remove_url = f"{OLIST_URL}/api/fs/remove"
+                        remove_payload = {"names": [actual_video_name], "dir": "/140/139cas"}
+                        
+                        async with httpx.AsyncClient(timeout=30.0) as h:
+                            rem_resp = await h.post(remove_url, json=remove_payload, headers={"Authorization": OLIST_TOKEN, "Content-Type": "application/json"})
+                            
+                        if rem_resp.status_code == 200 and rem_resp.json().get("code") == 200:
+                            await notify_steward_log(f"✅ [139战术-步骤4] 140 空间白嫖成功，占位数据已全部抹除。")
+                            step_139 = 5
+                            step_retry_count = 0
+                        else:
+                            raise Exception(f"占位删除请求失效: {rem_resp.text}")
+
+                    # ----------------------------------------------------
+                    # Step 5: 吹哨调度打更人管家更新本地 STRM
+                    # ----------------------------------------------------
+                    elif step_139 == 5:
+                        await notify_steward_log(f"🎬 [139战术-步骤5] 正在发起管家局部刷新，请求生成本地strm...")
+                        await trigger_strm_sync("139", m_target_dir)
+                        step_139 = 6  # 突破循环，全线大圆满
+
+                except Exception as step_error:
+                    step_retry_count += 1
+                    await notify_steward_log(f"⚠️ [139战术-故障] 步骤 {step_139} 遭遇突发异常: {step_error}", level="WARNING")
+                    
+                    if step_retry_count >= max_step_retries:
+                        await notify_steward_log(f"❌ [139战术-终止] 步骤 {step_139} 达到重试上限，放弃该视频所有后续流转！", level="ERROR")
+                        break  # 跳出当前视频的 step 循环
+                        
+                    wait_sec = 300 * step_retry_count
+                    await notify_steward_log(f"⏳ [步骤级防御保护] 阻断 139 全盘重跑，在后台打盹 {wait_sec // 60} 分钟后，仅从【步骤 {step_139}】继续就地死磕...")
+                    await asyncio.sleep(wait_sec)
+
+        await notify_steward_log(f"🏁 [移动备盘完毕] 该种子的所有有效备份增量也已通过140无缝入库！")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
 
 
