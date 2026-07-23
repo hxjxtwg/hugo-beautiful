@@ -1504,9 +1504,19 @@ async def manage_system_commands(client, message):
         return
 
     if command == "rm":
-        if len(message.command) < 2: return await message.reply_text("⚠️ 语法：`/rm [航线剧名关键字]`")
+        if len(message.command) < 2: return await message.reply_text("⚠️ 语法：`/rm [航线剧名关键字]` 或 `/rm all`")
         kw = " ".join(message.command[1:]).lower()
         routes = load_tg_routes()
+        
+        # 🔥 新增：全局清空模式
+        if kw == "all":
+            route_count = len(routes)
+            if route_count == 0: return await message.reply_text("📭 航线记录已经是空的了。")
+            routes.clear()
+            save_tg_routes(routes)
+            return await message.reply_text(f"🗑️ **[最高指令生效]** 已彻底清空全部 `{route_count}` 条记忆航线！")
+            
+        # 常规模糊匹配删除模式
         matched_keys = [k for k in routes.keys() if kw in k.lower()]
         if not matched_keys: return await message.reply_text(f"❌ 没找到包含 `{kw}` 的航线")
         for k in matched_keys: del routes[k]
