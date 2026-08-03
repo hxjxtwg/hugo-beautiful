@@ -84,11 +84,19 @@ API_HASH = "44bde7f01d2b6001589c28cea93716af"
 
 COMMAND_CENTER_CHAT = "@xxskyemby_bot"
 
-# --- 189 天翼云配置 (端口 5244) ---
+# --- 189 配置 (端口 5244) ---
 OLIST_URL = "http://127.0.0.1:5244"
 OLIST_TOKEN = "openlist-a87614da-32dd-4b80-9150-6447de823da8f33x53ymkrx0aPKG0HUcsFHmjFRYTKFhSADLRhoQLkXa7ogaiByhWRNEXCjpblp9" 
+OLIST_LOCAL_MOUNT_NAME = "/TDownload" # Openlist中挂载的本地临时目录名称
 
+# --- 139 配置 (端口 5255) ---
+OLIST_139_URL = "http://127.0.0.1:5255"
+OLIST_139_TOKEN = "openlist-f5178f57-0d47-4d4a-8031-81fdd386cdc0FRIGOBWFTT8aGBl37PJAgdbhVXpxnvI4O2bnsTvR3cL09O5h6cRqgeJhDo48kYQt"
+CLOUD_DIR_139 = "/139/139cas"
+
+# 🔥 端口严格分流：5000 负责 139 云端扫描，5555 负责 189 本地刮削
 STEWARD_BASE_URL = "http://127.0.0.1:5000" 
+HARVEST_BASE_URL = "http://127.0.0.1:5555"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TG_ROUTE_DB = os.path.join(BASE_DIR, "tg_manual_routes.json")
@@ -152,7 +160,7 @@ app = Client(
 )
 
 # 🚦 全局大盘与锁
-GLOBAL_ROUTE_CACHE = {"folder_name": "", "category": "", "folder_season": 1, "file_season": 1, "year": "", "version": "", "expire_time": 0, "manual_ep": None, "enable_139": False}
+GLOBAL_ROUTE_CACHE = {"folder_name": "", "category": "", "folder_season": 1, "file_season": 1, "year": "", "version": "", "expire_time": 0, "manual_ep": None, "enable_139": False, "enable_xm": False}
 GLOBAL_ACTIVE_LOCKS = set() 
 GLOBAL_CANCEL_TASKS = set() 
 GLOBAL_TRACKED_GIDS = set()  
@@ -267,7 +275,17 @@ async def fetch_tmdb_details(cn_title):
     clean_q = re.sub(r'S\d+$|\s+\d+$', '', cn_title).strip()
     url = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&language=zh-CN&query={quote(clean_q)}&page=1"
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        proxy_url = "http://127.0.0.1:7890"
+        
+        # 🔥 终极自适应补丁：新老手机环境双轨兼容！
+        try:
+            # 先尝试新版 httpx 的语法
+            client = httpx.AsyncClient(proxy=proxy_url, timeout=8.0)
+        except TypeError:
+            # 如果报参数错误，说明这是那台老手机，无缝回退老版语法
+            client = httpx.AsyncClient(proxies=proxy_url, timeout=8.0)
+            
+        async with client:
             res = await client.get(url)
             results = res.json().get("results")
             if results:
@@ -282,7 +300,11 @@ async def fetch_tmdb_details(cn_title):
                     det_res = await client.get(det_url)
                     total_eps = det_res.json().get("number_of_episodes", 9999)
                 return year, total_eps
-    except Exception: pass
+                
+    except Exception as e:
+        # 兜底日志依然保留，死也要死个明白
+        logger.warning(f"⚠️ TMDB 查询异常 [{cn_title}]: {e}")
+        
     return datetime.now().strftime("%Y"), 9999
 
 def extract_pure_episode(search_text, drama_anchor=None):
@@ -348,13 +370,28 @@ def smart_rename(orig_name, drama_name, ep_num=None, season=None, is_movie=False
                 return f"{clean_drama}.{ep_tag}.{orig_name}".replace("..", ".")
             return f"{clean_drama}.{orig_name}".replace("..", ".")
 
+def alter_file_hash(file_path):
+    """
+    零耗时极速洗码：在文件末尾追加 32~128 字节的随机垃圾数据。
+    完全不影响视频正常播放，但会彻底改变文件的 MD5 和 SHA1 哈希值。
+    """
+    import random
+    try:
+        if os.path.exists(file_path):
+            with open(file_path, "a+b") as f:
+                f.write(os.urandom(random.randint(32, 128)))
+            return True
+    except Exception as e:
+        pass
+    return False
+
 async def wipe_magnet_task(gids_to_wipe):
     if isinstance(gids_to_wipe, str): gids_to_wipe = [gids_to_wipe]
     target_gids = set(gids_to_wipe)
     paths_to_delete = set()
     info_hashes = set()  
     
-    await notify_steward_log(f"🧹 [清理系统启动] 开始清理 Aria2 任务，锁入 GID 链: {list(target_gids)}")
+    await notify_steward_log(f"🧹 [清理启动] 开始清理 Aria2 任务，锁入 GID 链: {list(target_gids)}")
     try:
         async with httpx.AsyncClient(timeout=10.0) as h:
             for gid in list(target_gids):
@@ -416,9 +453,9 @@ async def wipe_magnet_task(gids_to_wipe):
                     except: pass
                     await asyncio.sleep(1.5)
     except: pass
-    await notify_steward_log("🧹 [清理系统完毕] 磁力任务关联的实体文件与面板记录已无痕销毁。")
+    await notify_steward_log("🧹 [清理完毕] 磁力任务关联的实体文件与面板记录已无痕销毁。")
 
-async def bg_fetch_cas_task(cas_target_full, final_cas_path, sub_path, cas_file_name, status_msg=None, olist_url=OLIST_URL, olist_token=OLIST_TOKEN, drive_name="189"):
+async def bg_fetch_cas_task(cas_target_full, final_cas_path, sub_path, cas_file_name, status_msg=None, olist_url=OLIST_URL, olist_token=OLIST_TOKEN, drive_name="189", sync_url=None):
     try:
         await asyncio.sleep(10)
         get_info_url = f"{olist_url}/api/fs/get"
@@ -440,18 +477,20 @@ async def bg_fetch_cas_task(cas_target_full, final_cas_path, sub_path, cas_file_
                             with open(temp_cas_path, "wb") as f_cas:
                                 f_cas.write(resp_dl.content)
                             os.rename(temp_cas_path, final_cas_path)
-                            await notify_steward_log(f"🔗 [{drive_name} CAS下发成功] `{sub_path}/{cas_file_name}`")
+                            await notify_steward_log(f"🔗 [直链下发] `{sub_path}/{cas_file_name}`")
                             
                             if status_msg:
-                                try: await status_msg.edit_text(f"🔗 **[{drive_name} CAS就绪]**\n📥 `{cas_file_name}`\n✅ 镜像完毕，等待接管！")
+                                try: await status_msg.edit_text(f"🔗 **[{drive_name} CAS Ready]**\n📥 `{cas_file_name}`\n✅ 镜像完毕，等待接管！")
                                 except: pass
                             else:
-                                try: await app.send_message(COMMAND_CENTER_CHAT, f"🔗 **[{drive_name} CAS就绪]**\n📥 `{cas_file_name}`\n✅ 镜像完毕，等待接管！")
+                                try: await app.send_message(COMMAND_CENTER_CHAT, f"🔗 **[{drive_name} CAS Ready]**\n📥 `{cas_file_name}`\n✅ 镜像完毕，等待接管！")
                                 except: pass
-                            # 🔥 新增：成功拿到 CAS 后，通知 5555 脚本去干活
-                            # 这里我把 final_cas_path (也就是下载好的本地 .cas 文件完整路径) 传给了 path 参数,如果 5555 需要的不是本地 .cas 路径，而是云端目录，你只需把代码里的 quote(final_cas_path) 改成 quote(cas_target_full) 即可
-                            trigger_url = f"http://127.0.0.1:5555/force_harvest?path={quote(final_cas_path)}"
-                            asyncio.create_task(trigger_strm_sync(trigger_url, cas_file_name, "189联动"))
+                            
+                            if sync_url:
+                                asyncio.create_task(trigger_strm_sync(sync_url, cas_file_name, drive_name))
+                            else:
+                                trigger_url = f"{HARVEST_BASE_URL}/force_harvest?path={quote(final_cas_path)}"
+                                asyncio.create_task(trigger_strm_sync(trigger_url, cas_file_name, drive_name))
 
                             cas_downloaded = True
                             break
@@ -460,34 +499,45 @@ async def bg_fetch_cas_task(cas_target_full, final_cas_path, sub_path, cas_file_
 
         if not cas_downloaded:
             if status_msg:
-                try: await status_msg.edit_text(f"⚠️ **[{drive_name} CAS拉取失败]**\n❌ `{cas_file_name}`\n云端未生成或直链被拦截。")
+                try: await status_msg.edit_text(f"⚠️ **[{drive_name} CAS Fail]**\n❌ `{cas_file_name}`\n云端未生成或直链被拦截。")
                 except: pass
             else:
-                try: await app.send_message(COMMAND_CENTER_CHAT, f"⚠️ **[{drive_name} CAS拉取失败]**\n❌ `{cas_file_name}`\n云端未生成或直链被拦截。")
+                try: await app.send_message(COMMAND_CENTER_CHAT, f"⚠️ **[{drive_name} CAS Fail]**\n❌ `{cas_file_name}`\n云端未生成或直链被拦截。")
                 except: pass
     except Exception as e:
-        await notify_steward_log(f"⚠️ [后台CAS派发失败]: {e}", level="WARNING")
+        await notify_steward_log(f"⚠️ [{drive_name} 派发失败]: {e}", level="WARNING")
 
-# 🔥 核心更新：精简 5000 端口生成 STRM 和入库日志
 async def trigger_strm_sync(url, file_name, drive_name):
     try:
-        await asyncio.sleep(5)  # 稍微等待 5 秒，确保 OpenList 云端缓存已刷新
+        await asyncio.sleep(5)  
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(url)
             if resp.status_code == 200:
-                await notify_steward_log(f"🎬 [{drive_name} STRM同步触发] `{file_name}`")
+                await notify_steward_log(f"🎬 [触发同步] `{file_name}`")
             else:
-                await notify_steward_log(f"⚠️ [{drive_name} STRM同步异常] HTTP {resp.status_code}", level="WARNING")
+                await notify_steward_log(f"⚠️ [同步异常] HTTP {resp.status_code}", level="WARNING")
     except Exception as e:
-        await notify_steward_log(f"⚠️ [{drive_name} STRM同步失败]: {e}", level="WARNING")
+        await notify_steward_log(f"⚠️ [同步失败]: {e}", level="WARNING")
 
 # =================================================================
 # 🚀 【磁力专属】后台双轨接力直推
 # =================================================================
-async def magnet_upload_task(local_path, target_dir_189, cat, folder_name, folder_season, total_bytes, clean_base, file_season, ep_num, is_movie, standard_name, version_suffix="", status_msg=None, original_gid=None, enable_139=False, skip_189=False):
+async def magnet_upload_task(local_path, target_dir_189, cat, folder_name, folder_season, total_bytes, clean_base, file_season, ep_num, is_movie, standard_name, version_suffix="", status_msg=None, original_gid=None, enable_139=False, skip_189=False, enable_xm=False):
+    ep_str_safe = f"{ep_num:02d}" if ep_num is not None else "00"
+    magnet_task_key = f"{clean_base}.S{file_season:02d}E{ep_str_safe}{version_suffix}" if not is_movie else f"{clean_base}{version_suffix}"
     msg_189 = status_msg
     try:
-        # ----- 阶段 1：天翼 189 高速直推 -----
+        # 🔥 极速洗码介入点 (必须在任何上传动作开始前)
+        if enable_xm:
+            if alter_file_hash(local_path):
+                total_bytes = os.path.getsize(local_path) # 🔥 极度关键：更新文件大小，防止 HTTP Content-Length 报错
+                await asyncio.sleep(1.5)  # 🌟 给 TG 接口喘息时间
+                if msg_189:
+                    try: await msg_189.edit_text(f"✨ **[Hash Wash]** `{standard_name}`\n哈希特征已重置，防御黑名单！")
+                    except: pass
+                await asyncio.sleep(1.0)
+                
+        # ----- 阶段 1：189 高速直推 -----
         target_full_189 = f"{target_dir_189}/{standard_name}".replace("//", "/")
         await asyncio.sleep(2)  
         
@@ -498,7 +548,6 @@ async def magnet_upload_task(local_path, target_dir_189, cat, folder_name, folde
                     put_url = f"{OLIST_URL}/api/fs/put"
                     headers = {"Authorization": OLIST_TOKEN, "File-Path": quote(target_full_189), "Content-Length": str(total_bytes), "Content-Type": "application/octet-stream"}
                     
-                    # 🔥 统一使用 GLOBAL_UPLOAD_LOCK 确保与 TG 下载任务严格排队
                     async with GLOBAL_UPLOAD_LOCK:
                         start_time = time.time()
                         last_ui_time = start_time
@@ -525,7 +574,7 @@ async def magnet_upload_task(local_path, target_dir_189, cat, folder_name, folde
                                         eta_txt = f"{int(eta_sec // 60)}分{int(eta_sec % 60)}秒" if eta_sec > 60 else f"{int(eta_sec)}秒"
                                         
                                         if msg_189:
-                                            try: await msg_189.edit_text(f"🚀 **[磁力推天翼]** `{standard_name}`\n📈 速度: **{speed_mb:.2f} MB/s**\n⏳ 进度: **{pct}%** | 剩余: **{eta_txt}**")
+                                            try: await msg_189.edit_text(f"🚀 **[189 Upload]** `{standard_name}`\n📈 速度: **{speed_mb:.2f} MB/s**\n⏳ 进度: **{pct}%** | 剩余: **{eta_txt}**")
                                             except: pass
                                     yield chunk
                                     
@@ -559,55 +608,66 @@ async def magnet_upload_task(local_path, target_dir_189, cat, folder_name, folde
                     delay = 120 if retry_count == 1 else (300 if retry_count == 2 else (600 if retry_count == 3 else (900 if retry_count == 4 else 1800)))
                     
                     if msg_189 and retry_count < 5:
-                        try: await msg_189.edit_text(f"⚠️ **[189上传异常]** `{standard_name}`\n❌ 报错: `{str(e)[:50]}`\n⏳ 等待重试 ({retry_count}/5)...")
+                        try: await msg_189.edit_text(f"⚠️ **[189 Error]** `{standard_name}`\n❌ 报错: `{str(e)[:50]}`\n⏳ 等待重试 ({retry_count}/5)...")
                         except: pass
                     elif retry_count == 5 and msg_189:
-                        try: await msg_189.edit_text(f"⚠️ **[189转后台重试]** `{standard_name}`\n已失败5次，转入后台静默重试。")
+                        try: await msg_189.edit_text(f"⚠️ **[189 Retry]** `{standard_name}`\n已失败5次，转入后台静默重试。")
                         except: pass
                         
-                    await notify_steward_log(f"⚠️ [189重试] {standard_name}: {str(e)[:100]}, 等待 {delay}s", level="WARNING")
+                    await notify_steward_log(f"⚠️ [上传重试] {standard_name}: {str(e)[:100]}, 等待 {delay}s", level="WARNING")
                     await asyncio.sleep(delay)
                     
         else:
             if msg_189:
-                try: await msg_189.edit_text(f"⏭️ **[跳过天翼 189]** `{standard_name}`\n已指定仅推 139，直接切入移动云盘队列...")
+                try: await msg_189.edit_text(f"⏭️ **[Skip 189]** `{standard_name}`\n已指定仅推 139，直接切入队列...")
                 except: pass
 
-        # ----- 阶段 2：移动 139 限速接力 (140 占位 + CAS 战术) -----
+        # ----- 阶段 2：139 直推接力 (云端排队) -----
         if enable_139 and os.path.exists(local_path):
             rel_category_path = f"{cat}/{folder_name}" if is_movie else f"{cat}/{folder_name}/Season {folder_season}"
+            final_cloud_dir_139 = f"{CLOUD_DIR_139}/{rel_category_path}" 
+            target_full_139 = f"{final_cloud_dir_139}/{standard_name}".replace("//", "/")
             
             msg_chat_id = msg_189.chat.id if msg_189 else COMMAND_CENTER_CHAT
             msg_139 = None
             if msg_189:
-                try: msg_139 = await app.send_message(msg_chat_id, f"🚀 **[移动139战术等待中]** `{standard_name}`\n🚦 正在排队，等待前面任务执行完毕...")
+                try: msg_139 = await app.send_message(msg_chat_id, f"🚀 **[139 Queue]** `{standard_name}`\n🚦 正在排队，等待前面任务执行完毕...")
                 except: pass
                 
-            retry_count = 0
-            step_139 = 1  
-            
-            while os.path.exists(local_path):
-                try:
-                    temp_cloud_dir = "/140/139cas"
-                    temp_cloud_path = f"{temp_cloud_dir}/{standard_name}".replace("//", "/")
-                    put_url = f"{OLIST_URL}/api/fs/put" 
-                    final_cloud_dir = f"/139/139cas/{rel_category_path}" 
-                    
-                    async with GLOBAL_139_UPLOAD_LOCK:
-                        if step_139 == 1:
-                            asyncio.create_task(notify_steward_log(f"🟢 [139战术] 开始140占位及CAS计算: {standard_name}"))
+            async with GLOBAL_139_UPLOAD_LOCK:
+                retry_count = 0
+                while os.path.exists(local_path):
+                    try:
+                        put_url = f"{OLIST_139_URL}/api/fs/put"
+                        headers = {
+                            "Authorization": OLIST_139_TOKEN, 
+                            "File-Path": quote(target_full_139), 
+                            "Content-Length": str(total_bytes), 
+                            "Content-Type": "application/octet-stream",
+                            "As-Task": "true" 
+                        }
                         
-                        # 1. 140 占位
-                        if step_139 <= 1:
-                            headers = {"Authorization": OLIST_TOKEN, "File-Path": quote(temp_cloud_path), "Content-Length": str(total_bytes), "Content-Type": "application/octet-stream"}
-                            start_time = time.time()
-                            last_ui_time = start_time
-                            
+                        start_time = time.time()
+                        last_ui_time = start_time
+                        last_ui_bytes = 0
+                        
+                        already_queued = False
+                        try:
+                            async with httpx.AsyncClient(timeout=10.0) as h:
+                                u_resp = await h.get(f"{OLIST_139_URL}/api/admin/task/upload/undone", headers={"Authorization": OLIST_139_TOKEN})
+                                if u_resp.status_code == 200 and u_resp.json().get("code") == 200:
+                                    for t in u_resp.json().get("data", []):
+                                        if standard_name in t.get("name", ""):
+                                            already_queued = True
+                                            break
+                        except: pass
+
+                        if not already_queued:
                             with open(local_path, "rb") as f_upload:
                                 async def file_iter_139():
-                                    nonlocal last_ui_time
+                                    nonlocal last_ui_time, last_ui_bytes
                                     sent = 0
-                                    chunk_size = 1024 * 1024 
+                                    chunk_size = 1024 * 1024
                                     while True:
                                         chunk = f_upload.read(chunk_size)
                                         if not chunk: break
@@ -615,125 +675,138 @@ async def magnet_upload_task(local_path, target_dir_189, cat, folder_name, folde
                                         pct = int(sent * 100 / total_bytes)
                                         
                                         now = time.time()
-                                        if now - last_ui_time > 8.0 or sent == total_bytes:
-                                            last_ui_time = now
-                                            duration = now - start_time
-                                            speed_bps = sent / duration if duration > 0 else 0
+                                        duration = now - last_ui_time
+                                        if duration >= 8.0 or sent == total_bytes:
+                                            bytes_diff = sent - last_ui_bytes
+                                            speed_bps = bytes_diff / duration if duration > 0 else 0
                                             speed_mb = speed_bps / (1024 * 1024)
-                                            rem_bytes = total_bytes - sent
-                                            eta_sec = rem_bytes / speed_bps if speed_bps > 0 else 0
-                                            eta_txt = f"{int(eta_sec // 60)}分{int(eta_sec % 60)}秒" if eta_sec > 60 else f"{int(eta_sec)}秒"
-                                            
+                                            last_ui_time = now
+                                            last_ui_bytes = sent
                                             if msg_139:
-                                                try: await msg_139.edit_text(f"🚀 **[移动140占位]** `{standard_name}`\n📈 速度: **{speed_mb:.2f} MB/s**\n⏳ 进度: **{pct}%** | 剩余: **{eta_txt}**")
+                                                try: await msg_139.edit_text(f"🚀 **[139 Local Cache]** `{standard_name}`\n📥 缓冲中... 速度: **{speed_mb:.2f} MB/s**\n⏳ 进度: **{pct}%**")
                                                 except: pass
                                         yield chunk
-                                        
-                                async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=None, write=None, pool=None), trust_env=False) as h: 
+                                
+                                async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=None, write=None, pool=None), trust_env=False) as h:
                                     resp = await h.put(put_url, content=file_iter_139(), headers=headers)
-                                
-                                if resp.status_code != 200 or resp.json().get("code") != 200:
-                                    raise Exception(f"140占位上传失败: HTTP {resp.status_code}")
-
-                            step_139 = 2  
-
-                        # 2. 本地计算 CAS
-                        if step_139 <= 2:
+                            
+                            if resp.status_code != 200:
+                                raise Exception(f"HTTP状态码异常: {resp.status_code}")
+                            resp_data = resp.json()
+                            if resp_data.get("code") != 200:
+                                raise Exception(f"API报错: {resp_data.get('message', '未知错误')}")
+                        else:
                             if msg_139:
-                                try: await msg_139.edit_text(f"🚀 **[移动139战术]** `{standard_name}`\n✅ 140 占位成功！\n⏳ 正在提取微型 CAS 指纹...")
+                                try: await msg_139.edit_text(f"🔄 **[139 Reconnect]** `{standard_name}`\n云端已有该任务，跳过缓冲，直接无缝接管监控...")
                                 except: pass
-                                
-                            cas_script_path = os.path.join(BASE_DIR, "cas_server.py")
-                            cmd_cas = [
-                                "python3", cas_script_path, 
-                                "--cli", "--file", local_path, "--cloud", "139", "--category", rel_category_path
-                            ]
-                            proc_cas = await asyncio.create_subprocess_exec(*cmd_cas, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-                            stdout_data, stderr_data = await proc_cas.communicate()
-                            
-                            out_log = stdout_data.decode('utf-8', errors='ignore').strip()
-                            err_log = stderr_data.decode('utf-8', errors='ignore').strip()
-                            if err_log or "error" in out_log.lower() or "failed" in out_log.lower():
-                                await notify_steward_log(f"⚠️ [CAS提取异常] {err_log or out_log}", level="WARNING")
-                            step_139 = 3  
 
-                        # 3. 将 CAS 上传到 139
-                        if step_139 <= 3:
-                            local_cas_path_1 = f"/storage/emulated/0/Download/139cas/{rel_category_path}/{standard_name}.cas".replace("//", "/")
-                            local_cas_path_2 = f"{local_path}.cas"
-                            local_cas_path_3 = os.path.splitext(local_path)[0] + ".cas"
-                            local_cas_path_4 = os.path.join(BASE_DIR, "cas_output", f"{standard_name}.cas") 
-                            
-                            actual_cas_path = None
-                            for cp in [local_cas_path_1, local_cas_path_2, local_cas_path_3, local_cas_path_4]:
-                                if os.path.exists(cp):
-                                    actual_cas_path = cp
-                                    break
-                                    
-                            if not actual_cas_path:
-                                raise Exception("CAS提取失败，找不到 .cas 文件！")
-
-                            local_cas_path_final = actual_cas_path
-
-                            if msg_139:
-                                try: await msg_139.edit_text(f"🚀 **[移动139战术]** `{standard_name}`\n📤 CAS 提取成功！正在写入 139 目录...")
-                                except: pass
-                                
-                            final_cloud_path = f"{final_cloud_dir}/{standard_name}.cas".replace("//", "/")
-                            cas_bytes = os.path.getsize(local_cas_path_final)
-                            headers_cas = {"Authorization": OLIST_TOKEN, "File-Path": quote(final_cloud_path), "Content-Length": str(cas_bytes), "Content-Type": "application/octet-stream"}
-                            
-                            async with httpx.AsyncClient(timeout=30.0) as h:
-                                with open(local_cas_path_final, "rb") as f_cas:
-                                    cas_resp = await h.put(put_url, content=f_cas.read(), headers=headers_cas)
-                                    if cas_resp.status_code != 200 or cas_resp.json().get("code") != 200:
-                                        raise Exception("CAS文件上传到139失败")
-
-                            step_139 = 4  
-
-                        # 4. 删除 140 占位大文件
-                        if step_139 <= 4:
-                            if msg_139:
-                                try: await msg_139.edit_text(f"🚀 **[移动139战术]** `{standard_name}`\n🗑️ 狸猫换太子！抹除 140 占位大文件，释放云盘空间...")
-                                except: pass
-                                
-                            remove_url = f"{OLIST_URL}/api/fs/remove"
-                            remove_payload = {"names": [standard_name], "dir": temp_cloud_dir}
-                            async with httpx.AsyncClient(timeout=30.0) as h:
-                                try: 
-                                    rem_resp = await h.post(remove_url, json=remove_payload, headers={"Authorization": OLIST_TOKEN, "Content-Type": "application/json"})
-                                    if rem_resp.status_code == 200 and rem_resp.json().get("code") == 200:
-                                        await notify_steward_log(f"✅ [139战术] 140占位文件删除成功: {standard_name}")
-                                    else:
-                                        await notify_steward_log(f"⚠️ [139战术] 抹除占位失败, 状态码:{rem_resp.status_code}, 返回:{rem_resp.text}", level="WARNING")
-                                except Exception as rem_err: 
-                                    await notify_steward_log(f"⚠️ [139战术] 抹除占位异常: {rem_err}", level="WARNING")
-                            step_139 = 5  
-
-                        # 5. 触发 5000 管家入库
-                        if step_139 <= 5:
-                            sync_url = f"{STEWARD_BASE_URL}/api/sync?drive=139&path={quote(final_cloud_dir)}"
-                            asyncio.create_task(trigger_strm_sync(sync_url, f"{standard_name}.cas", "139"))
-                            
-                            if msg_139:
-                                try: await msg_139.edit_text(f"🎉 **[139 战术大圆满]** `{standard_name}`\n✅ 空间已白嫖，CAS入库指令已发射！")
-                                except: pass
-                            
-                            break # 跳出 139 重试循环
+                        upload_undone_url = f"{OLIST_139_URL}/api/admin/task/upload/undone"
+                        clear_done_url = f"{OLIST_139_URL}/api/admin/task/upload/clear_done"
+                        poll_fs_url = f"{OLIST_139_URL}/api/fs/get"
+                        poll_fs_path = f"{target_full_139}.cas"
+                        state_map = {0: "排队中", 1: "运行中", 2: "已完成", 3: "取消中", 4: "已取消", 5: "失败"}
                         
-                except Exception as e:
-                    retry_count += 1
-                    delay = 120 if retry_count == 1 else (300 if retry_count == 2 else (600 if retry_count == 3 else (900 if retry_count == 4 else 1800)))
-                    if msg_139 and retry_count < 5:
-                        try: await msg_139.edit_text(f"⚠️ **[139战术异常]** `{standard_name}`\n❌ 报错: `{str(e)[:50]}`\n⏳ 等待重试 ({retry_count}/5)...")
+                        cloud_start_time = time.time()
+                        last_cloud_ui_time = cloud_start_time
+                        last_cloud_bytes = 0
+                        
+                        while True:
+                            await asyncio.sleep(5.0)
+                            task_in_undone = False
+                            task_progress = 0.0
+                            raw_state = 1
+                            
+                            try:
+                                async with httpx.AsyncClient(timeout=10.0) as h:
+                                    undone_resp = await h.get(upload_undone_url, headers={"Authorization": OLIST_139_TOKEN})
+                                    if undone_resp.status_code == 200 and undone_resp.json().get("code") == 200:
+                                        tasks = undone_resp.json().get("data", [])
+                                        for t in tasks:
+                                            if standard_name in t.get("name", ""):
+                                                task_in_undone = True
+                                                task_progress = t.get("progress", 0)
+                                                raw_state = t.get("state", 1)
+                                                break
+                            except: pass
+                                
+                            if task_in_undone:
+                                now = time.time()
+                                duration = now - last_cloud_ui_time
+                                if duration >= 8.0:
+                                    task_state = state_map.get(raw_state, f"未知({raw_state})")
+                                    current_bytes = total_bytes * (task_progress / 100.0)
+                                    bytes_diff = current_bytes - last_cloud_bytes
+                                    speed_bps = bytes_diff / duration if duration > 0 else 0
+                                    speed_mb = speed_bps / (1024 * 1024)
+                                    rem_bytes = total_bytes - current_bytes
+                                    eta_sec = rem_bytes / speed_bps if speed_bps > 0 else 0
+                                    eta_txt = f"{int(eta_sec // 60)}分{int(eta_sec % 60)}秒" if eta_sec > 60 else f"{int(eta_sec)}秒"
+                                    
+                                    last_cloud_ui_time = now
+                                    last_cloud_bytes = current_bytes
+                                    
+                                    if msg_139:
+                                        try: await msg_139.edit_text(f"☁️ **[139 Cloud Task]** `{standard_name}`\n🚥 状态: **{task_state}**\n📈 云端网速: **{speed_mb:.2f} MB/s**\n⏳ 进度: **{task_progress:.1f}%** | 剩余: **{eta_txt}**")
+                                        except: pass
+                                        
+                                if time.time() - cloud_start_time > 14400: 
+                                    raise Exception("139云端上传任务执行超时！")
+                                continue
+                                
+                            try:
+                                async with httpx.AsyncClient(timeout=10.0) as h:
+                                    fs_resp = await h.post(poll_fs_url, json={"path": poll_fs_path}, headers={"Authorization": OLIST_139_TOKEN, "Content-Type": "application/json"})
+                                    fs_data = fs_resp.json()
+                                    if fs_data.get("code") == 200:
+                                        pass 
+                                    else:
+                                        raise Exception("上传任务已消失，且139云端无CAS文件，上传彻底失败")
+                            except Exception as e:
+                                if "彻底失败" in str(e): raise e
+                                raise Exception(f"校验139云端CAS文件异常: {e}")
+                            break 
+                            
+                        try:
+                            async with httpx.AsyncClient(timeout=5.0) as h:
+                                await h.post(clear_done_url, headers={"Authorization": OLIST_139_TOKEN})
                         except: pass
-                    elif retry_count == 5 and msg_139:
-                        try: await msg_139.edit_text(f"⚠️ **[139转后台重试]** `{standard_name}`\n已失败5次，转入后台静默重试。")
+
+                        try:
+                            STAGING_BASE_DIR_139 = "/storage/emulated/0/Download/139cas"
+                            sub_path_139 = f"/{rel_category_path}"
+                            local_cas_dir_139 = f"{STAGING_BASE_DIR_139}{sub_path_139}"
+                            os.makedirs(local_cas_dir_139, exist_ok=True)
+                            final_cas_path_139 = os.path.join(local_cas_dir_139, f"{standard_name}.cas")
+                            
+                            sync_url_139 = f"{STEWARD_BASE_URL}/api/sync?drive=139&path={quote(final_cloud_dir_139)}"
+                            
+                            asyncio.create_task(bg_fetch_cas_task(
+                                cas_target_full=poll_fs_path, 
+                                final_cas_path=final_cas_path_139, 
+                                sub_path=sub_path_139, 
+                                cas_file_name=f"{standard_name}.cas", 
+                                status_msg=msg_139, 
+                                olist_url=OLIST_139_URL, 
+                                olist_token=OLIST_139_TOKEN, 
+                                drive_name="139",
+                                sync_url=sync_url_139
+                            ))
                         except: pass
-                    await notify_steward_log(f"⚠️ [139战术重试] {standard_name}: {str(e)[:100]}, 等待 {delay}s", level="WARNING")
-                    await asyncio.sleep(delay)
+                        break 
+                        
+                    except Exception as e:
+                        retry_count += 1
+                        delay = 120 if retry_count == 1 else (300 if retry_count == 2 else (600 if retry_count == 3 else (900 if retry_count == 4 else 1800)))
+                        if msg_139 and retry_count < 5:
+                            try: await msg_139.edit_text(f"⚠️ **[139 Error]** `{standard_name}`\n❌ 报错: `{str(e)[:50]}`\n⏳ 等待重试 ({retry_count}/5)...")
+                            except: pass
+                        elif retry_count == 5 and msg_139:
+                            try: await msg_139.edit_text(f"⚠️ **[139 Retry]** `{standard_name}`\n已失败5次，转入后台静默重试。")
+                            except: pass
+                        await notify_steward_log(f"⚠️ [139上传重试] {standard_name}: {str(e)[:100]}, 等待 {delay}s", level="WARNING")
+                        await asyncio.sleep(delay)
             
-        success_msg = f"🎉 **[双端圆满落盘]** ➔ `{standard_name}`\n✅ 该文件已成功推送，释放本地空间！"
+        success_msg = f"🎉 **[All Finish]** ➔ `{standard_name}`\n✅ 该文件已成功推送，释放本地空间！"
         if msg_189:
             try: await msg_189.edit_text(success_msg)
             except: pass
@@ -747,16 +820,18 @@ async def magnet_upload_task(local_path, target_dir_189, cat, folder_name, folde
         if os.path.exists(local_path):
             try: os.remove(local_path)
             except: pass
+        GLOBAL_ACTIVE_LOCKS.discard(magnet_task_key)
 
 # =================================================================
 # 🚀 【TG专属】后台双轨接力直推
 # =================================================================
-async def bg_upload_retry_task(local_path, target_dir_189, cat, folder_name, folder_season, total_bytes, clean_base, file_season, ep_num, is_movie, standard_name, history_tags="", status_msg=None, enable_139=False):
-    task_lock_key = f"{clean_base}.S{file_season:02d}E{ep_num:02d}{history_tags}" if not is_movie else f"{clean_base}{history_tags}"
+async def bg_upload_retry_task(local_path, target_dir_189, cat, folder_name, folder_season, total_bytes, clean_base, file_season, ep_num, is_movie, standard_name, history_tags="", status_msg=None, enable_139=False, enable_xm=False):
+    ep_str_safe = f"{ep_num:02d}" if ep_num is not None else "00"
+    task_lock_key = f"{clean_base}.S{file_season:02d}E{ep_str_safe}{history_tags}" if not is_movie else f"{clean_base}{history_tags}"
     try:
         await asyncio.sleep(10)  
         
-        # ----- 阶段 1：天翼 189 高速直推 -----
+        # ----- 阶段 1：189 高速直推 -----
         target_full_189 = f"{target_dir_189}/{standard_name}".replace("//", "/")
         msg_189 = status_msg
         retry_count = 0
@@ -792,84 +867,95 @@ async def bg_upload_retry_task(local_path, target_dir_189, cat, folder_name, fol
                                     eta_txt = f"{int(eta_sec // 60)}分{int(eta_sec % 60)}秒" if eta_sec > 60 else f"{int(eta_sec)}秒"
                                     
                                     if msg_189:
-                                        try: await msg_189.edit_text(f"🚀 **[天翼189云推]** `{standard_name}`\n📈 速度: **{speed_mb:.2f} MB/s**\n⏳ 进度: **{pct}%** | 剩余: **{eta_txt}**")
+                                        try: await msg_189.edit_text(f"🚀 **[189 Upload]** `{standard_name}`\n📈 速度: **{speed_mb:.2f} MB/s**\n⏳ 进度: **{pct}%** | 剩余: **{eta_txt}**")
                                         except: pass
                                 yield chunk
                                 
                         async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=None, write=None, pool=None), trust_env=False) as h: 
                             resp = await h.put(put_url, content=file_iter(), headers=headers)
-                        
-                    if resp.status_code != 200:
-                        raise Exception(f"HTTP状态码异常: {resp.status_code}")
-                        
-                    resp_data = resp.json()
-                    if resp_data.get("code") == 200:
-                        ver_tag = f".{history_tags}" if history_tags else ""
-                        if not is_movie and ep_num is not None:
-                            record_history(clean_base, file_season, ep_num, history_tags)
-                            await notify_steward_log(f"📝 [后台重推-补录] {clean_base}.S{file_season:02d}E{ep_num:02d}{ver_tag}")
-                        
-                        try:
-                            current_mount = get_mount_root()
-                            STAGING_BASE_DIR = "/storage/emulated/0/Download/189cas"
-                            sub_path = target_dir_189.replace(current_mount, "", 1)
-                            local_cas_dir = f"{STAGING_BASE_DIR}{sub_path}"
-                            os.makedirs(local_cas_dir, exist_ok=True)
-                            final_cas_path = os.path.join(local_cas_dir, f"{standard_name}.cas")
-                            asyncio.create_task(bg_fetch_cas_task(f"{target_full_189}.cas", final_cas_path, sub_path, f"{standard_name}.cas", status_msg=msg_189, olist_url=OLIST_URL, olist_token=OLIST_TOKEN, drive_name="189"))
-                        except Exception: pass
-                        break # 跳出 189 重试循环
-                    else:
-                        raise Exception(f"API报错: {resp_data.get('message', '未知错误')}")
+                
+                if resp.status_code != 200:
+                    raise Exception(f"HTTP状态码异常: {resp.status_code}")
+                    
+                resp_data = resp.json()
+                if resp_data.get("code") == 200:
+                    ver_tag = f".{history_tags}" if history_tags else ""
+                    if not is_movie and ep_num is not None:
+                        record_history(clean_base, file_season, ep_num, history_tags)
+                        await notify_steward_log(f"📝 [后台补推] {clean_base}.S{file_season:02d}E{ep_num:02d}{ver_tag}")
+                    
+                    try:
+                        current_mount = get_mount_root()
+                        STAGING_BASE_DIR = "/storage/emulated/0/Download/189cas"
+                        sub_path = target_dir_189.replace(current_mount, "", 1)
+                        local_cas_dir = f"{STAGING_BASE_DIR}{sub_path}"
+                        os.makedirs(local_cas_dir, exist_ok=True)
+                        final_cas_path = os.path.join(local_cas_dir, f"{standard_name}.cas")
+                        asyncio.create_task(bg_fetch_cas_task(f"{target_full_189}.cas", final_cas_path, sub_path, f"{standard_name}.cas", status_msg=msg_189, olist_url=OLIST_URL, olist_token=OLIST_TOKEN, drive_name="189"))
+                    except Exception: pass
+                    break # 跳出 189 重试循环
+                else:
+                    raise Exception(f"API报错: {resp_data.get('message', '未知错误')}")
             except Exception as e:
                 retry_count += 1
                 delay = 120 if retry_count == 1 else (300 if retry_count == 2 else (600 if retry_count == 3 else (900 if retry_count == 4 else 1800)))
                 
                 if msg_189 and retry_count < 5:
-                    try: await msg_189.edit_text(f"⚠️ **[189上传异常]** `{standard_name}`\n❌ 报错: `{str(e)[:50]}`\n⏳ 等待重试 ({retry_count}/5)...")
+                    try: await msg_189.edit_text(f"⚠️ **[189 Error]** `{standard_name}`\n❌ 报错: `{str(e)[:50]}`\n⏳ 等待重试 ({retry_count}/5)...")
                     except: pass
                 elif retry_count == 5 and msg_189:
-                    try: await msg_189.edit_text(f"⚠️ **[189转后台重试]** `{standard_name}`\n已失败5次，转入后台静默重试。")
+                    try: await msg_189.edit_text(f"⚠️ **[189 Retry]** `{standard_name}`\n已失败5次，转入后台静默重试。")
                     except: pass
                     
-                await notify_steward_log(f"⚠️ [189重试] {standard_name}: {str(e)[:100]}, 等待 {delay}s", level="WARNING")
+                await notify_steward_log(f"⚠️ [上传重试] {standard_name}: {str(e)[:100]}, 等待 {delay}s", level="WARNING")
                 await asyncio.sleep(delay)
 
-        # ----- 阶段 2：移动 139 限速接力 (140 占位 + CAS 战术) -----
+        # ----- 阶段 2：139 直推接力 (云端排队) -----
         if enable_139 and os.path.exists(local_path):
             rel_category_path = f"{cat}/{folder_name}" if is_movie else f"{cat}/{folder_name}/Season {folder_season}"
+            final_cloud_dir_139 = f"{CLOUD_DIR_139}/{rel_category_path}" 
+            target_full_139 = f"{final_cloud_dir_139}/{standard_name}".replace("//", "/")
             
             msg_chat_id = msg_189.chat.id if msg_189 else COMMAND_CENTER_CHAT
             msg_139 = None
             if msg_189:
-                try: msg_139 = await app.send_message(msg_chat_id, f"🚀 **[移动139战术等待中]** `{standard_name}`\n🚦 正在排队，等待前面任务执行完毕...")
+                try: msg_139 = await app.send_message(msg_chat_id, f"🚀 **[139 Queue]** `{standard_name}`\n🚦 正在排队，等待前面任务执行完毕...")
                 except: pass
                 
-            retry_count = 0
-            step_139 = 1  
-            
-            while os.path.exists(local_path):
-                try:
-                    temp_cloud_dir = "/140/139cas"
-                    temp_cloud_path = f"{temp_cloud_dir}/{standard_name}".replace("//", "/")
-                    put_url = f"{OLIST_URL}/api/fs/put" 
-                    final_cloud_dir = f"/139/139cas/{rel_category_path}" 
-                    
-                    async with GLOBAL_139_UPLOAD_LOCK:
-                        if step_139 == 1:
-                            asyncio.create_task(notify_steward_log(f"🟢 [139战术] 开始140占位及CAS计算: {standard_name}"))
+            async with GLOBAL_139_UPLOAD_LOCK:
+                retry_count = 0
+                while os.path.exists(local_path):
+                    try:
+                        put_url = f"{OLIST_139_URL}/api/fs/put"
+                        headers = {
+                            "Authorization": OLIST_139_TOKEN, 
+                            "File-Path": quote(target_full_139), 
+                            "Content-Length": str(total_bytes), 
+                            "Content-Type": "application/octet-stream",
+                            "As-Task": "true" 
+                        }
                         
-                        # 1. 140 占位
-                        if step_139 <= 1:
-                            headers = {"Authorization": OLIST_TOKEN, "File-Path": quote(temp_cloud_path), "Content-Length": str(total_bytes), "Content-Type": "application/octet-stream"}
-                            start_time = time.time()
-                            last_ui_time = start_time
-                            
+                        start_time = time.time()
+                        last_ui_time = start_time
+                        last_ui_bytes = 0
+                        
+                        already_queued = False
+                        try:
+                            async with httpx.AsyncClient(timeout=10.0) as h:
+                                u_resp = await h.get(f"{OLIST_139_URL}/api/admin/task/upload/undone", headers={"Authorization": OLIST_139_TOKEN})
+                                if u_resp.status_code == 200 and u_resp.json().get("code") == 200:
+                                    for t in u_resp.json().get("data", []):
+                                        if standard_name in t.get("name", ""):
+                                            already_queued = True
+                                            break
+                        except: pass
+
+                        if not already_queued:
                             with open(local_path, "rb") as f_upload:
                                 async def file_iter_139():
-                                    nonlocal last_ui_time
+                                    nonlocal last_ui_time, last_ui_bytes
                                     sent = 0
-                                    chunk_size = 1024 * 1024 
+                                    chunk_size = 1024 * 1024
                                     while True:
                                         chunk = f_upload.read(chunk_size)
                                         if not chunk: break
@@ -877,125 +963,138 @@ async def bg_upload_retry_task(local_path, target_dir_189, cat, folder_name, fol
                                         pct = int(sent * 100 / total_bytes)
                                         
                                         now = time.time()
-                                        if now - last_ui_time > 8.0 or sent == total_bytes:
-                                            last_ui_time = now
-                                            duration = now - start_time
-                                            speed_bps = sent / duration if duration > 0 else 0
+                                        duration = now - last_ui_time
+                                        if duration >= 8.0 or sent == total_bytes:
+                                            bytes_diff = sent - last_ui_bytes
+                                            speed_bps = bytes_diff / duration if duration > 0 else 0
                                             speed_mb = speed_bps / (1024 * 1024)
-                                            rem_bytes = total_bytes - sent
-                                            eta_sec = rem_bytes / speed_bps if speed_bps > 0 else 0
-                                            eta_txt = f"{int(eta_sec // 60)}分{int(eta_sec % 60)}秒" if eta_sec > 60 else f"{int(eta_sec)}秒"
-                                            
+                                            last_ui_time = now
+                                            last_ui_bytes = sent
                                             if msg_139:
-                                                try: await msg_139.edit_text(f"🚀 **[移动140占位]** `{standard_name}`\n📈 速度: **{speed_mb:.2f} MB/s**\n⏳ 进度: **{pct}%** | 剩余: **{eta_txt}**")
+                                                try: await msg_139.edit_text(f"🚀 **[139 Local Cache]** `{standard_name}`\n📥 缓冲中... 速度: **{speed_mb:.2f} MB/s**\n⏳ 进度: **{pct}%**")
                                                 except: pass
                                         yield chunk
-                                        
-                                async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=None, write=None, pool=None), trust_env=False) as h: 
+                                
+                                async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=None, write=None, pool=None), trust_env=False) as h:
                                     resp = await h.put(put_url, content=file_iter_139(), headers=headers)
-                                
-                                if resp.status_code != 200 or resp.json().get("code") != 200:
-                                    raise Exception(f"140占位上传失败: HTTP {resp.status_code}")
-
-                            step_139 = 2  
-
-                        # 2. 本地计算 CAS
-                        if step_139 <= 2:
+                            
+                            if resp.status_code != 200:
+                                raise Exception(f"HTTP状态码异常: {resp.status_code}")
+                            resp_data = resp.json()
+                            if resp_data.get("code") != 200:
+                                raise Exception(f"API报错: {resp_data.get('message', '未知错误')}")
+                        else:
                             if msg_139:
-                                try: await msg_139.edit_text(f"🚀 **[移动139战术]** `{standard_name}`\n✅ 140 占位成功！\n⏳ 正在提取微型 CAS 指纹...")
+                                try: await msg_139.edit_text(f"🔄 **[139 Reconnect]** `{standard_name}`\n云端已有该任务，跳过缓冲，直接无缝接管监控...")
                                 except: pass
-                                
-                            cas_script_path = os.path.join(BASE_DIR, "cas_server.py")
-                            cmd_cas = [
-                                "python3", cas_script_path, 
-                                "--cli", "--file", local_path, "--cloud", "139", "--category", rel_category_path
-                            ]
-                            proc_cas = await asyncio.create_subprocess_exec(*cmd_cas, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-                            stdout_data, stderr_data = await proc_cas.communicate()
-                            
-                            out_log = stdout_data.decode('utf-8', errors='ignore').strip()
-                            err_log = stderr_data.decode('utf-8', errors='ignore').strip()
-                            if err_log or "error" in out_log.lower() or "failed" in out_log.lower():
-                                await notify_steward_log(f"⚠️ [CAS提取异常] {err_log or out_log}", level="WARNING")
-                            step_139 = 3  
 
-                        # 3. 将 CAS 上传到 139
-                        if step_139 <= 3:
-                            local_cas_path_1 = f"/storage/emulated/0/Download/139cas/{rel_category_path}/{standard_name}.cas".replace("//", "/")
-                            local_cas_path_2 = f"{local_path}.cas"
-                            local_cas_path_3 = os.path.splitext(local_path)[0] + ".cas"
-                            local_cas_path_4 = os.path.join(BASE_DIR, "cas_output", f"{standard_name}.cas") 
-                            
-                            actual_cas_path = None
-                            for cp in [local_cas_path_1, local_cas_path_2, local_cas_path_3, local_cas_path_4]:
-                                if os.path.exists(cp):
-                                    actual_cas_path = cp
-                                    break
-                                    
-                            if not actual_cas_path:
-                                raise Exception("CAS提取失败，找不到 .cas 文件！")
-
-                            local_cas_path_final = actual_cas_path
-
-                            if msg_139:
-                                try: await msg_139.edit_text(f"🚀 **[移动139战术]** `{standard_name}`\n📤 CAS 提取成功！正在写入 139 目录...")
-                                except: pass
-                                
-                            final_cloud_path = f"{final_cloud_dir}/{standard_name}.cas".replace("//", "/")
-                            cas_bytes = os.path.getsize(local_cas_path_final)
-                            headers_cas = {"Authorization": OLIST_TOKEN, "File-Path": quote(final_cloud_path), "Content-Length": str(cas_bytes), "Content-Type": "application/octet-stream"}
-                            
-                            async with httpx.AsyncClient(timeout=30.0) as h:
-                                with open(local_cas_path_final, "rb") as f_cas:
-                                    cas_resp = await h.put(put_url, content=f_cas.read(), headers=headers_cas)
-                                    if cas_resp.status_code != 200 or cas_resp.json().get("code") != 200:
-                                        raise Exception("CAS文件上传到139失败")
-
-                            step_139 = 4  
-
-                        # 4. 删除 140 占位大文件
-                        if step_139 <= 4:
-                            if msg_139:
-                                try: await msg_139.edit_text(f"🚀 **[移动139战术]** `{standard_name}`\n🗑️ 狸猫换太子！抹除 140 占位大文件，释放云盘空间...")
-                                except: pass
-                                
-                            remove_url = f"{OLIST_URL}/api/fs/remove"
-                            remove_payload = {"names": [standard_name], "dir": temp_cloud_dir}
-                            async with httpx.AsyncClient(timeout=30.0) as h:
-                                try: 
-                                    rem_resp = await h.post(remove_url, json=remove_payload, headers={"Authorization": OLIST_TOKEN, "Content-Type": "application/json"})
-                                    if rem_resp.status_code == 200 and rem_resp.json().get("code") == 200:
-                                        await notify_steward_log(f"✅ [139战术] 140占位文件删除成功: {standard_name}")
-                                    else:
-                                        await notify_steward_log(f"⚠️ [139战术] 抹除占位失败, 状态码:{rem_resp.status_code}, 返回:{rem_resp.text}", level="WARNING")
-                                except Exception as rem_err: 
-                                    await notify_steward_log(f"⚠️ [139战术] 抹除占位异常: {rem_err}", level="WARNING")
-                            step_139 = 5  
-
-                        # 5. 触发 5000 管家入库
-                        if step_139 <= 5:
-                            sync_url = f"{STEWARD_BASE_URL}/api/sync?drive=139&path={quote(final_cloud_dir)}"
-                            asyncio.create_task(trigger_strm_sync(sync_url, f"{standard_name}.cas", "139"))
-                            
-                            if msg_139:
-                                try: await msg_139.edit_text(f"🎉 **[139 战术大圆满]** `{standard_name}`\n✅ 空间已白嫖，CAS入库指令已发射！")
-                                except: pass
-                            
-                            break # 跳出 139 重试循环
+                        upload_undone_url = f"{OLIST_139_URL}/api/admin/task/upload/undone"
+                        clear_done_url = f"{OLIST_139_URL}/api/admin/task/upload/clear_done"
+                        poll_fs_url = f"{OLIST_139_URL}/api/fs/get"
+                        poll_fs_path = f"{target_full_139}.cas"
+                        state_map = {0: "排队中", 1: "运行中", 2: "已完成", 3: "取消中", 4: "已取消", 5: "失败"}
                         
-                except Exception as e:
-                    retry_count += 1
-                    delay = 120 if retry_count == 1 else (300 if retry_count == 2 else (600 if retry_count == 3 else (900 if retry_count == 4 else 1800)))
-                    if msg_139 and retry_count < 5:
-                        try: await msg_139.edit_text(f"⚠️ **[139战术异常]** `{standard_name}`\n❌ 报错: `{str(e)[:50]}`\n⏳ 等待重试 ({retry_count}/5)...")
+                        cloud_start_time = time.time()
+                        last_cloud_ui_time = cloud_start_time
+                        last_cloud_bytes = 0
+                        
+                        while True:
+                            await asyncio.sleep(5.0)
+                            task_in_undone = False
+                            task_progress = 0.0
+                            raw_state = 1
+                            
+                            try:
+                                async with httpx.AsyncClient(timeout=10.0) as h:
+                                    undone_resp = await h.get(upload_undone_url, headers={"Authorization": OLIST_139_TOKEN})
+                                    if undone_resp.status_code == 200 and undone_resp.json().get("code") == 200:
+                                        tasks = undone_resp.json().get("data", [])
+                                        for t in tasks:
+                                            if standard_name in t.get("name", ""):
+                                                task_in_undone = True
+                                                task_progress = t.get("progress", 0)
+                                                raw_state = t.get("state", 1)
+                                                break
+                            except: pass
+                                
+                            if task_in_undone:
+                                now = time.time()
+                                duration = now - last_cloud_ui_time
+                                if duration >= 8.0:
+                                    task_state = state_map.get(raw_state, f"未知({raw_state})")
+                                    current_bytes = total_bytes * (task_progress / 100.0)
+                                    bytes_diff = current_bytes - last_cloud_bytes
+                                    speed_bps = bytes_diff / duration if duration > 0 else 0
+                                    speed_mb = speed_bps / (1024 * 1024)
+                                    rem_bytes = total_bytes - current_bytes
+                                    eta_sec = rem_bytes / speed_bps if speed_bps > 0 else 0
+                                    eta_txt = f"{int(eta_sec // 60)}分{int(eta_sec % 60)}秒" if eta_sec > 60 else f"{int(eta_sec)}秒"
+                                    
+                                    last_cloud_ui_time = now
+                                    last_cloud_bytes = current_bytes
+                                    
+                                    if msg_139:
+                                        try: await msg_139.edit_text(f"☁️ **[139 Cloud Task]** `{standard_name}`\n🚥 状态: **{task_state}**\n📈 云端网速: **{speed_mb:.2f} MB/s**\n⏳ 进度: **{task_progress:.1f}%** | 剩余: **{eta_txt}**")
+                                        except: pass
+                                        
+                                if time.time() - cloud_start_time > 14400: 
+                                    raise Exception("139云端上传任务执行超时！")
+                                continue
+                                
+                            try:
+                                async with httpx.AsyncClient(timeout=10.0) as h:
+                                    fs_resp = await h.post(poll_fs_url, json={"path": poll_fs_path}, headers={"Authorization": OLIST_139_TOKEN, "Content-Type": "application/json"})
+                                    fs_data = fs_resp.json()
+                                    if fs_data.get("code") == 200:
+                                        pass 
+                                    else:
+                                        raise Exception("上传任务已消失，且139云端无CAS文件，上传彻底失败")
+                            except Exception as e:
+                                if "彻底失败" in str(e): raise e
+                                raise Exception(f"校验139云端CAS文件异常: {e}")
+                            break 
+                            
+                        try:
+                            async with httpx.AsyncClient(timeout=5.0) as h:
+                                await h.post(clear_done_url, headers={"Authorization": OLIST_139_TOKEN})
                         except: pass
-                    elif retry_count == 5 and msg_139:
-                        try: await msg_139.edit_text(f"⚠️ **[139转后台重试]** `{standard_name}`\n已失败5次，转入后台静默重试。")
+
+                        try:
+                            STAGING_BASE_DIR_139 = "/storage/emulated/0/Download/139cas"
+                            sub_path_139 = f"/{rel_category_path}"
+                            local_cas_dir_139 = f"{STAGING_BASE_DIR_139}{sub_path_139}"
+                            os.makedirs(local_cas_dir_139, exist_ok=True)
+                            final_cas_path_139 = os.path.join(local_cas_dir_139, f"{standard_name}.cas")
+                            
+                            sync_url_139 = f"{STEWARD_BASE_URL}/api/sync?drive=139&path={quote(final_cloud_dir_139)}"
+                            
+                            asyncio.create_task(bg_fetch_cas_task(
+                                cas_target_full=poll_fs_path, 
+                                final_cas_path=final_cas_path_139, 
+                                sub_path=sub_path_139, 
+                                cas_file_name=f"{standard_name}.cas", 
+                                status_msg=msg_139, 
+                                olist_url=OLIST_139_URL, 
+                                olist_token=OLIST_139_TOKEN, 
+                                drive_name="139",
+                                sync_url=sync_url_139
+                            ))
                         except: pass
-                    await notify_steward_log(f"⚠️ [139战术重试] {standard_name}: {str(e)[:100]}, 等待 {delay}s", level="WARNING")
-                    await asyncio.sleep(delay)
+                        break 
+                        
+                    except Exception as e:
+                        retry_count += 1
+                        delay = 120 if retry_count == 1 else (300 if retry_count == 2 else (600 if retry_count == 3 else (900 if retry_count == 4 else 1800)))
+                        if msg_139 and retry_count < 5:
+                            try: await msg_139.edit_text(f"⚠️ **[139 Error]** `{standard_name}`\n❌ 报错: `{str(e)[:50]}`\n⏳ 等待重试 ({retry_count}/5)...")
+                            except: pass
+                        elif retry_count == 5 and msg_139:
+                            try: await msg_139.edit_text(f"⚠️ **[139 Retry]** `{standard_name}`\n已失败5次，转入后台静默重试。")
+                            except: pass
+                        await notify_steward_log(f"⚠️ [139上传重试] {standard_name}: {str(e)[:100]}, 等待 {delay}s", level="WARNING")
+                        await asyncio.sleep(delay)
             
-        success_msg = f"🎉 **[双端圆满落盘]** ➔ `{standard_name}`\n✅ 该文件已成功推送，释放本地空间！"
+        success_msg = f"🎉 **[All Finish]** ➔ `{standard_name}`\n✅ 该文件已成功推送，释放本地空间！"
         if msg_189:
             try: await msg_189.edit_text(success_msg)
             except: pass
@@ -1022,15 +1121,19 @@ async def handle_magnet_execution(client, message, magnet_link, config_text, res
             except: pass
         return
 
-    # 🔥 拦截 c139 和 proxy
+    # 🔥 拦截 c139, proxy 和 xm
     enable_139 = False
     use_proxy = False
+    enable_xm = False  # 🔥 新增
     for i in range(len(args)-1, -1, -1):
         if args[i].lower() == "c139":
             enable_139 = True
             args.pop(i)
         elif args[i].lower() == "proxy":
             use_proxy = True
+            args.pop(i)
+        elif args[i].lower() == "xm":  # 🔥 提取 xm 标识
+            enable_xm = True
             args.pop(i)
 
     STANDARD_CATS = ["华语剧", "欧美剧", "日韩剧", "短剧", "华语电影", "欧美电影", "日韩电影", "演唱会", "国漫", "日漫", "综艺", "纪录片"]
@@ -1081,7 +1184,7 @@ async def handle_magnet_execution(client, message, magnet_link, config_text, res
 
     try:
         if not resume_gid:
-            # 🔥 新增 Aria2 代理注入逻辑 (此处 7890 替换为你的本地 HTTP 代理端口)
+            # 🔥 新增 Aria2 代理注入逻辑
             aria2_options = {"dir": ARIA2_DOWNLOAD_DIR}
             if use_proxy:
                 aria2_options["all-proxy"] = "http://127.0.0.1:7890"
@@ -1092,10 +1195,9 @@ async def handle_magnet_execution(client, message, magnet_link, config_text, res
             }
 
             try:
-                if message: status_msg = await message.reply_text(f"🚀 **[Aria2 涡轮点火]**\n{'🔗 **已开启 Tracker 代理加速**' if use_proxy else ''}\n正在将磁力喂给后端 P2P 引擎...")
-                else: status_msg = await client.send_message(COMMAND_CENTER_CHAT, f"🚀 **[Aria2 涡轮点火]**\n{'🔗 **已开启 Tracker 代理加速**' if use_proxy else ''}\n正在将磁力喂给后端 P2P 引擎...")
+                if message: status_msg = await message.reply_text(f"🚀 **[Aria2 Start]**\n{'🔗 **已开启 Tracker 代理加速**' if use_proxy else ''}\n正在将磁力喂给后端 P2P 引擎...")
+                else: status_msg = await client.send_message(COMMAND_CENTER_CHAT, f"🚀 **[Aria2 Start]**\n{'🔗 **已开启 Tracker 代理加速**' if use_proxy else ''}\n正在将磁力喂给后端 P2P 引擎...")
                 
-                # 🔥 补回丢失的核心代码，不再报缩进错误！
                 async with httpx.AsyncClient(timeout=10.0) as h_client:
                     resp = await h_client.post(ARIA2_RPC_URL, json=payload)
                     res_json = resp.json()
@@ -1131,8 +1233,8 @@ async def handle_magnet_execution(client, message, magnet_link, config_text, res
             GLOBAL_TRACKED_GIDS.add(gid)
             add_magnet_task(original_gid, magnet_link, config_text)
             
-            if message: status_msg = await message.reply_text(f"🔄 **[任务恢复]** 重新接管磁力任务 `{drama_name}`...")
-            else: status_msg = await client.send_message(COMMAND_CENTER_CHAT, f"🔄 **[任务恢复]** 重新接管磁力任务 `{drama_name}`...")
+            if message: status_msg = await message.reply_text(f"🔄 **[Task Resume]** 重新接管磁力任务 `{drama_name}`...")
+            else: status_msg = await client.send_message(COMMAND_CENTER_CHAT, f"🔄 **[Task Resume]** 重新接管磁力任务 `{drama_name}`...")
 
         last_ui_time = 0
         meta_wait_time = 0
@@ -1147,7 +1249,7 @@ async def handle_magnet_execution(client, message, magnet_link, config_text, res
             if GLOBAL_STOP_SWEEP or "ALL" in GLOBAL_CANCEL_TASKS or magnet_task_key in GLOBAL_CANCEL_TASKS:
                 await wipe_magnet_task(tracked_gids)
                 if original_gid: remove_magnet_task(original_gid)
-                try: await status_msg.edit_text(f"🛑 **[任务拉闸]** 磁力任务 `{drama_name}` 已被强行单独销毁！")
+                try: await status_msg.edit_text(f"🛑 **[Task Cancel]** 磁力任务 `{drama_name}` 已被强行单独销毁！")
                 except: pass
                 return 
                 
@@ -1173,7 +1275,7 @@ async def handle_magnet_execution(client, message, magnet_link, config_text, res
                     notified_50 = False
                     notified_100 = False
                     
-                    try: await status_msg.edit_text(f"🧲 **[解析成功]** 获取到种子文件，开始正式拉取实体视频...")
+                    try: await status_msg.edit_text(f"🧲 **[Parse OK]** 获取到种子文件，开始正式拉取实体视频...")
                     except: pass
                     continue
 
@@ -1208,7 +1310,7 @@ async def handle_magnet_execution(client, message, magnet_link, config_text, res
                                         gid = t.get("gid")
                                         tracked_gids.add(gid)
                                         GLOBAL_TRACKED_GIDS.add(gid)
-                                        try: await status_msg.edit_text(f"🧲 **[解析成功]** 跨队列捕获实体任务，无缝切入...")
+                                        try: await status_msg.edit_text(f"🧲 **[Parse OK]** 跨队列捕获实体任务，无缝切入...")
                                         except: pass
                                         break
                         except: pass
@@ -1221,9 +1323,9 @@ async def handle_magnet_execution(client, message, magnet_link, config_text, res
                         return
                     
                     now = time.time()
-                    if now - last_ui_time > 6.0:
+                    if now - last_ui_time > 8.0:
                         last_ui_time = now
-                        try: await status_msg.edit_text(f"🧲 **[磁力涡轮]** `{drama_name}`\n⏳ 正在获取元数据(种子)中...")
+                        try: await status_msg.edit_text(f"🧲 **[Aria2 DL]** `{drama_name}`\n⏳ 正在获取元数据(种子)中...")
                         except: pass
                     continue 
 
@@ -1236,14 +1338,14 @@ async def handle_magnet_execution(client, message, magnet_link, config_text, res
                 total = int(st_data.get("totalLength", 0))
 
                 if status == "active" and total > 0 and completed >= total:
-                    asyncio.create_task(notify_steward_log(f"✅ [磁力涡轮] 进度达100%，主动结束状态监听，向清理流程移交控制权..."))
+                    asyncio.create_task(notify_steward_log(f"✅ [磁力下载] 进度达100%，主动结束状态监听，向清理流程移交控制权..."))
                     break
 
                 if status in ["complete", "removed"]: 
                     break
 
                 now = time.time()
-                if now - last_ui_time > 6.0:
+                if now - last_ui_time > 8.0:
                     last_ui_time = now
                     dl_speed = int(st_data.get("downloadSpeed", 0))
                     up_speed = int(st_data.get("uploadSpeed", 0))
@@ -1266,11 +1368,11 @@ async def handle_magnet_execution(client, message, magnet_link, config_text, res
                         pct = 0
                         eta_txt = "连接节点中..."
 
-                    try: await status_msg.edit_text(f"🧲 **[磁力涡轮]** `{drama_name}`\n📈 下载: **{sp_mb:.2f} MB/s** | 📤 上传: **{up_mb:.2f} MB/s**\n🤝 连接: **{connections}** 节点\n⏳ 进度: **{pct}%** | 剩余: **{eta_txt}**")
+                    try: await status_msg.edit_text(f"🧲 **[Aria2 DL]** `{drama_name}`\n📈 下载: **{sp_mb:.2f} MB/s** | 📤 上传: **{up_mb:.2f} MB/s**\n🤝 连接: **{connections}** 节点\n⏳ 进度: **{pct}%** | 剩余: **{eta_txt}**")
                     except: pass
-            except Exception: pass
+            except: pass
 
-        try: await status_msg.edit_text(f"✅ **[下载完毕]** 启动清道夫协议！\n正在全量检索下载物，提取视频并执行智能洗名...")
+        try: await status_msg.edit_text(f"✅ **[DL Finish]** 启动清道夫协议！\n正在全量检索下载物，提取视频并执行智能洗名...")
         except: pass
 
         files = st_data.get("files", [])
@@ -1300,7 +1402,7 @@ async def handle_magnet_execution(client, message, magnet_link, config_text, res
                         "ep_num": file_ep_num
                     })
                 except Exception as e:
-                    await notify_steward_log(f"⚠️ 提取视频 {f_path} 时出错: {e}", level="WARNING")
+                    await notify_steward_log(f"⚠️ [提取失败] 视频 {f_path} 出错: {e}", level="WARNING")
 
         await wipe_magnet_task(tracked_gids)
 
@@ -1313,7 +1415,7 @@ async def handle_magnet_execution(client, message, magnet_link, config_text, res
             except: pass
             return
 
-        try: await status_msg.edit_text(f"🎉 **[清洗成功]** 共提取 {len(extracted_videos)} 个纯净视频！\n原始垃圾已焚毁，正由磁力专属双轨接力直推...")
+        try: await status_msg.edit_text(f"🎉 **[Wash OK]** 共提取 {len(extracted_videos)} 个纯净视频！\n原始垃圾已焚毁，正由专属双轨接力直推...")
         except: pass
 
         current_mount = get_mount_root()
@@ -1339,14 +1441,15 @@ async def handle_magnet_execution(client, message, magnet_link, config_text, res
                 status_msg=pass_msg,
                 original_gid=original_gid,
                 enable_139=enable_139,
-                skip_189=False
+                skip_189=False,
+                enable_xm=enable_xm  # 🔥 传入洗码标志
             ))
             
     finally:
         GLOBAL_ACTIVE_LOCKS.discard(magnet_task_key)
         GLOBAL_CANCEL_TASKS.discard(magnet_task_key)
         if original_gid:
-            remove_magnet_task(original_gid)  # <--- 加上这两行，确保无论如何都会清理 JSON
+            remove_magnet_task(original_gid)  
 
 # =================================================================
 # 🎯 [指令响应大网关] 
@@ -1359,103 +1462,99 @@ async def manage_system_commands(client, message):
     command = message.command[0].lower()
     config = load_listener_config()
     
-    # 🔥 核心更新：新增的本地遗留文件强制重推引擎
+    # 🔥 核心更新：批量本地遗留文件强制重推引擎
     if command == "reup":
         args = message.command[1:]
-        if len(args) < 2: 
-            return await message.reply_text("⚠️ 语法：`/reup [剧名关键字] [分类] [可选:年份] [c139|only139]`\n例如：`/reup 灿如繁星 欧美剧 2026 only139`")
+        if len(args) < 1: 
+            return await message.reply_text("⚠️ 语法：`/reup [剧名关键字 或 all] [分类] [可选:年份] [c139|only139] [xm]`\n例如：`/reup all 欧美剧 xm` 或 `/reup 灿如繁星 欧美剧 c139`")
         
-        enable_139 = False
-        skip_189 = False
+        enable_139, skip_189, enable_xm = False, False, False
         for i in range(len(args)-1, -1, -1):
             arg_lower = args[i].lower()
-            if arg_lower == "c139":
-                enable_139 = True
-                args.pop(i)
-            elif arg_lower == "only139":
-                enable_139 = True
-                skip_189 = True
-                args.pop(i)
+            if arg_lower == "c139": enable_139 = True; args.pop(i)
+            elif arg_lower == "only139": enable_139 = True; skip_189 = True; args.pop(i)
+            elif arg_lower == "xm": enable_xm = True; args.pop(i)
                 
-        # 提取可选的手动年份
         custom_year = next((args.pop(i) for i, arg in enumerate(args) if arg.isdigit() and len(arg) == 4 and (1900 < int(arg) < 2100)), None)
-                
-        # 提取分类
+        
         cat_idx = next((i for i, arg in enumerate(args) if arg in STANDARD_CATS), -1)
-        if cat_idx != -1: category = args.pop(cat_idx)
-        else: category = args.pop(-1)
+        category = args.pop(cat_idx) if cat_idx != -1 else (args.pop(-1) if len(args) > 1 else "未分类")
 
-        kw = " ".join(args).lower()
-        drama_name_input = args[0]  # 🔥 提取纯中文剧名
+        kw = args[0].lower() if args else "all"
+        is_all = (kw == "all")
         
         found_files = []
         if os.path.exists(LOCAL_TEMP_DIR):
             for f in os.listdir(LOCAL_TEMP_DIR):
-                if kw in f.lower() and os.path.isfile(os.path.join(LOCAL_TEMP_DIR, f)):
-                    found_files.append(f)
+                if os.path.isfile(os.path.join(LOCAL_TEMP_DIR, f)):
+                    if is_all or kw in f.lower():
+                        found_files.append(f)
                     
         if not found_files:
-            return await message.reply_text(f"❌ 在本地缓存文件夹(tg_temp)中未找到包含 `{kw}` 的视频文件，可能已被清理。")
+            return await message.reply_text(f"❌ 在 tg_temp 文件夹中未找到匹配的视频文件，可能已被清理。")
             
-        await message.reply_text(f"🔍 成功截获 {len(found_files)} 个未上传的本地遗留文件，启动本地补推引擎！")
+        await message.reply_text(f"🔍 成功截获 {len(found_files)} 个遗留文件，启动批量补推引擎！")
         
         for fname in found_files:
             local_path = os.path.join(LOCAL_TEMP_DIR, fname)
             total_bytes = os.path.getsize(local_path)
             
+            # 🔥 修复致命逻辑：智能剥离文件名开头的 [版本号]_ 前缀，还原真实文件名！
+            v_match = re.match(r'^\[(.*?)\]_(.*)$', fname)
+            if v_match:
+                extracted_version = v_match.group(1)
+                real_fname = v_match.group(2)
+            else:
+                extracted_version = ""
+                real_fname = fname
+            
             # 智能反向推导剧名、季数、集数
-            m_tv = re.search(r'^(.*?)\.S(\d+)E(\d+)\.(.*?)$', fname, re.IGNORECASE)
-            m_movie = re.search(r'^(.*?)\.(19\d{2}|20\d{2})\.(.*?)$', fname)
+            m_tv = re.search(r'^(.*?)\.S(\d+)E(\d+)\.(.*?)$', real_fname, re.IGNORECASE)
+            m_movie = re.search(r'^(.*?)\.(19\d{2}|20\d{2})\.(.*?)$', real_fname)
             
             is_movie = "电影" in category or category in ["演唱会", "纪录片"]
             year = ""
-            clean_base = fname.split('.')[0]
             file_season = folder_season = ep_num = 1
             
             if m_tv and not is_movie:
-                clean_base = m_tv.group(1)
+                clean_base = m_tv.group(1).replace(".", " ")
                 file_season = folder_season = int(m_tv.group(2))
                 ep_num = int(m_tv.group(3))
-                m_year = re.search(r'\b(20\d{2})\b', fname)
+                m_year = re.search(r'\b(20\d{2})\b', real_fname)
                 if m_year: year = m_year.group(1)
             elif m_movie and is_movie:
-                clean_base = m_movie.group(1)
+                clean_base = m_movie.group(1).replace(".", " ")
                 year = m_movie.group(2)
+            else:
+                # 兜底：如果命名严重不规范，直接降级去后缀作为名字
+                clean_base = os.path.splitext(real_fname)[0].replace(".", " ")
             
-            # 🔥 年份优先级：手动指定 > 文件名提取 > 留空
             final_year = custom_year if custom_year else year
-            folder_name = f"{drama_name_input} ({final_year})" if final_year else drama_name_input
+            folder_name = f"{clean_base} ({final_year})" if final_year else clean_base
+            if extracted_version:
+                folder_name = f"{folder_name} {extracted_version}"
             
             current_mount = get_mount_root()
             if is_movie: target_dir = f"{current_mount}/{category}/{folder_name}"
             else: target_dir = f"{current_mount}/{category}/{folder_name}/Season {folder_season}"
             
-            status_msg = await message.reply_text(f"🚀 **[本地补录推流]** 准备上传 `{fname}` ...")
+            status_msg = await message.reply_text(f"🚀 **[Reup Queue]** `{real_fname}`")
             
-            # 直接调用磁力的双轨上传队列，跳过下载环节
+            # 直接调用磁力的双轨上传队列，严格执行锁排队
             asyncio.create_task(magnet_upload_task(
-                local_path=local_path, 
-                target_dir_189=target_dir, 
-                cat=category,
-                folder_name=folder_name,
-                folder_season=folder_season,
-                total_bytes=total_bytes, 
-                clean_base=clean_base, 
-                file_season=file_season, 
-                ep_num=ep_num, 
-                is_movie=is_movie, 
-                standard_name=fname, 
-                version_suffix="",
-                status_msg=status_msg,
-                original_gid=None,
-                enable_139=enable_139,
-                skip_189=skip_189
+                local_path=local_path, target_dir_189=target_dir, cat=category,
+                folder_name=folder_name, folder_season=folder_season, total_bytes=total_bytes, 
+                clean_base=clean_base.replace(" ", "."), file_season=file_season, ep_num=ep_num, 
+                is_movie=is_movie, standard_name=real_fname, version_suffix=extracted_version,
+                status_msg=status_msg, original_gid=None, enable_139=enable_139, 
+                skip_189=skip_189, enable_xm=enable_xm
             ))
+            await asyncio.sleep(1.5) # 防止发消息太快被官方拉黑
         return
 
     if command == "ping":
         uptime_minutes = int((time.time() - START_TIME) / 60)
-        return await message.reply_text(f"🟢 **系统健康度 [优秀]**\n⏱️ 存活: `{uptime_minutes}` 分钟")
+        return await message.reply_text(f"🟢 **[System OK]**\n⏱️ 存活: `{uptime_minutes}` 分钟")
 
     if command == "setdir":
         if len(message.command) < 2: return await message.reply_text(f"📁 当前上传目录: `{get_mount_root()}`\n⚠️ 语法：`/setdir [新目录路径]`")
@@ -1496,7 +1595,7 @@ async def manage_system_commands(client, message):
         args = message.command[1:]
         if not args or not args[0].startswith("magnet:?"): return await message.reply_text("⚠️ 语法：`/mag [磁力链接]`\n(建议直接把链接发给机器人)")
         magnet_link = args.pop(0)
-        prompt = await message.reply_text("🧲 磁力链接已直接捕获！请回复: `剧名|别名 分类 [S季数] [年份] [v=版本] [c139]`")
+        prompt = await message.reply_text("🧲 **[Radar Alert]** 磁力链接已直接捕获！请回复: `剧名|别名 分类 [S季数] [年份] [v=版本] [c139] [xm]` ")
         chat_id = message.chat.id
         if chat_id not in PENDING_MAGNETS:
             PENDING_MAGNETS[chat_id] = {}
@@ -1514,7 +1613,7 @@ async def manage_system_commands(client, message):
             if route_count == 0: return await message.reply_text("📭 航线记录已经是空的了。")
             routes.clear()
             save_tg_routes(routes)
-            return await message.reply_text(f"🗑️ **[最高指令生效]** 已彻底清空全部 `{route_count}` 条记忆航线！")
+            return await message.reply_text(f"🗑️ **[Global Wipe]** 已彻底清空全部 `{route_count}` 条记忆航线！")
             
         # 常规模糊匹配删除模式
         matched_keys = [k for k in routes.keys() if kw in k.lower()]
@@ -1537,7 +1636,7 @@ async def manage_system_commands(client, message):
         history = load_history()
         if not history: return await message.reply_text("📭 历史账本目前是空的。")
         sorted_hist = sorted(history.items(), key=lambda x: x[1], reverse=True)[:15]
-        msg_text = "📜 **[最近入库记录]**\n\n"
+        msg_text = "📜 **[History]**\n\n"
         for k, v in sorted_hist:
             time_str = datetime.fromtimestamp(v).strftime('%m-%d %H:%M')
             msg_text += f"🔹 `{k}`  *(于 {time_str})*\n"
@@ -1580,7 +1679,7 @@ async def manage_system_commands(client, message):
         with open(TG_HISTORY_DB, 'w', encoding='utf-8') as f:
             json.dump(history, f, ensure_ascii=False, indent=2)
             
-        return await message.reply_text(f"🧹 **[无情清道夫]** 交叉比对完毕！\n🗑️ 共抹除了 `{len(keys_to_delete)}` 条已退订或陈旧的历史记录。")
+        return await message.reply_text(f"🧹 **[History RM]** 交叉比对完毕！\n🗑️ 共抹除了 `{len(keys_to_delete)}` 条已退订或陈旧的历史记录。")
 
     if command == "add":
         if len(message.command) < 3: return await message.reply_text("⚠️ `/add [频道ID] [别名]`")
@@ -1598,7 +1697,7 @@ async def manage_system_commands(client, message):
             return await message.reply_text("🗑️ 频道已拔除。")
 
     if command == "list":
-        msg_text = "📡 **[雷达大盘状态]**\n\n"
+        msg_text = "📡 **[Radar Stat]**\n\n"
         for chat_id, info in config.get("trusted_channels", {}).items():
             msg_text += f"🏢 **频道**: {info.get('channel_name', chat_id)}\n"
             dramas = info.get("monitored_dramas", {})
@@ -1630,7 +1729,7 @@ async def manage_system_commands(client, message):
         GLOBAL_CANCEL_TASKS.discard("ALL")  # 🔥 修复补丁：启动扫荡前，强制清空全局追杀标记
         args = message.command[1:]
         target_kw = " ".join(args).lower() if args else None
-        await message.reply_text("🔍 **[手动扫荡触发]** ➔ 正在全自动翻找目标漏网之鱼...")
+        await message.reply_text("🔍 **[Manual Scan]** ➔ 正在全自动翻找目标漏网之鱼...")
         for chat_id, info in config.get("trusted_channels", {}).items():
             for drama_name, d_info in info.get("monitored_dramas", {}).items():
                 if target_kw and target_kw not in drama_name.lower(): continue
@@ -1648,13 +1747,18 @@ async def manage_system_commands(client, message):
 
     if command == "sub":
         args = message.command[1:]
-        if len(args) < 2: return await message.reply_text("⚠️ 语法：`/sub [剧名] [分类] [频率] [v=版本] [f=参数] [end=完结集数] [可选:年份/季数] [c139]`")
+        if len(args) < 2: return await message.reply_text("⚠️ 语法：`/sub [剧名] [分类] [频率] [v=版本] [f=参数] [end=完结集数] [可选:年份/季数] [c139] [xm]` ")
         
-        # 🔥 拦截 c139 标识
+        # 🔥 拦截 c139 和 xm(洗码) 标识
         enable_139 = False
+        enable_xm = False
         for i in range(len(args)-1, -1, -1):
-            if args[i].lower() == "c139":
+            arg_lower = args[i].lower()
+            if arg_lower == "c139":
                 enable_139 = True
+                args.pop(i)
+            elif arg_lower == "xm":
+                enable_xm = True
                 args.pop(i)
 
         cat_idx = next((i for i, arg in enumerate(args) if arg in STANDARD_CATS), -1)
@@ -1687,7 +1791,9 @@ async def manage_system_commands(client, message):
         target_pools = [specific_channel]
 
         custom_year = next((args.pop(i) for i, arg in enumerate(args) if arg.isdigit() and len(arg) == 4 and (1900 < int(arg) < 2100)), None)
+        
         version_suffix, file_suffix, end_ep = "", "", None
+        
         for i in range(len(args)-1, -1, -1):
             if args[i].lower().startswith("v="): version_suffix = args.pop(i)[2:]
             elif args[i].lower().startswith("f="): file_suffix = args.pop(i)[2:]
@@ -1715,7 +1821,7 @@ async def manage_system_commands(client, message):
         drama_key = f"{drama_name}_{version_suffix}" if version_suffix else drama_name
         fetched_year, fetched_end = await fetch_tmdb_details(drama_name)
         if not custom_year: custom_year = fetched_year
-        if end_ep is None: end_ep = 9999 if category in ["国漫", "日漫", "综艺", "短剧"] else fetched_end
+        if end_ep is None: end_ep = 9999 if category in ["国漫", "日漫", "综艺"] else fetched_end
                 
         for chat_id in target_pools:
             if "monitored_dramas" not in config["trusted_channels"][chat_id]: config["trusted_channels"][chat_id]["monitored_dramas"] = {}
@@ -1723,12 +1829,13 @@ async def manage_system_commands(client, message):
                 "search_kw": search_kw, "version": version_suffix, "file_version": file_suffix, 
                 "category": category, "folder_season": folder_season, "file_season": file_season, 
                 "min_ep": min_ep, "min_mb": min_mb, "max_mb": max_mb, "frequency": frequency,
-                "year": custom_year, "end_ep": end_ep, "enable_139": enable_139
+                "year": custom_year, "end_ep": end_ep, "enable_139": enable_139,
+                "enable_xm": enable_xm  # 🔥 新增洗码状态
             }
             
         with open(TG_LISTENER_DB, "w", encoding="utf-8") as f: json.dump(config, f, ensure_ascii=False, indent=4)
         end_display = "♾️无限连载" if end_ep == 9999 else f"{end_ep} 集杀青"
-        e139_display = "\n🚀 **附加**: 已开启139云盘同步接力" if enable_139 else ""
+        e139_display = "\n🚀 **[139 Active]** 已开启同步接力" if enable_139 else ""
         
         try:
             await asyncio.sleep(2.5)
@@ -1768,13 +1875,17 @@ async def manage_system_commands(client, message):
 
     if command == "go":
         args = message.command[1:]
-        if not args: return await message.reply_text("⚠️ 语法：`/go [剧名] [分类] [年份] [v=版本] [季数] [c139]`")
+        if not args: return await message.reply_text("⚠️ 语法：`/go [剧名] [分类] [年份] [v=版本] [季数] [c139] [xm]`")
         
-        # 🔥 拦截 c139
+       # 🔥 拦截 c139 和 xm
         enable_139 = False
+        enable_xm = False  # 🔥 新增
         for i in range(len(args)-1, -1, -1):
             if args[i].lower() == "c139":
                 enable_139 = True
+                args.pop(i)
+            elif args[i].lower() == "xm": # 🔥 提取 xm 标识
+                enable_xm = True
                 args.pop(i)
 
         routes = load_tg_routes()
@@ -1793,7 +1904,7 @@ async def manage_system_commands(client, message):
             if matched_item:
                 folder_s = matched_item.get("folder_season", 1)
                 file_s = matched_item.get("file_season", folder_s)
-                GLOBAL_ROUTE_CACHE.update({"folder_name": matched_item["folder_name"], "category": matched_item["category"], "folder_season": folder_s, "file_season": file_s, "year": matched_item.get("year", ""), "version": matched_item.get("version", ""), "expire_time": time.time() + 300, "manual_ep": None, "enable_139": matched_item.get("enable_139", False)})
+                GLOBAL_ROUTE_CACHE.update({"folder_name": matched_item["folder_name"], "category": matched_item["category"], "folder_season": folder_s, "file_season": file_s, "year": matched_item.get("year", ""), "version": matched_item.get("version", ""), "expire_time": time.time() + 300, "manual_ep": None, "enable_139": matched_item.get("enable_139", False), "enable_xm": matched_item.get("enable_xm", False)})
                 
                 try:
                     await asyncio.sleep(2.5)
@@ -1813,22 +1924,21 @@ async def manage_system_commands(client, message):
         if custom_year: year = custom_year
         folder_name = f"{pure_title} ({year})" if year else pure_title
         if version_suffix: folder_name = f"{folder_name} {version_suffix}"
-        routes[folder_name] = {"folder_name": folder_name, "category": cat, "folder_season": folder_season, "file_season": file_season, "year": year, "version": version_suffix, "file_version": file_suffix, "created_at": int(time.time()), "enable_139": enable_139}
+        routes[folder_name] = {"folder_name": folder_name, "category": cat, "folder_season": folder_season, "file_season": file_season, "year": year, "version": version_suffix, "file_version": file_suffix, "created_at": int(time.time()), "enable_139": enable_139, "enable_xm": enable_xm}
         save_tg_routes(routes)
-        GLOBAL_ROUTE_CACHE.update({"folder_name": folder_name, "category": cat, "folder_season": folder_season, "file_season": file_season, "year": year, "version": version_suffix, "file_version": file_suffix, "expire_time": time.time() + 360, "manual_ep": None, "enable_139": enable_139})
-        
+        GLOBAL_ROUTE_CACHE.update({"folder_name": folder_name, "category": cat, "folder_season": folder_season, "file_season": file_season, "year": year, "version": version_suffix, "file_version": file_suffix, "expire_time": time.time() + 360, "manual_ep": None, "enable_139": enable_139, "enable_xm": enable_xm})
         try:
             await asyncio.sleep(2.5)
             await message.delete()
         except: pass
-        e139_display = "\n🚀 **[已开启139双端接力]**" if enable_139 else ""
+        e139_display = "\n🚀 **[139 Active]** 已开启同步接力" if enable_139 else ""
         return await message.reply_text(f"✅ 新航线已打通：\n📁 目标锁定: `{folder_name}`{e139_display}\n请直接转发视频！")
 
 # 🔥 补丁：给磁力直贴功能也加上控制台专属锁，防止旧手机“跨界接单”
 @app.on_message(filters.chat(COMMAND_CENTER_CHAT) & filters.text & filters.regex(r"(?i)^magnet:\?xt=") & filters.user("me"))
 async def catch_magnet_link(client, message):
     magnet_link = message.text.strip()
-    prompt = await message.reply_text("🧲 **[雷达警报] 已直接捕获磁力！**\n请直接回复本条消息提供归属信息：\n👉 **格式**: `剧名|别名 分类 [S季数] [年份] [v=版本] [c139] [proxy]`")
+    prompt = await message.reply_text("🧲 **[Radar Alert]** 已直接捕获磁力！\n请直接回复本条消息提供归属信息：\n👉 **格式**: `剧名|别名 分类 [S季数] [年份] [v=版本] [c139] [proxy] [xm]` ")
     chat_id = message.chat.id
     if chat_id not in PENDING_MAGNETS:
         PENDING_MAGNETS[chat_id] = {}
@@ -1887,6 +1997,14 @@ async def process_text_commands(client, message):
 @app.on_edited_message(filters.video | filters.document)
 async def media_routing_gateway(client, message):
     try:
+        # 🔥 修复补丁：赋予 /go 手动航线最高优先级，无视一切频道屏蔽规则！
+        if message.chat and message.chat.type in [enums.ChatType.PRIVATE, enums.ChatType.BOT]:
+            if GLOBAL_ROUTE_CACHE.get("folder_name") and time.time() < GLOBAL_ROUTE_CACHE.get("expire_time", 0):
+                try: status = await message.reply_text("⚡ 转发航线认证通过，正向引流拉取...")
+                except: return
+                asyncio.create_task(process_media_transfer(client, message, status))
+                return  # 🎯 命中手动航线后直接结束，绝不往下走！
+                
         config = load_listener_config()
         chat_id_to_check = str(message.chat.id) if message.chat else ""
         original_channel_id = ""
@@ -1970,19 +2088,15 @@ async def media_routing_gateway(client, message):
             clean_base_for_check = pure_drama_name.replace(" ", ".")
             if check_history(clean_base_for_check, file_season, ep_num, combined_history_tags): return
             
-            # 🔥 加入 enable_139
+            # 🔥 提取 enable_139 和 enable_xm
             enable_139 = route_info.get("enable_139", False)
-            override_info = (folder_name, route_info["category"], folder_season, file_season, year, ep_num, db_version, db_file_version, matched_channel, drama_key, route_info.get("end_ep", 9999), enable_139)
-            try: status = await client.send_message(COMMAND_CENTER_CHAT, f"🎯 **[实时发车]**\n📺 `{search_kw}` ➔ S{file_season:02d}E{ep_num:02d}")
-            except: status = await client.send_message("me", f"🎯 **[备用发车]**\n📺 `{search_kw}` ➔ S{file_season:02d}E{ep_num:02d}")
+            enable_xm = route_info.get("enable_xm", False)
+            # 把 enable_xm 加进元组 (放到第13个位置)
+            override_info = (folder_name, route_info["category"], folder_season, file_season, year, ep_num, db_version, db_file_version, matched_channel, drama_key, route_info.get("end_ep", 9999), enable_139, enable_xm)
+            try: status = await client.send_message(COMMAND_CENTER_CHAT, f"🎯 **[Auto Scan]**\n📺 `{search_kw}` ➔ S{file_season:02d}E{ep_num:02d}")
+            except: status = await client.send_message("me", f"🎯 **[Auto Scan]**\n📺 `{search_kw}` ➔ S{file_season:02d}E{ep_num:02d}")
             asyncio.create_task(process_media_transfer(client, message, status, override_info))
             return
-
-        if message.chat and message.chat.type in [enums.ChatType.PRIVATE, enums.ChatType.BOT]:
-            if time.time() > GLOBAL_ROUTE_CACHE["expire_time"] or not GLOBAL_ROUTE_CACHE["folder_name"]: return
-            try: status = await message.reply_text("⚡ 转发航线认证通过，正向引流拉取...")
-            except: return
-            asyncio.create_task(process_media_transfer(client, message, status))
     except: pass
 
 # =================================================================
@@ -1996,19 +2110,26 @@ async def process_media_transfer(client, message, status, override_info=None):
     if not ext: ext = ".mp4"
     
     src_chat_id = src_drama_key = src_end_ep = None
+    enable_xm = False # 🔥 初始化
     if override_info:
-        if len(override_info) >= 12: 
+        if len(override_info) >= 13: 
+            folder, cat, folder_season, file_season, year, ep_num, version_suffix, file_suffix, src_chat_id, src_drama_key, src_end_ep, enable_139, enable_xm = override_info[:13]
+        elif len(override_info) >= 12:
             folder, cat, folder_season, file_season, year, ep_num, version_suffix, file_suffix, src_chat_id, src_drama_key, src_end_ep, enable_139 = override_info[:12]
+            enable_xm = False
         elif len(override_info) >= 11:
             folder, cat, folder_season, file_season, year, ep_num, version_suffix, file_suffix, src_chat_id, src_drama_key, src_end_ep = override_info[:11]
             enable_139 = False
+            enable_xm = False
         elif len(override_info) >= 8: 
             folder, cat, folder_season, file_season, year, ep_num, version_suffix, file_suffix = override_info[:8]
             enable_139 = False
+            enable_xm = False
         else:
             folder, cat, folder_season, file_season, year, ep_num = override_info[:6]
             version_suffix = file_suffix = ""
             enable_139 = False
+            enable_xm = False
     else:
         folder, cat = GLOBAL_ROUTE_CACHE["folder_name"], GLOBAL_ROUTE_CACHE["category"]
         folder_season, file_season = GLOBAL_ROUTE_CACHE["folder_season"], GLOBAL_ROUTE_CACHE["file_season"]
@@ -2016,6 +2137,7 @@ async def process_media_transfer(client, message, status, override_info=None):
         version_suffix = GLOBAL_ROUTE_CACHE.get("version", "")
         file_suffix = GLOBAL_ROUTE_CACHE.get("file_version", "") 
         enable_139 = GLOBAL_ROUTE_CACHE.get("enable_139", False)
+        enable_xm = GLOBAL_ROUTE_CACHE.get("enable_xm", False)
         if GLOBAL_ROUTE_CACHE["manual_ep"] is not None:
             ep_num = GLOBAL_ROUTE_CACHE["manual_ep"]
             GLOBAL_ROUTE_CACHE["manual_ep"] += 1
@@ -2093,11 +2215,11 @@ async def process_media_transfer(client, message, status, override_info=None):
         file_size_mb = total_bytes / (1024 * 1024) if total_bytes else 0
         source_name = message.forward_from_chat.title if message.forward_from_chat and message.forward_from_chat.title else (message.chat.title if message.chat and message.chat.title else "未知来源")
             
-        try: await status.edit_text(f"⏳ **[TG下载排队中]** `{standard_name}`\n🚦 正在等待下载通道空闲...")
+        try: await status.edit_text(f"⏳ **[TG Queue]** `{standard_name}`\n🚦 正在等待下载通道空闲...")
         except: pass
 
         async with GLOBAL_TRANSFER_LOCK:
-            await notify_steward_log(f"📥 [TG拉取启动] 来源: {source_name} | 大小: {file_size_mb:.2f} MB")
+            await notify_steward_log(f"📥 [拉取启动] 来源: {source_name} | 大小: {file_size_mb:.2f} MB")
             chunk_size = 1024 * 1024
             retry_count = 0
             max_retries = 999999  
@@ -2133,58 +2255,43 @@ async def process_media_transfer(client, message, status, override_info=None):
                     open_mode = "wb"
                     
                 try:
-                    buffer_queue = asyncio.Queue(maxsize=50)
-                    writer_error = None
-                    async def disk_writer():
-                        nonlocal writer_error
-                        try:
-                            with open(local_path, open_mode) as f:
-                                while True:
-                                    chunk = await buffer_queue.get()
-                                    if chunk is None: break 
-                                    f.write(chunk); buffer_queue.task_done()
-                        except Exception as e: writer_error = e
-
-                    writer_task = asyncio.create_task(disk_writer())
                     yielded_any = False
-                    
-                    async for chunk in client.stream_media(message, offset=completed_chunks):
-                        yielded_any = True
-                        if task_lock_key in GLOBAL_CANCEL_TASKS or "ALL" in GLOBAL_CANCEL_TASKS: break 
-                        if writer_error: raise writer_error 
-                        await buffer_queue.put(chunk)
-                        downloaded_bytes += len(chunk)
-                        
-                        if total_bytes > 0:
-                            pct = int(downloaded_bytes * 100 / total_bytes)
+                    start_time = time.time()
+                    with open(local_path, open_mode) as f:
+                        async for chunk in client.stream_media(message, offset=completed_chunks):
+                            yielded_any = True
+                            if task_lock_key in GLOBAL_CANCEL_TASKS or "ALL" in GLOBAL_CANCEL_TASKS: break 
+                            f.write(chunk)
+                            downloaded_bytes += len(chunk)
                             
-                            if pct >= 50 and not notified_50_dl:
-                                asyncio.create_task(notify_steward_log(f"📥 [TG拉取] {standard_name} 进度达 50%"))
-                                notified_50_dl = True
-                            if pct >= 98 and not notified_98_dl:
-                                asyncio.create_task(notify_steward_log(f"📥 [TG拉取] {standard_name} 进度达 98%"))
-                                notified_98_dl = True
+                            if total_bytes > 0:
+                                pct = int(downloaded_bytes * 100 / total_bytes)
+                                if pct >= 50 and not notified_50_dl:
+                                    asyncio.create_task(notify_steward_log(f"📥 [拉取进度] {standard_name} 进度达 50%"))
+                                    notified_50_dl = True
+                                if pct >= 98 and not notified_98_dl:
+                                    asyncio.create_task(notify_steward_log(f"📥 [拉取进度] {standard_name} 进度达 98%"))
+                                    notified_98_dl = True
 
-                        now = time.time()
-                        duration = now - last_ui_time
-                        if duration >= 8.0:
-                            bytes_diff = downloaded_bytes - last_ui_bytes
-                            speed_mb = (bytes_diff / duration) / (1024 * 1024)
-                            speed_text = f"{speed_mb:.2f} MB/s"
-                            rem_bytes = total_bytes - downloaded_bytes
-                            speed_bps = bytes_diff / duration
-                            if speed_bps > 0:
-                                eta_sec = rem_bytes / speed_bps
-                                eta_text = f"{int(eta_sec // 60)}分{int(eta_sec % 60)}秒" if eta_sec > 60 else f"{int(eta_sec)}秒"
-                            else: eta_text = "卡顿"
-                            pct = int(downloaded_bytes * 100 / total_bytes)
-                            last_ui_time, last_ui_bytes = now, downloaded_bytes
-                            try:
-                                asyncio.create_task(status.edit_text(f"🚀 **[极速拉取]** `{standard_name}`\n📡 来源: **{source_name}** | ⚖️ 大小: **{file_size_mb:.2f} MB**\n📈 实时网速: **{speed_text}**\n⏳ 预计剩余: **{eta_text}**\n⚡ 涡轮进度: **{pct}%**"))
-                            except: pass
-                    
-                    await buffer_queue.put(None)
-                    await writer_task
+                            now = time.time()
+                            duration = now - last_ui_time
+                            if duration >= 8.0 or downloaded_bytes == total_bytes:
+                                bytes_diff = downloaded_bytes - last_ui_bytes
+                                speed_bps = bytes_diff / duration if duration > 0 else 0
+                                speed_mb = speed_bps / (1024 * 1024)
+                                speed_text = f"{speed_mb:.2f} MB/s"
+                                rem_bytes = total_bytes - downloaded_bytes
+                                if speed_bps > 0:
+                                    eta_sec = rem_bytes / speed_bps
+                                    eta_text = f"{int(eta_sec // 60)}分{int(eta_sec % 60)}秒" if eta_sec > 60 else f"{int(eta_sec)}秒"
+                                else: 
+                                    eta_text = "卡顿"
+                                pct = int(downloaded_bytes * 100 / total_bytes)
+                                last_ui_time = now
+                                last_ui_bytes = downloaded_bytes
+                                try:
+                                    await status.edit_text(f"🚀 **[TDownload]** `{standard_name}`\n📡 来源: **{source_name}** | ⚖️ 大小: **{file_size_mb:.2f} MB**\n📈 实时网速: **{speed_text}**\n⏳ 预计剩余: **{eta_text}**\n⚡ 涡轮进度: **{pct}%**")
+                                except: pass
 
                     if task_lock_key in GLOBAL_CANCEL_TASKS or "ALL" in GLOBAL_CANCEL_TASKS: break 
                     if downloaded_bytes >= total_bytes: 
@@ -2198,13 +2305,12 @@ async def process_media_transfer(client, message, status, override_info=None):
                             except: pass
                         if completed_chunks == last_stuck_chunks:
                             stuck_loop_count += 1
-                            try: await status.edit_text(f"⚠️ **[节点堵塞]** 断点死磕中 ({retry_count})...")
+                            try: await status.edit_text(f"⚠️ **[Node Block]** 断点死磕中 ({retry_count})...")
                             except: pass
                         else: last_stuck_chunks, stuck_loop_count = completed_chunks, 0
                         await asyncio.sleep(3.0)
                         
                 except Exception as e:
-                    if 'writer_task' in locals() and not writer_task.done(): writer_task.cancel()
                     retry_count += 1
                     if retry_count % 5 == 0:
                         try: message = await client.get_messages(message.chat.id, message.id)
@@ -2221,6 +2327,14 @@ async def process_media_transfer(client, message, status, override_info=None):
         try: await status.edit_text("✅ 本地落盘完成，进入云端上传排队队列...")
         except: pass
 
+        # 🔥 极速洗码介入点 (包含体积重算和防截断强制睡眠)
+        if enable_xm:
+            if alter_file_hash(local_path):
+                total_bytes = os.path.getsize(local_path)  # 🌟 核心补丁：洗码后必须重新获取实际大小！
+                await asyncio.sleep(1.5)  # 🌟 救命补丁：强制停顿1.5秒，防止 TG 把洗码提示吞掉！
+                try: await status.edit_text("✨ **[Hash Wash]** 文件哈希特征已重置，反黑名单启动！")
+                except: pass
+
         if ext.lower() in [".cas", ".zip"]:
             import zipfile
             STAGING_DIR = "/data/data/com.termux/files/home/sharecas"
@@ -2235,7 +2349,7 @@ async def process_media_transfer(client, message, status, override_info=None):
                 else: shutil.move(local_path, final_cas_path)
                 try: os.remove(local_path) 
                 except: pass
-                try: await status.edit_text(f"🎉 **CAS截留成功**\n已洗名并存入本地 `{STAGING_DIR}`，等待接管。")
+                try: await status.edit_text(f"🎉 **[189 CAS Ready]**\n已存入本地 `{STAGING_DIR}`，等待接管。")
                 except: pass
                 return
             except Exception as e: return
@@ -2254,7 +2368,8 @@ async def process_media_transfer(client, message, status, override_info=None):
             standard_name=standard_name, 
             history_tags=combined_history_tags,
             status_msg=status,
-            enable_139=enable_139
+            enable_139=enable_139,
+            enable_xm=enable_xm
         ))
         bg_task_spawned = True
         
@@ -2281,6 +2396,7 @@ async def sweep_existing_history(client, chat_id, drama_key, category, folder_se
         search_kw = d_info.get("search_kw", drama_key)
         db_version, db_file_version, end_ep = d_info.get("version", ""), d_info.get("file_version", ""), d_info.get("end_ep", 9999)
         enable_139 = d_info.get("enable_139", False)
+        enable_xm = d_info.get("enable_xm", False)  # 🔥 修复：把洗码标记从数据库里挖出来！
         
         if not year: year, _ = await fetch_tmdb_details(search_kw)
         
@@ -2317,9 +2433,10 @@ async def sweep_existing_history(client, chat_id, drama_key, category, folder_se
                 clean_base_for_check = pure_drama_name.replace(" ", ".")
                 if check_history(clean_base_for_check, file_season, ep_num, preview_tags): continue
                 
-                override_info = (folder_name, category, folder_season, file_season, year, ep_num, db_version, db_file_version, str(chat_id), drama_key, end_ep, enable_139)
-                try: status = await client.send_message(COMMAND_CENTER_CHAT, f"🎯 **[哨发发车]**\n📺 `{search_kw}` ({db_version or '默认'}) ➔ S{file_season:02d}E{ep_num:02d}")
-                except: status = await client.send_message("me", f"🎯 **[备用嗅探]**\n📺 `{search_kw}` ({db_version or '默认'}) ➔ S{file_season:02d}E{ep_num:02d}")
+                # 🔥 修复：补齐最后的 enable_xm，让后台扫荡也能洗码！
+                override_info = (folder_name, category, folder_season, file_season, year, ep_num, db_version, db_file_version, str(chat_id), drama_key, end_ep, enable_139, enable_xm)
+                try: status = await client.send_message(COMMAND_CENTER_CHAT, f"🎯 **[Auto Scan]**\n📺 `{search_kw}` ({db_version or '默认'}) ➔ S{file_season:02d}E{ep_num:02d}")
+                except: status = await client.send_message("me", f"🎯 **[Auto Scan]**\n📺 `{search_kw}` ({db_version or '默认'}) ➔ S{file_season:02d}E{ep_num:02d}")
                 asyncio.create_task(process_media_transfer(client, old_msg, status, override_info))
                 await asyncio.sleep(5) 
     except Exception as e: print(f"⚠️ [扫荡崩溃]: {e}")
@@ -2349,7 +2466,7 @@ async def startup_catchup_sweep(client):
         if not channels: return
         
         await notify_steward_log("🔍 [开机扫荡] 启动开机自检，正在扫描漏网之鱼...")
-        try: await client.send_message(COMMAND_CENTER_CHAT, "🔍 **[系统自检]** 机器人重启，正在自动扫荡频道漏网之鱼...")
+        try: await client.send_message(COMMAND_CENTER_CHAT, "🔍 **[System Check]** 机器人重启，正在自动扫荡频道漏网之鱼...")
         except: pass
 
         for chat_id, info in channels.items():
@@ -2362,9 +2479,6 @@ async def startup_catchup_sweep(client):
         await notify_steward_log("✅ [开机扫荡] 所有频道历史自检完成！")
     except: pass
 
-# =================================================================
-# 🚀 磁力任务断点接管协议 (开机激活)
-# =================================================================
 async def resume_magnet_tasks(client):
     tasks = load_magnet_tasks()
     if not tasks: return
@@ -2383,9 +2497,6 @@ async def resume_magnet_tasks(client):
                 await asyncio.sleep(2)
         except Exception: pass
 
-# =================================================================
-# 🛸 野生任务捕获雷达 (自动逆向监控 Aria2)
-# =================================================================
 async def orphan_magnet_scanner(client):
     await asyncio.sleep(20) 
     while True:
@@ -2424,7 +2535,7 @@ async def orphan_magnet_scanner(client):
                     try:
                         prompt_msg = await client.send_message(
                             COMMAND_CENTER_CHAT, 
-                            f"👽 **[野生任务捕获]** 发现外部添加的未监控下载任务：\n📄 `{name}`\n\n请**回复本条消息**（或直接在下方输入）提供归属信息以接管：\n👉 **格式**: `剧名|别名 分类 [S季数] [年份] [v=版本] [c139]`"
+                            f"👽 **[Orphan Task]** 发现外部添加的未监控下载任务：\n📄 `{name}`\n\n请**回复本条消息**（或直接在下方输入）提供归属信息以接管：\n👉 **格式**: `剧名|别名 分类 [S季数] [年份] [v=版本] [c139] [xm]`"
                         )
                         chat_id = prompt_msg.chat.id
                         if chat_id not in PENDING_MAGNETS:
@@ -2442,13 +2553,13 @@ if __name__ == "__main__":
         
         # 🔥 新增：开机强制同步通讯录，彻底解决 Peer id invalid 报错
         try:
-            await notify_steward_log("🔄 正在同步云端通讯录至本地数据库")
+            await notify_steward_log("🔄 [同步记录] 正在同步云端通讯录至本地数据库")
             async for _ in app.get_dialogs(limit=200):
                 pass
         except Exception:
             pass
             
-        await notify_steward_log("✅ 机器人重启完毕，双下载与上传引擎已全线上线！")
+        await notify_steward_log("✅ [系统启动] 机器人重启完毕，双下载与上传引擎已全线上线！")
         asyncio.create_task(startup_catchup_sweep(app))
         asyncio.create_task(smart_patrol_daemon(app))
         asyncio.create_task(resume_magnet_tasks(app)) 
