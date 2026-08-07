@@ -1398,9 +1398,9 @@ def play():
                                 if final_cdn_url.startswith("http://"):
                                     final_cdn_url = final_cdn_url.replace("http://", "https://", 1)
                                 
-                                # ++++ 🚀 拿到直链后，写入缓存 (有效期 2 小时) ++++
+                                # ++++ 🚀 拿到直链后，写入缓存 (有效期 2 分钟) ++++
                                 with cache_lock:
-                                    native_link_cache[file_path_param] = (final_cdn_url, time.time() + 7200)
+                                    native_link_cache[file_path_param] = (final_cdn_url, time.time() + 120)
                                     
                                 logger.info(f"[播放放行] 节点: {urllib.parse.urlparse(final_cdn_url).netloc} | 地址: {truncate_url(final_cdn_url)}")
                                 logger.info(f"========== 🕵️‍♂️ {log_tag} 链路日志 END ==========\n")
@@ -1412,9 +1412,9 @@ def play():
                             if raw_url.startswith("http://"):
                                 raw_url = raw_url.replace("http://", "https://", 1)
                             
-                            # ++++ 🚀 拿到直链后，写入缓存 (有效期 2 小时) ++++
+                            # ++++ 🚀 拿到直链后，写入缓存 (有效期 2 分钟) ++++
                             with cache_lock:
-                                native_link_cache[file_path_param] = (raw_url, time.time() + 7200)
+                                native_link_cache[file_path_param] = (raw_url, time.time() + 120)
                                 
                             logger.info(f"[播放放行] 节点: {urllib.parse.urlparse(raw_url).netloc} | 地址: {truncate_url(raw_url)}")
                             logger.info(f"========== 🕵️‍♂️ {log_tag} 链路日志 END ==========\n")
@@ -1827,8 +1827,6 @@ def generate_strm_from_openlist_to_local(target_path=None, drive_type='189', fil
 
     if count > 0: 
         logger.info(f"[同步完毕] 成功归档 {count} 个 STRM 文件")
-        try: subprocess.Popen(["/data/data/com.termux/files/usr/bin/bash", "/data/data/com.termux/files/home/refresh.sh", scan_root])
-        except: pass
 
 @app_main.route('/api/sync')
 def trigger_sync():

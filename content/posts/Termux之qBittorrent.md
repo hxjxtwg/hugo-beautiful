@@ -602,28 +602,33 @@ import sys
 import time
 import json
 import asyncio
+import shutil
 from urllib.parse import quote
 import httpx
 
 # =================================================================
-# ⚙️ 核心网关与路径映射配置 (天翼主盘)
+# ⚙️ 核心网关与路径映射配置
 # =================================================================
+# [天翼主盘 189 专属网关]
 OLIST_URL = "http://127.0.0.1:5244"
-OLIST_TOKEN = "openlist-4ba3bee7-2112-42bd-92e7-6f3a7c67a83a7CIOwhmfYpB9Hi8HX1NYfRJUn1iWvyPnyuoOUPC5Fqn5FGxTwNuKHwRSYCT6OZC2"
+OLIST_TOKEN = "openlist-a87614da-32dd-4b80-9150-6447de823da8f33x53ymkrx0aPKG0HUcsFHmjFRYTKFhSADLRhoQLkXa7ogaiByhWRNEXCjpblp9"
+
+# [移动备盘 139 专属网关]
+OLIST_139_URL = "http://127.0.0.1:5255"
+OLIST_139_TOKEN = "openlist-f5178f57-0d47-4d4a-8031-81fdd386cdc0FRIGOBWFTT8aGBl37PJAgdbhVXpxnvI4O2bnsTvR3cL09O5h6cRqgeJhDo48kYQt"
+
+# 天翼主盘物理归档特征码存放地
 STAGING_BASE_DIR = "/storage/emulated/0/Download/189cas"
 
-# =================================================================
-# ⚙️ 独立网关与路径映射配置 (移动备盘 - 双传专属)
-# =================================================================
-MOBILE_OLIST_URL = "http://127.0.0.1:5255"
-MOBILE_OLIST_TOKEN = "openlist-335c8982-5c97-40b4-824e-117636cfc94eBHbD3HZOWdNeMUWOiXFUxJGtWXOh0P1jxqH2jAInjHvF5umwVU4If8ifEnrIkjMl"
+# 移动备盘物理归档特征码存放地
 MOBILE_MOUNT_ROOT = "/139/139cas"
 MOBILE_STAGING_BASE_DIR = "/storage/emulated/0/Download/139cas"
 
 # =================================================================
 # 🔔 基础通知与推送网关
 # =================================================================
-STEWARD_BASE_URL = "http://192.168.0.199:5000" 
+STEWARD_BASE_URL = "http://127.0.0.1:5000" 
+RELAY_BASE_URL = "http://127.0.0.1:5555" 
 TMDB_API_KEY = "9c88e18e43543c8ff195c631aaa0d2fa"
 
 TG_SETTINGS_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tg_settings.json")
@@ -672,18 +677,33 @@ async def send_push_notification(title, content):
             await notify_steward_log(f"⚠️ [TG推送异常] 网络或代理出错: {e}", level="WARNING")
 
 async def trigger_strm_sync(drive, folder_path):
-    """🌟 新增：通知打更人 (5000端口) 局部扫描并生成 STRM"""
+    """通知管家 (5000端口) 局部扫描并生成 STRM"""
     url = f"{STEWARD_BASE_URL}/api/sync"
     params = {"drive": str(drive), "path": folder_path}
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(url, params=params)
             if resp.status_code == 200:
-                await notify_steward_log(f"🎬 [STRM触发-{drive}] 已成功通知中枢更新目录: `{folder_path}`")
+                await notify_steward_log(f"🎬 [STRM同步成功-{drive}] 目录: `{folder_path}`")
             else:
-                await notify_steward_log(f"⚠️ [STRM触发-{drive}] 通知失败，状态码: {resp.status_code}", level="WARNING")
+                await notify_steward_log(f"⚠️ [STRM同步异常-{drive}] HTTP {resp.status_code}", level="WARNING")
     except Exception as e:
-        await notify_steward_log(f"⚠️ [STRM触发-{drive}] 请求异常: {e}", level="WARNING")
+        await notify_steward_log(f"⚠️ [STRM同步失败-{drive}]: {e}", level="WARNING")
+
+async def trigger_189_local_script(folder_path):
+    """🌟 修正：通知远端 5555 端口中继器去接管 189 盘后续工作"""
+    url = f"{RELAY_BASE_URL}/force_harvest"
+    params = {"path": folder_path}
+    try:
+        # 🛡️ 核心修复：增加 proxy=None 和 trust_env=False，绝对防止请求被翻墙软件劫持
+        async with httpx.AsyncClient(timeout=10.0, proxy=None, trust_env=False) as client:
+            resp = await client.get(url, params=params)
+            if resp.status_code == 200:
+                await notify_steward_log(f"🚀 [189后续触发] 成功通知 5555 中继器接管目录: `{folder_path}`")
+            else:
+                await notify_steward_log(f"⚠️ [189后续触发异常] HTTP {resp.status_code}", level="WARNING")
+    except Exception as e:
+        await notify_steward_log(f"⚠️ [189后续触发失败]: {e}", level="WARNING")
 
 # =================================================================
 # 🧠 智能属性提取引擎
@@ -720,7 +740,7 @@ async def fetch_tmdb_year(title):
     return time.strftime("%Y")
 
 # =================================================================
-# 🛡️ 猎犬级 CAS 强力镜像下发引擎 (支持双网盘独立拉取)
+# 🛡️ 猎犬级 CAS 强力镜像下发引擎
 # =================================================================
 async def bg_fetch_cas_task(cas_target_full, final_cas_path, sub_path, cas_file_name, olist_url, olist_token, disk_name):
     await notify_steward_log(f"🔎 [CAS嗅探启动-{disk_name}] 正在捕获云端特征码: `{cas_file_name}`")
@@ -777,24 +797,41 @@ async def main():
         is_double_upload = True
         custom_tag = custom_tag.replace("双传", "")
         
-    # 彻底清理可能残留的逗号(中/英文)以及多余的连续空格，保证后缀名绝对纯净
-    # 例如："HQ,双传" 会被洗成 "HQ"；"HQ,双传,1080p" 会被洗成 "HQ 1080p"
     custom_tag = custom_tag.replace(",", " ").replace("，", " ")
     custom_tag = " ".join(custom_tag.split())
-
-    # 1. 基础剧名洗白
-    cn_bracket = re.search(r'\[([\u4e00-\u9fa5]+.*?)\]|【([\u4e00-\u9fa5]+.*?)】', torrent_name)
-    if cn_bracket:
-        pure_drama_name = cn_bracket.group(1) or cn_bracket.group(2)
+    # ========================================================
+    # 📌 【把代码粘贴在这里】自动记录最近执行的任务参数
+    # ========================================================
+    import json
+    history_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "task_history.json")
+    try:
+        history_data = []
+        if os.path.exists(history_file):
+            with open(history_file, "r", encoding="utf-8") as hf:
+                history_data = json.load(hf)
+        
+        current_task = {"torrent": torrent_name, "path": save_path, "category": category, "tag": sys.argv[4] if len(sys.argv) > 4 else ""}
+        history_data = [t for t in history_data if t["torrent"] != torrent_name]
+        history_data.insert(0, current_task)
+        history_data = history_data[:20]
+        
+        with open(history_file, "w", encoding="utf-8") as hf:
+            json.dump(history_data, hf, ensure_ascii=False, indent=2)
+    except: pass
+    # ========================================================
+    # 🎯 提取优化：有中文只用中文，没中文才保留英文
+    # ========================================================
+    cleaned_search = re.sub(r'\[剧集\]|【剧集】|\[更新\]|【更新】|\[高清.*?\]|【高清制作.*?】', '', torrent_name)
+    cn_match = re.search(r'([\u4e00-\u9fa5][\u4e00-\u9fa50-9：·！，—、\s]*)', cleaned_search)
+    
+    if cn_match and cn_match.group(1).strip():
+        pure_drama_name = cn_match.group(1).strip()
     else:
-        cn_front = re.search(r'([\u4e00-\u9fa5]+)', torrent_name.split('.')[0])
-        if cn_front:
-            pure_drama_name = cn_front.group(1)
-        else:
-            clean_name = re.sub(r'^\[.*?\]|\(.*?\)', '', torrent_name).strip().lstrip('.')
-            pure_drama_name = clean_name.split('.')[0].split(' ')[0].strip()
+        clean_name = re.sub(r'^\[.*?\]|【.*?】|\(.*?\)', '', torrent_name).strip().lstrip('.')
+        pure_drama_name = clean_name.split('.')[0].strip()
+        
+    pure_drama_name = re.sub(r'第.*?季|S\d+|Season\s*\d+', '', pure_drama_name, flags=re.IGNORECASE).strip()
 
-    pure_drama_name = re.sub(r'第.*?季|S\d+', '', pure_drama_name, flags=re.IGNORECASE).strip()
     m_season = re.search(r'(?i)S(\d+)', torrent_name)
     folder_season = int(m_season.group(1)) if m_season else 1
     
@@ -866,6 +903,7 @@ async def main():
         
         if os.path.exists(final_cas_path):
             await notify_steward_log(f"⏭️ [天翼跳过] 侦测到本地已存在镜像 `{cas_file_name}`，执行跳过处理。")
+            await trigger_189_local_script(local_cas_dir)
             continue 
 
         await notify_steward_log(f"🚚 [主盘流转] 正在原样运送: `{actual_video_name}` ➔ 天翼云端 (5244)")
@@ -890,8 +928,7 @@ async def main():
                             if not chunk: break
                             yield chunk
 
-                    # 🛡️ 核心修改：read=None (无限期耐心等待，防止139等慢速网盘超时卡死报错)
-                    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=None, write=120.0, pool=None)) as client:
+                    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=None, write=None, pool=None)) as client:
                         resp = await client.put(put_url, content=file_iter(), headers=headers)
                         
                 if resp.json().get("code") == 200:
@@ -901,12 +938,15 @@ async def main():
                     success_msg = f"<b>{actual_video_name}</b><br>在第 {attempt + 1} 次尝试后成功传至云端！"
                     asyncio.create_task(send_push_notification("✅ PT入库成功", success_msg))
                     
-                    # 拉取天翼的CAS
                     await bg_fetch_cas_task(cas_target_full, final_cas_path, sub_path, cas_file_name, OLIST_URL, OLIST_TOKEN, "天翼")
+                    
+                    # 🌟 修正：传完并拿到 CAS 后，把本地真实的 CAS 文件夹路径喂给 5555 脚本
+                    await trigger_189_local_script(local_cas_dir)
+                    
                     break 
                 else:
                     err_json = resp.json().get('message')
-                    await notify_steward_log(f"⚠️ [天翼拒收] `{actual_video_name}` 第 {attempt+1} 次失败: {err_json}", level="WARNING")
+                    await notify_steward_log(f"⚠️ [天翼遭拒] `{actual_video_name}` 第 {attempt+1} 次失败: {err_json}", level="WARNING")
                     
             except Exception as e:
                 await notify_steward_log(f"⚠️ [网络异常] `{actual_video_name}` 第 {attempt+1} 次崩溃: {e}", level="WARNING")
@@ -925,89 +965,165 @@ async def main():
 
 
     # ========================================================
-    # 🏁 阶段二：移动备盘独立双传队列 (慢火细熬，绝不拖累主盘)
+    # 🏁 阶段二：移动备盘 (As-Task 后台任务队列流)
     # ========================================================
     if is_double_upload:
-        await notify_steward_log(f"🚀 [备盘交接启动] 开始将刚才的剧集排队备份至移动云盘 (慢慢传不着急)...")
-        
-        for actual_video_path, actual_video_name in video_tasks:
-            if not os.path.exists(actual_video_path):
-                continue
-                
-            total_bytes = os.path.getsize(actual_video_path)
-            ep_num = extract_pure_episode(actual_video_name, drama_anchor=pure_drama_name)
-            if ep_num is None:
-                ep_num = extract_pure_episode(torrent_name, drama_anchor=pure_drama_name)
-
-            if is_movie:
-                m_target_dir = f"{MOBILE_MOUNT_ROOT}/{category}/{folder_name}"
-            else:
-                if ep_num is None:
-                    continue 
-                m_target_dir = f"{MOBILE_MOUNT_ROOT}/{category}/{folder_name}/Season {folder_season}"
-
-            m_target_full = f"{m_target_dir}/{actual_video_name}".replace("//", "/")
+        if not OLIST_139_TOKEN:
+            await notify_steward_log(f"❌ [配置错误] 未填写 OLIST_139_TOKEN，无法启动 139 上传逻辑！", level="ERROR")
+            return
             
-            # [移动盘] 本地 CAS 检查
-            cas_file_name = f"{actual_video_name}.cas"
-            m_cas_target_full = f"{m_target_full}.cas"
-            m_sub_path = m_target_dir.replace(MOBILE_MOUNT_ROOT, "", 1)
-            m_local_cas_dir = f"{MOBILE_STAGING_BASE_DIR}{m_sub_path}".replace("//", "/")
+        await notify_steward_log(f"🚀 [备盘战术启动] 拦截到双传信号，启动 OpenList 内部任务级排队序列...")
+
+        async def process_139_episode(video_path, video_name):
+            m_target_dir = f"{MOBILE_MOUNT_ROOT}/{category}/{folder_name}" if is_movie else f"{MOBILE_MOUNT_ROOT}/{category}/{folder_name}/Season {folder_season}"
+            m_target_full = f"{m_target_dir}/{video_name}".replace("//", "/")
+            cas_file_name = f"{video_name}.cas"
+            m_sub_path = m_target_dir.replace(MOBILE_MOUNT_ROOT, "", 1).lstrip("/")
+            m_local_cas_dir = f"{MOBILE_STAGING_BASE_DIR}/{m_sub_path}".replace("//", "/")
             m_final_cas_path = os.path.join(m_local_cas_dir, cas_file_name)
             
             if os.path.exists(m_final_cas_path):
-                await notify_steward_log(f"⏭️ [移动跳过] 侦测到本地已存在移动镜像 `{cas_file_name}`，执行跳过处理。")
-                continue
+                await notify_steward_log(f"⏭️ [移动跳过] 侦测到已存在镜像 `{cas_file_name}`。")
+                await trigger_strm_sync("139", m_target_dir)
+                return True
 
-            await notify_steward_log(f"🚚 [备盘流转] 正在原样运送: `{actual_video_name}` ➔ 移动云端 (5255)")
+            total_bytes = os.path.getsize(video_path)
+            retry_count = 0
             
-            m_put_url = f"{MOBILE_OLIST_URL}/api/fs/put"
-            m_headers = {
-                "Authorization": MOBILE_OLIST_TOKEN,
-                "File-Path": quote(m_target_full),
-                "Content-Length": str(total_bytes),
-                "Content-Type": "application/octet-stream"
-            }
-            
-            m_upload_success = False
-            for m_attempt in range(max_upload_retries):
+            while True:
                 try:
-                    with open(actual_video_path, "rb") as f_in_m:
-                        async def file_iter_m():
-                            while True:
-                                chunk_m = f_in_m.read(2 * 1024 * 1024)
-                                if not chunk_m: break
-                                yield chunk_m
-                                
-                        # 🛡️ 核心修改：read=None (移动盘特供，无限期等待响应)
-                        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=None, write=120.0, pool=None)) as m_client:
-                            m_resp = await m_client.put(m_put_url, content=file_iter_m(), headers=m_headers)
-                            
-                    if m_resp.json().get("code") == 200:
-                        m_upload_success = True
-                        os.makedirs(m_local_cas_dir, exist_ok=True)
-                        await notify_steward_log(f"✅ [双传完毕] `{actual_video_name}` 移动云盘接收成功！")
-                        # 拉取移动盘专属的 CAS
-                        await bg_fetch_cas_task(m_cas_target_full, m_final_cas_path, m_sub_path, cas_file_name, MOBILE_OLIST_URL, MOBILE_OLIST_TOKEN, "移动")
+                    # 1. 检查是否已经在云端任务列表中
+                    already_queued = False
+                    try:
+                        async with httpx.AsyncClient(timeout=10.0) as h:
+                            u_resp = await h.get(f"{OLIST_139_URL}/api/admin/task/upload/undone", headers={"Authorization": OLIST_139_TOKEN})
+                            if u_resp.status_code == 200 and u_resp.json().get("code") == 200:
+                                for t in u_resp.json().get("data", []):
+                                    if video_name in t.get("name", ""):
+                                        already_queued = True
+                                        break
+                    except: pass
+
+                    # 2. 不在列表中则提交上传任务
+                    if not already_queued:
+                        await notify_steward_log(f"🚚 [139战术] 正在提交 `{video_name}` 到云端上传队列...")
+                        put_url = f"{OLIST_139_URL}/api/fs/put"
+                        headers = {
+                            "Authorization": OLIST_139_TOKEN, 
+                            "File-Path": quote(m_target_full), 
+                            "Content-Length": str(total_bytes), 
+                            "Content-Type": "application/octet-stream",
+                            "As-Task": "true" 
+                        }
                         
-                        # 🌟 新增：触发移动盘 STRM 局部生成
-                        await trigger_strm_sync("139", m_target_dir)
-                        break
+                        with open(video_path, "rb") as f_upload:
+                            async def file_iter_139():
+                                chunk_size = 1024 * 1024
+                                while True:
+                                    chunk = f_upload.read(chunk_size)
+                                    if not chunk: break
+                                    yield chunk
+                            
+                            async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=None, write=None, pool=None), trust_env=False) as h:
+                                resp = await h.put(put_url, content=file_iter_139(), headers=headers)
+                        
+                        if resp.status_code != 200:
+                            raise Exception(f"HTTP状态码异常: {resp.status_code}")
+                        resp_data = resp.json()
+                        if resp_data.get("code") != 200:
+                            raise Exception(f"API报错: {resp_data.get('message', '未知错误')}")
                     else:
-                        m_err_json = m_resp.json().get('message')
-                        await notify_steward_log(f"⚠️ [移动盘拒收] `{actual_video_name}` 第 {m_attempt+1} 次失败: {m_err_json}", level="WARNING")
+                        await notify_steward_log(f"🔄 [139接管] 云端已有任务 `{video_name}`，直接接管监控...")
+
+                    # 3. 轮询查岗防假死
+                    upload_undone_url = f"{OLIST_139_URL}/api/admin/task/upload/undone"
+                    poll_fs_url = f"{OLIST_139_URL}/api/fs/get"
+                    poll_fs_path = f"{m_target_full}.cas"
+                    clear_done_url = f"{OLIST_139_URL}/api/admin/task/upload/clear_done"
+                    
+                    cloud_start_time = time.time()
+                    
+                    while True:
+                        await asyncio.sleep(5.0)
+                        task_in_undone = False
+                        
+                        try:
+                            async with httpx.AsyncClient(timeout=10.0) as h:
+                                undone_resp = await h.get(upload_undone_url, headers={"Authorization": OLIST_139_TOKEN})
+                                if undone_resp.status_code == 200 and undone_resp.json().get("code") == 200:
+                                    tasks = undone_resp.json().get("data", [])
+                                    for t in tasks:
+                                        if video_name in t.get("name", ""):
+                                            task_in_undone = True
+                                            break
+                        except: pass
+                            
+                        if task_in_undone:
+                            if time.time() - cloud_start_time > 14400: # 4小时硬超时
+                                raise Exception("139云端上传任务执行超时！")
+                            continue
+                            
+                        # 任务已不在进行中，核验 CAS 是否存在
+                        try:
+                            async with httpx.AsyncClient(timeout=10.0) as h:
+                                fs_resp = await h.post(poll_fs_url, json={"path": poll_fs_path}, headers={"Authorization": OLIST_139_TOKEN, "Content-Type": "application/json"})
+                                fs_data = fs_resp.json()
+                                if fs_data.get("code") == 200:
+                                    pass 
+                                else:
+                                    raise Exception("上传任务已消失，且139云端无CAS文件，判定任务彻底失败")
+                        except Exception as e:
+                            if "彻底失败" in str(e): raise e
+                            raise Exception(f"校验139云端CAS文件异常: {e}")
+                        break 
+                        
+                    # 尝试清理已完成任务记录
+                    try:
+                        async with httpx.AsyncClient(timeout=5.0) as h:
+                            await h.post(clear_done_url, headers={"Authorization": OLIST_139_TOKEN})
+                    except: pass
+
+                    # 4. 下载特征码并通知管家
+                    os.makedirs(m_local_cas_dir, exist_ok=True)
+                    
+                    await bg_fetch_cas_task(
+                        cas_target_full=poll_fs_path, 
+                        final_cas_path=m_final_cas_path, 
+                        sub_path=m_sub_path, 
+                        cas_file_name=cas_file_name, 
+                        olist_url=OLIST_139_URL, 
+                        olist_token=OLIST_139_TOKEN, 
+                        disk_name="139"
+                    )
+                    
+                    await trigger_strm_sync("139", m_target_dir)
+                    await notify_steward_log(f"✅ [139战术完毕] `{video_name}` 特征码拉取成功！")
+                    return True
+                    
                 except Exception as e:
-                    await notify_steward_log(f"⚠️ [移动盘异常] `{actual_video_name}` 第 {m_attempt+1} 次崩溃: {e}", level="WARNING")
+                    retry_count += 1
+                    delay = 120 if retry_count == 1 else (300 if retry_count == 2 else (600 if retry_count == 3 else (900 if retry_count == 4 else 1800)))
+                    await notify_steward_log(f"⚠️ [139上传重试] `{video_name}` 报错: {str(e)[:100]}, 等待 {delay}s ({retry_count}/5)", level="WARNING")
                     
-                if m_attempt < max_upload_retries - 1:
-                    m_wait_sec = 300 * (m_attempt + 1)
-                    await notify_steward_log(f"⏳ [防风控保护-移动] 等待 {m_wait_sec // 60} 分钟后重试...")
-                    await asyncio.sleep(m_wait_sec)
-                    
-            if not m_upload_success:
-                await notify_steward_log(f"❌ [双传失败] `{actual_video_name}` 移动盘最终上传失败。", level="ERROR")
-                
-        await notify_steward_log(f"🏁 [移动备盘完毕] 该种子的所有增量视频也已全部完成移动云盘备份！")
+                    if retry_count >= 5:
+                        await notify_steward_log(f"❌ [139彻底挂起] `{video_name}` 失败达到 5 次，当前视频上传终止！", level="ERROR")
+                        return False
+                        
+                    await asyncio.sleep(delay)
+
+        # 并发锁定
+        CONCURRENT_LIMIT = 2
+        semaphore = asyncio.Semaphore(CONCURRENT_LIMIT)
+
+        async def run_with_sem(path, name):
+            async with semaphore:
+                return await process_139_episode(path, name)
+
+        await notify_steward_log(f"🚄 [多发引擎启动] 已开启 {CONCURRENT_LIMIT} 线程并发模式处理139备盘！")
+        tasks = [run_with_sem(path, name) for path, name in video_tasks]
+        await asyncio.gather(*tasks)
+        
+        await notify_steward_log(f"🏁 [移动备盘完毕] 所有 139 增量任务全量清空入库！")
 
 if __name__ == "__main__":
     asyncio.run(main())
