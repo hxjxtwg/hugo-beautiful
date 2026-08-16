@@ -162,6 +162,7 @@ app = Client(
 # 🚦 全局大盘与锁
 GLOBAL_ROUTE_CACHE = {"folder_name": "", "category": "", "folder_season": 1, "file_season": 1, "year": "", "version": "", "expire_time": 0, "manual_ep": None, "enable_139": False, "enable_xm": False}
 GLOBAL_ACTIVE_LOCKS = set() 
+GLOBAL_MEDIA_GROUPS = {}  # 🔥 新增：用于跟踪相册合并发送的无字天书
 GLOBAL_CANCEL_TASKS = set() 
 GLOBAL_TRACKED_GIDS = set()  
 ORPHAN_PROMPTED_GIDS = set() 
@@ -333,9 +334,24 @@ def extract_pure_episode(search_text, drama_anchor=None):
     if m_trail and not (1900 < int(m_trail.group(1)) < 2100): return int(m_trail.group(1))
     return None
 
-def extract_movie_part(search_text):
-    m = re.search(r'(?i)(?:cd|part|pt)[\s_.-]*(\d{1,2})(?!\d)', search_text)
-    if m: return f"cd{m.group(1)}" 
+def extract_split_part(search_text):
+    # 1. 兼容老外标准的 CD/Part/PT，以及中文的“部分”
+    m1 = re.search(r'(?i)(?:cd|part|pt|部分)[\s_.-]*(\d{1,2})(?!\d)', search_text)
+    if m1: return f"pt{m1.group(1)}"
+    
+    m2 = re.search(r'第\s*(\d{1,2})\s*部分', search_text)
+    if m2: return f"pt{m2.group(1)}"
+    
+    # 2. 兼容中文 (上) (中) (下) 或者 上篇、下部、上卷
+    m_cn = re.search(r'[(（【\[]\s*(上|中|下)\s*[)）】\]]|(上|中|下)(?:篇|部|卷|集)', search_text)
+    if m_cn:
+        val = m_cn.group(1) or m_cn.group(2)
+        return {"上": "pt1", "中": "pt2", "下": "pt3"}.get(val, "")
+        
+    # 3. 兼容简单粗暴的连字符格式，如 15-1, 15-2
+    m_dash = re.search(r'(?<!\d)\d{1,3}-(\d{1})(?!\d)', search_text)
+    if m_dash: return f"pt{m_dash.group(1)}"
+    
     return ""
 
 def extract_media_tags(search_text):
@@ -778,7 +794,7 @@ async def magnet_upload_task(local_path, target_dir_189, cat, folder_name, folde
                             os.makedirs(local_cas_dir_139, exist_ok=True)
                             final_cas_path_139 = os.path.join(local_cas_dir_139, f"{standard_name}.cas")
                             
-                            sync_url_139 = f"{STEWARD_BASE_URL}/api/sync?drive=139&path={quote(final_cloud_dir_139)}"
+                            sync_url_139 = f"{HARVEST_BASE_URL}/api/trigger_139?path={quote(final_cloud_dir_139)}"
                             
                             asyncio.create_task(bg_fetch_cas_task(
                                 cas_target_full=poll_fs_path, 
@@ -1066,7 +1082,7 @@ async def bg_upload_retry_task(local_path, target_dir_189, cat, folder_name, fol
                             os.makedirs(local_cas_dir_139, exist_ok=True)
                             final_cas_path_139 = os.path.join(local_cas_dir_139, f"{standard_name}.cas")
                             
-                            sync_url_139 = f"{STEWARD_BASE_URL}/api/sync?drive=139&path={quote(final_cloud_dir_139)}"
+                            sync_url_139 = f"{HARVEST_BASE_URL}/api/trigger_139?path={quote(final_cloud_dir_139)}"
                             
                             asyncio.create_task(bg_fetch_cas_task(
                                 cas_target_full=poll_fs_path, 
@@ -2063,17 +2079,46 @@ async def media_routing_gateway(client, message):
             file_size_mb = media.file_size / (1024 * 1024) if getattr(media, "file_size", 0) else 0
             if not (min_mb <= file_size_mb <= max_mb): return 
             
-            if db_file_version:
-                combined_physical_tags = db_file_version.replace('.', '.')
-                combined_history_tags = (db_file_version + "." + db_version).strip('.')
-            else:
-                auto_list = extract_media_tags(text_to_scan).split('.')
-                res_list = [t for t in auto_list if t.lower() in ["2160p", "1080p", "720p", "4k", "8k"]]
-                temp_tags = res_list + (db_version.split('.') if db_version else [])
-                combined_physical_tags = ".".join(dict.fromkeys([t for t in temp_tags if t]))
-                combined_history_tags = combined_physical_tags
+            # 🔥 统一的“上下集/相册”双重识别逻辑
+            split_part_tag = extract_split_part(text_to_scan)
+            if not split_part_tag and getattr(message, 'media_group_id', None):
+                mg_id = message.media_group_id
+                if mg_id not in GLOBAL_MEDIA_GROUPS:
+                    GLOBAL_MEDIA_GROUPS[mg_id] = {"count": 1, "msgs": {message.id: 1}}
+                elif message.id not in GLOBAL_MEDIA_GROUPS[mg_id]["msgs"]:
+                    GLOBAL_MEDIA_GROUPS[mg_id]["count"] += 1
+                    GLOBAL_MEDIA_GROUPS[mg_id]["msgs"][message.id] = GLOBAL_MEDIA_GROUPS[mg_id]["count"]
+                split_part_tag = f"pt{GLOBAL_MEDIA_GROUPS[mg_id]['msgs'][message.id]}"
+
+            # 重新组装物理标签
+            auto_tags = extract_media_tags(text_to_scan)
+            auto_list = auto_tags.split('.') if auto_tags else []
+            f_list = db_file_version.split('.') if db_file_version else []
+            res_list = [t for t in auto_list if t.lower() in ["2160p", "1080p", "720p", "4k", "8k"]]
+            other_auto = [t for t in auto_list if t not in res_list]
+
+            raw_physical_tags = []
+            if split_part_tag: raw_physical_tags.append(split_part_tag) 
+            raw_physical_tags.extend(res_list); raw_physical_tags.extend(f_list); raw_physical_tags.extend(other_auto) 
             
+            final_physical_tags = []
+            seen_physical = set()
+            for t in raw_physical_tags:
+                if t and t.lower() not in seen_physical: final_physical_tags.append(t); seen_physical.add(t.lower())
+            combined_physical_tags = ".".join(final_physical_tags)
             ver_tag_physical = f".{combined_physical_tags}" if combined_physical_tags else ""
+
+            # 重新组装历史标签
+            raw_history_tags = []
+            if split_part_tag: raw_history_tags.append(split_part_tag)
+            raw_history_tags.extend(res_list); raw_history_tags.extend(f_list)   
+            if db_version: raw_history_tags.extend(db_version.split('.'))
+            
+            final_history_tags = []
+            seen_history = set()
+            for t in raw_history_tags:
+                if t and t.lower() not in seen_history: final_history_tags.append(t); seen_history.add(t.lower())
+            combined_history_tags = ".".join(final_history_tags)
             ver_tag_history = f".{combined_history_tags}" if combined_history_tags else ""
             
             folder_season = route_info.get("folder_season", route_info.get("file_season", 1))
@@ -2086,15 +2131,27 @@ async def media_routing_gateway(client, message):
             if db_version: folder_name = f"{folder_name} {db_version}"  
             
             clean_base_for_check = pure_drama_name.replace(" ", ".")
-            if check_history(clean_base_for_check, file_season, ep_num, combined_history_tags): return
+            
+            # 🔥 电影和剧集双轨防重校验与发车提示
+            if is_movie:
+                # 如果是电影，ep_num 往往是 None，不需要集数，只要标签对得上就行
+                if check_history(clean_base_for_check, file_season, 1, combined_history_tags): return
+                display_msg = f"🎯 **[Auto Scan]**\n🎬 `{search_kw}` ({db_version or '默认'})"
+            else:
+                if ep_num is None: return # 如果是剧集却提取不到集数，视为垃圾视频直接扔掉
+                if check_history(clean_base_for_check, file_season, ep_num, combined_history_tags): return
+                display_msg = f"🎯 **[Auto Scan]**\n📺 `{search_kw}` ({db_version or '默认'}) ➔ S{file_season:02d}E{ep_num:02d}"
             
             # 🔥 提取 enable_139 和 enable_xm
             enable_139 = route_info.get("enable_139", False)
             enable_xm = route_info.get("enable_xm", False)
+            
             # 把 enable_xm 加进元组 (放到第13个位置)
             override_info = (folder_name, route_info["category"], folder_season, file_season, year, ep_num, db_version, db_file_version, matched_channel, drama_key, route_info.get("end_ep", 9999), enable_139, enable_xm)
-            try: status = await client.send_message(COMMAND_CENTER_CHAT, f"🎯 **[Auto Scan]**\n📺 `{search_kw}` ➔ S{file_season:02d}E{ep_num:02d}")
-            except: status = await client.send_message("me", f"🎯 **[Auto Scan]**\n📺 `{search_kw}` ➔ S{file_season:02d}E{ep_num:02d}")
+            
+            try: status = await client.send_message(COMMAND_CENTER_CHAT, display_msg)
+            except: status = await client.send_message("me", display_msg)
+            
             asyncio.create_task(process_media_transfer(client, message, status, override_info))
             return
     except: pass
@@ -2146,7 +2203,17 @@ async def process_media_transfer(client, message, status, override_info=None):
     text_to_scan = f"{message.caption or ''} {raw_file}"
     auto_tags = extract_media_tags(text_to_scan)
     is_movie = "电影" in cat or cat in ["演唱会", "纪录片"]
-    movie_part_tag = extract_movie_part(text_to_scan) if is_movie else ""
+    
+    # 🔥 双重识别逻辑（相册无字天书防重）
+    split_part_tag = extract_split_part(text_to_scan)
+    if not split_part_tag and getattr(message, 'media_group_id', None):
+        mg_id = message.media_group_id
+        if mg_id not in GLOBAL_MEDIA_GROUPS:
+            GLOBAL_MEDIA_GROUPS[mg_id] = {"count": 1, "msgs": {message.id: 1}}
+        elif message.id not in GLOBAL_MEDIA_GROUPS[mg_id]["msgs"]:
+            GLOBAL_MEDIA_GROUPS[mg_id]["count"] += 1
+            GLOBAL_MEDIA_GROUPS[mg_id]["msgs"][message.id] = GLOBAL_MEDIA_GROUPS[mg_id]["count"]
+        split_part_tag = f"pt{GLOBAL_MEDIA_GROUPS[mg_id]['msgs'][message.id]}"
     
     clean_base = re.sub(r'\s*\(\d{4}\)', '', folder).strip()
     if version_suffix and clean_base.endswith(version_suffix): clean_base = clean_base[:-len(version_suffix)].strip()
@@ -2157,9 +2224,11 @@ async def process_media_transfer(client, message, status, override_info=None):
     res_list = [t for t in auto_list if t.lower() in ["2160p", "1080p", "720p", "4k", "8k"]]
     other_auto = [t for t in auto_list if t not in res_list]
 
+    # 🔥 找回被我漏掉的物理标签去重逻辑
     raw_physical_tags = []
-    if movie_part_tag: raw_physical_tags.append(movie_part_tag) 
+    if split_part_tag: raw_physical_tags.append(split_part_tag) 
     raw_physical_tags.extend(res_list); raw_physical_tags.extend(f_list); raw_physical_tags.extend(other_auto) 
+    
     final_physical_tags = []
     seen_physical = set()
     for t in raw_physical_tags:
@@ -2167,10 +2236,12 @@ async def process_media_transfer(client, message, status, override_info=None):
     combined_physical_tags = ".".join(final_physical_tags)
     ver_tag_physical = f".{combined_physical_tags}" if combined_physical_tags else ""
     
+    # 🔥 找回被我漏掉的历史标签去重逻辑
     raw_history_tags = []
-    if movie_part_tag: raw_history_tags.append(movie_part_tag)
+    if split_part_tag: raw_history_tags.append(split_part_tag)
     raw_history_tags.extend(res_list); raw_history_tags.extend(f_list)   
     if version_suffix: raw_history_tags.extend(version_suffix.split('.'))
+    
     final_history_tags = []
     seen_history = set()
     for t in raw_history_tags:
@@ -2179,6 +2250,21 @@ async def process_media_transfer(client, message, status, override_info=None):
     ver_tag_history = f".{combined_history_tags}" if combined_history_tags else ""
     
     current_mount = get_mount_root()
+    
+    # 🔥 Emby 尊享级补丁：针对“剧场版”或“特别篇”被放进剧集分类的情况。
+    if not is_movie:
+        # 1. 嗅探是否为剧场版/特别篇
+        is_special = "剧场版" in text_to_scan or "特别篇" in text_to_scan or "ova" in text_to_scan.lower() or "sp" in text_to_scan.lower() or file_season == 0
+        
+        # 2. 如果是特别篇，强制将其分配到 S00 航线！
+        if is_special:
+            file_season = 0
+            folder_season = 0
+            
+        # 3. 如果没抓到集数，但有分段标签（如下篇 pt2），或者它是剧场版，为了防止被当成垃圾扔掉，默认设为第 1 集（即 S00E01）
+        if ep_num is None and (split_part_tag or is_special):
+            ep_num = 1
+            
     if is_movie:
         standard_name = f"{clean_base}.{year}{ver_tag_physical}{ext}" if year else f"{clean_base}{ver_tag_physical}{ext}"
         target_dir_189 = f"{current_mount}/{cat}/{folder}"
@@ -2197,7 +2283,7 @@ async def process_media_transfer(client, message, status, override_info=None):
         ep_str = f"{ep_num:02d}"
         target_dir_189 = f"{current_mount}/{cat}/{folder}/Season {folder_season}"
         standard_name = f"{clean_base}.S{file_season:02d}E{ep_str}.{year}{ver_tag_physical}{ext}" if year else f"{clean_base}.S{file_season:02d}E{ep_str}{ver_tag_physical}{ext}"
-        
+
     task_lock_key = f"{clean_base}.S{file_season:02d}E{ep_num:02d}{ver_tag_history}" if not is_movie else f"{clean_base}{ver_tag_history}"
     if task_lock_key in GLOBAL_ACTIVE_LOCKS:
         try: await status.delete()

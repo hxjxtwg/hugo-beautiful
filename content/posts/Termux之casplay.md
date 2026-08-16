@@ -1319,9 +1319,6 @@ def play():
                 if final_return_url:
                     with cache_lock: native_link_cache[f_md5] = (final_return_url, time.time() + 7200)
                     logger.info(f"✅ [5] 完美触发！拿到 189 官方直链！")
-                    
-                    if final_return_url.startswith("http://"):
-                        final_return_url = final_return_url.replace("http://", "https://", 1)
                         
                     logger.info(f"[播放放行] 节点: {urllib.parse.urlparse(final_return_url).netloc} | 地址: {truncate_url(final_return_url)}")
                     logger.info(f"========== 🕵️‍♂️ 原生直连(模式B) 链路日志 END ==========\n")
@@ -1395,9 +1392,6 @@ def play():
                         if status_code in [301, 302, 303, 307, 308]:
                             final_cdn_url = headers_dict.get('Location')
                             if final_cdn_url:
-                                if final_cdn_url.startswith("http://"):
-                                    final_cdn_url = final_cdn_url.replace("http://", "https://", 1)
-                                
                                 # ++++ 🚀 拿到直链后，写入缓存 (有效期 2 分钟) ++++
                                 with cache_lock:
                                     native_link_cache[file_path_param] = (final_cdn_url, time.time() + 120)
@@ -1409,8 +1403,6 @@ def play():
                                 logger.error(f"❌ {log_tag} 缺失直链跳转地址")
                                 return "缺失直链", 500
                         elif status_code in [200, 206]:
-                            if raw_url.startswith("http://"):
-                                raw_url = raw_url.replace("http://", "https://", 1)
                             
                             # ++++ 🚀 拿到直链后，写入缓存 (有效期 2 分钟) ++++
                             with cache_lock:
@@ -1686,10 +1678,7 @@ def play():
                                     logger.error(f"[{log_channel_name}异常] 所有可用配置通道均已失败: {e}")
                                 continue # 触发循环的下一次执行，完美接力！
             
-            if download_url:
-                if download_url.startswith("http://"):
-                    download_url = download_url.replace("http://", "https://", 1)
-                    
+            if download_url:                   
                 parsed = urllib.parse.urlparse(download_url)
                 is_p = False
                 with cache_lock:

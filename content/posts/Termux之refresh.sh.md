@@ -140,6 +140,15 @@ fi
 
 TARGET_PATH="$1"
 
+# 🌟 新增：判断路径类型
+if [[ "$TARGET_PATH" == /storage/* ]]; then
+    IS_LOCAL_PATH=true
+    echo "📁 检测到本地物理路径 (STRM/CAS)，跳过 OpenList 云端扫描..."
+else
+    IS_LOCAL_PATH=false
+    echo "☁️ 检测到云端直连路径，启动 OpenList 缓存穿透..."
+fi
+
 scan_dir() {
     local CURRENT_PATH="$1"
     echo "🚀 正在刷新并探测: $CURRENT_PATH"
@@ -162,17 +171,24 @@ scan_dir() {
     done
 }
 
-echo "==================================="
-echo "🌟 接收到调度指令，开始执行: $TARGET_PATH"
-scan_dir "$TARGET_PATH"
-echo "🎉 OpenList 专项目录任务已下发完毕！"
+# 🌟 智能路由：只有云端路径才走 scan_dir
+if [ "$IS_LOCAL_PATH" = false ]; then
+    echo "==================================="
+    echo "🌟 接收到调度指令，开始执行云端穿透: $TARGET_PATH"
+    scan_dir "$TARGET_PATH"
+    echo "🎉 OpenList 专项目录任务已下发完毕！"
+    
+    echo "⏳ 给本地网盘客户端 30 秒钟同步挂载时间..."
+    sleep 30
+else
+    # 物理路径 STRM 生成极快，只需要随便缓 3 秒钟防 Emby 数据库锁即可
+    echo "⏳ 本地 STRM 模式，缓冲 3 秒..."
+    sleep 3
+fi
 
 # ==========================================
-# 🌟 等待本地硬盘同步 strm 文件
+# 🌟 下发 Emby 精准刷新
 # ==========================================
-echo "⏳ 给硬盘 30 秒钟时间生成 strm 文件..."
-sleep 30
-
 echo "🎬 开始下发【精准局部刷新】指令，优先呼叫 Linux 主力..."
 
 # 构建只扫描当前变动目录的 JSON 载荷

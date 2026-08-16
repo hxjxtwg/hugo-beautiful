@@ -1674,4 +1674,49 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
+### 四、redo.py
+
+```
+import os
+import json
+import subprocess
+
+history_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "task_history.json")
+script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qbt_delivery.py")
+
+if not os.path.exists(history_file):
+    print("❌ 还没有任何历史任务记录！")
+    exit()
+
+with open(history_file, "r", encoding="utf-8") as f:
+    tasks = json.load(f)
+
+print("="*50)
+print("📋 最近执行的任务列表（输入编号直接重推）：")
+print("="*50)
+for idx, t in enumerate(tasks):
+    print(f"[{idx+1}] 剧名/种子: {t['torrent'][:50]}...")
+    print(    f"    分类: {t['category']} | 标签: {t['tag']}")
+print("="*50)
+
+choice = input("👉 请输入要重推的任务编号 (直接回车退出): ").strip()
+if choice.isdigit() and 1 <= int(choice) <= len(tasks):
+    selected = tasks[int(choice) - 1]
+    cmd = [
+        "python", script_path,
+        selected["torrent"],
+        selected["path"],
+        selected["category"],
+        selected["tag"]
+    ]
+    print(f"🚀 正在自动重推: {selected['torrent']}")
+    subprocess.run(cmd)
+else:
+    print("已取消。")
+```
+执行：
+```
+cd 189py&python redo.py
+```
+
 

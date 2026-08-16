@@ -209,6 +209,7 @@ API_5255_URL = "http://127.0.0.1:5255"
 DIR_139_SOURCE = "/141/141source"
 DIR_139_TARGET = "/139/139cas"
 DIR_LOCAL_CAS = "/storage/emulated/0/Download/139cas" 
+DEFAULT_139_LOCAL_STRM = "/storage/emulated/0/Download/139_strm"
 # ==========================================
 # 🛡️ 网络底层与 IPv6 拦截
 # ==========================================
@@ -852,6 +853,9 @@ def process_139_pipeline():
 
     logger.info(f"🛸 [139加工] 源区发现 {len(source_files)} 个待处理文件，启动流水线...")
     
+    # 🌟 核心：准备一个篮子，循环里只记录不刷新，整剧全部执行完只留 1 个去重目录
+    strm_dirs_to_refresh = set()
+    
     for f in source_files:
         orig_name = f["name"]
         src_dir = f["dir"]
@@ -894,7 +898,7 @@ def process_139_pipeline():
                 else:
                     try: clean_name = generate_smart_name(orig_name, src_dir) or orig_name
                     except: pass
-            
+        
         # 建立目标目录，非电影类若无 Season/季 自动补全 /Season 1
         target_dir = f"{DIR_139_TARGET}/{rel_path}".strip().replace("//", "/")
         is_movie = any(k in rel_path.lower() for k in ["电影", "movie"])
@@ -1109,7 +1113,17 @@ def process_139_pipeline():
         logger.info(f"💥 [139加工] 流水线闭环，销毁源视频: {orig_name}")
         requests.post(f"{API_5255_URL}/api/fs/remove", json={"dir": src_dir, "names": [orig_name]}, headers=headers_139).close()
         
+        # 触发管家 5000 生成 STRM
         try: requests.get(f"{API_5000_URL}/api/sync?drive=139&path={parse.quote(target_dir)}", timeout=3).close()
+        except: pass
+
+        # 🌟 算好真实的本地 strm 目录，扔进篮子（绝对不在此处开枪）
+        try:
+            s = load_json(SETTINGS_FILE)
+            local_139_strm_dir = s.get("local_139_strm_dir", DEFAULT_139_LOCAL_STRM)
+            strm_sub_dir = target_dir.replace(DIR_139_TARGET, "").strip("/")
+            real_strm_path = os.path.join(local_139_strm_dir, strm_sub_dir).replace("\\", "/")
+            strm_dirs_to_refresh.add(real_strm_path)
         except: pass
 
     # ==========================================
@@ -1117,6 +1131,25 @@ def process_139_pipeline():
     # ==========================================
     try: requests.post(f"{API_5255_URL}/api/task/copy/clear_done", headers={"Authorization": headers_139["Authorization"]}, timeout=5).close()
     except: pass
+    
+    # 🌟 终极闭环：循环处理完后，对去重后的目录统一发一次精准刷新指令！
+    if strm_dirs_to_refresh:
+        try:
+            s = load_json(SETTINGS_FILE)
+            bash_path = s.get("bash_path", DEFAULT_BASH_PATH)
+            refresh_sh = s.get("refresh_sh_path", DEFAULT_REFRESH_SH)
+            
+            def delayed_139_refresh(dirs):
+                time.sleep(5.0) # 给管家 5 秒钟写盘时间
+                for d in dirs:
+                    subprocess.Popen([bash_path, refresh_sh, d], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                    logger.info(f"⚡ [139聚合刷新] 已精准下发 Emby 刷新指令: {d}")
+                    time.sleep(1.0) # 错峰保护
+                    
+            threading.Thread(target=delayed_139_refresh, args=(strm_dirs_to_refresh,)).start()
+        except Exception as e:
+            logger.error(f"❌ [139加工] 唤醒 Emby 刷新异常: {e}")
+
 # ==========================================
 # 🌟 独立新增的 CAS 收割模块 (终极暴力认亲 + 整季合并极速批次处理版)
 # ==========================================
@@ -1420,14 +1453,39 @@ def process_cas_via_olist_api(specific_dir=None):
         # 从设置里读取你想要的模式，默认是老版的 "cas"
         strm_mode = s.get("189_strm_mode", "cas") 
         
+        # 👇 新增：准备去重篮子
+        strm_dirs_to_refresh = set()
+        
         for media_root in target_media_roots:
             olist_p = get_openlist_path(media_root)
             try:
-                # 🌟 这里的参数完美迎合了管家，把 mode 传过去
+                # 1. 派发造物指令给 5000 管家
                 requests.get(f"{API_5000_URL}/api/sync", params={"path": olist_p, "mode": strm_mode}, timeout=3).close()
-                logger.info(f"🔄 [管家] 触发目录同步: {media_root} (模式: {strm_mode})")
+                logger.info(f"🔄 [管家] 触发云端目录同步: {media_root} (模式: {strm_mode})")
+                
+                # 2. 算路：将云端路径转换为本地 STRM 物理路径并装入篮子
+                local_strm_dir = s.get("local_strm_dir", DEFAULT_LOCAL_STRM)
+                # 巧妙利用 split 切掉云端根目录前缀，得出相对子目录
+                strm_sub_dir = media_root.split(DIR_CAS_ROOT)[-1].strip("/")
+                target_local_strm_path = os.path.join(local_strm_dir, strm_sub_dir).replace("\\", "/")
+                strm_dirs_to_refresh.add(target_local_strm_path)
+                
             except Exception as e:
                 logger.debug(f"⚠️ 通知目录强刷闪断: {e}")
+                
+        # 👇 新增：异步延迟，统一精准刷新 Emby
+        if strm_dirs_to_refresh:
+            bash_path = s.get("bash_path", DEFAULT_BASH_PATH)
+            refresh_sh = s.get("refresh_sh_path", DEFAULT_REFRESH_SH)
+            
+            def delayed_harvest_refresh(dirs):
+                time.sleep(10.0) # 给管家 10 秒钟将整剧 STRM 写盘
+                for d in dirs:
+                    subprocess.Popen([bash_path, refresh_sh, d], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                    logger.info(f"⚡ [收割聚合刷新] 已精确唤醒 Emby 局部更新: {d}")
+                    time.sleep(1.0) # 错峰保护
+                    
+            threading.Thread(target=delayed_harvest_refresh, args=(strm_dirs_to_refresh,)).start()
                 
     return processed_names
 
@@ -1647,15 +1705,38 @@ def check_subscriptions(client_obj, force_target_id=None, is_first_run=False, ig
 
     if global_cas_paths:
         s = load_json(SETTINGS_FILE)
+        # 👇 新增：读取环境路径并准备篮子
+        bash_path = s.get("bash_path", DEFAULT_BASH_PATH)
+        refresh_sh = s.get("refresh_sh_path", DEFAULT_REFRESH_SH)
+        local_strm_dir = s.get("local_strm_dir", DEFAULT_LOCAL_STRM)
+        strm_dirs_to_refresh = set()
+        
         for p in global_cas_paths:
             try:
+                # 1. 派发造物指令给 5000 管家
                 requests.get(f"{API_5000_URL}/api/sync", params={"path": p}, timeout=3) 
                 logger.info(f"⚡ [API] 成功向管家后方下发同步指令: {p}")
                 notifier.send_message(f"✅ 管家同步指令已下发: {p}")
+                
+                # 2. 算路：提取出相对子目录并转成本地绝对路径，扔进篮子
+                strm_sub_dir = p.split(DIR_CAS_ROOT)[-1].strip("/")
+                target_local_strm_path = os.path.join(local_strm_dir, strm_sub_dir).replace("\\", "/")
+                strm_dirs_to_refresh.add(target_local_strm_path)
+                
             except Exception as e: 
                 logger.error(f"❌ [API] 管家服务无法联通: {e}")
                 notifier.send_message(f"❌ 管家同步无响应: {e}")
             time.sleep(1) 
+            
+        # 👇 新增：统一异步延迟精准刷新 Emby
+        if strm_dirs_to_refresh:
+            def delayed_sub_refresh(dirs):
+                time.sleep(10.0) # 等 5000 端口写盘完毕
+                for d in dirs:
+                    subprocess.Popen([bash_path, refresh_sh, d], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                    logger.info(f"⚡ [订阅聚合刷新] 已精确唤醒 Emby 局部更新: {d}")
+                    time.sleep(1.0)
+            threading.Thread(target=delayed_sub_refresh, args=(strm_dirs_to_refresh,)).start()
         
     for p in global_emby_paths:
         try:
@@ -1697,7 +1778,7 @@ def scan_local_dropbox(specific_dir=None):
     
     if specific_dir:
         logger.info(f"⏳ [投递箱] 启动智能穿透雷达，寻找 .cas 踪迹...")
-        for _ in range(15):
+        for _ in range(120):
             cas_files = [] 
             if os.path.isfile(scan_target) and scan_target.lower().endswith('.cas'):
                 cas_files.append(scan_target.replace("\\", "/"))
@@ -1709,9 +1790,9 @@ def scan_local_dropbox(specific_dir=None):
             
             # 只要抓到哪怕一个 .cas 文件，说明文件落地了！
             if cas_files:
-                time.sleep(1.0) # 给局域网 1 秒时间把内容写完，防空包
+                time.sleep(3.0) # 给局域网 1 秒时间把内容写完，防空包
                 break
-            time.sleep(1.0) # 没找到就耐心等 1 秒再看一眼
+            time.sleep(1.0) # 没找到就耐心等 3 秒再看一眼
     else:
         # 定时全量扫描
         if os.path.isfile(scan_target) and scan_target.lower().endswith('.cas'):
@@ -2295,24 +2376,96 @@ def main_control_loop(client_obj):
                             continue   
 
                         # ==========================================
-                        # 🌟 139移动云盘 专属 STRM 生成指令 (纯触发，不洗名不移动)
+                        # 🌟 139移动云盘 专属 STRM 生成指令 (全版本寻轨 + Emby精准延时刷新)
                         # ==========================================
                         elif text.startswith("同步139") or text.startswith("/sync139"):
-                            # 提取你要同步的目录
-                            target_path = text.replace("同步139", "").replace("/sync139", "").strip()
-                            if not target_path:
-                                notifier.send_message("❌ 格式错误！\n示例：同步139 /139/139cas/动漫/紫川")
+                            keyword_input = text.replace("同步139", "").replace("/sync139", "").strip()
+                            if not keyword_input:
+                                notifier.send_message("❌ 格式错误！\n示例：同步139 天才\n(也支持直接发送绝对路径)")
                                 continue
                             
-                            try:
-                                from urllib import parse
-                                # 直接向管家发送 139 专属请求
-                                url = f"{API_5000_URL}/api/sync?drive=139&path={parse.quote(target_path)}"
-                                requests.get(url, timeout=5)
-                                notifier.send_message(f"✅ 139同步指令已发送！\n📂 目标：{target_path}\n(管家已开始在后台生成 STRM)")
-                            except Exception as e:
-                                notifier.send_message(f"⚠️ 发送失败，请检查管家服务: {e}")
-                            continue    
+                            target_paths = []
+                            
+                            # 🧠 1. 判断是直接输入的绝对路径还是模糊关键词
+                            if keyword_input.startswith("/"):
+                                target_paths.append(keyword_input)
+                            else:
+                                notifier.send_message(f"🔍 启动 139 全域雷达，正在搜寻所有【{keyword_input}】版本...")
+                                try:
+                                    r_log = requests.post(f"{API_5255_URL}/api/auth/login", json={"username": OLIST_USER, "password": OLIST_PASS}, timeout=5).json()
+                                    if r_log.get("code") == 200:
+                                        h_139 = {"Authorization": r_log["data"]["token"], "Content-Type": "application/json"}
+                                        
+                                        # 读取 /139/139cas 下的所有大类目录
+                                        r_cats = requests.post(f"{API_5255_URL}/api/fs/list", json={"path": DIR_139_TARGET}, headers=h_139, timeout=5).json()
+                                        cats = [c["name"] for c in (r_cats.get("data") or {}).get("content", []) if c["is_dir"]]
+                                        
+                                        for cat in cats:
+                                            cat_path = f"{DIR_139_TARGET}/{cat}"
+                                            r_shows = requests.post(f"{API_5255_URL}/api/fs/list", json={"path": cat_path}, headers=h_139, timeout=5).json()
+                                            shows = (r_shows.get("data") or {}).get("content", [])
+                                            
+                                            for s in shows:
+                                                # 🌟 去除 break：只要包含关键词，全部录入（通吃不同压制版本、杜比视界版等）
+                                                if s["is_dir"] and keyword_input.lower() in s["name"].lower():
+                                                    show_path = f"{cat_path}/{s['name']}"
+                                                    
+                                                    # 探测是否存在 Season 目录
+                                                    r_seasons = requests.post(f"{API_5255_URL}/api/fs/list", json={"path": show_path}, headers=h_139, timeout=5).json()
+                                                    seasons = [ss["name"] for ss in (r_seasons.get("data") or {}).get("content", []) if ss["is_dir"] and "season" in ss["name"].lower()]
+                                                    
+                                                    if seasons:
+                                                        for s_name in seasons:
+                                                            target_paths.append(f"{show_path}/{s_name}")
+                                                    else:
+                                                        target_paths.append(show_path)
+                                                        
+                                        if not target_paths:
+                                            notifier.send_message(f"📭 雷达遍历完毕，未找到与【{keyword_input}】相关的文件夹。")
+                                            continue
+                                except Exception as e:
+                                    notifier.send_message(f"⚠️ 139 智能寻轨网络异常: {e}")
+                                    continue
+
+                            # 🌟 2. 批量派发给 5000 管家造物，并收集对应的本地 STRM 物理路径
+                            s = load_json(SETTINGS_FILE)
+                            local_139_strm_dir = s.get("local_139_strm_dir", DEFAULT_139_LOCAL_STRM)
+                            refresh_dirs = set()
+                            
+                            for tp in target_paths:
+                                try:
+                                    # 唤醒管家生成 STRM
+                                    requests.get(f"{API_5000_URL}/api/sync?drive=139&path={parse.quote(tp)}", timeout=5).close()
+                                    
+                                    # 推算对应的本地 STRM 目录
+                                    strm_sub_dir = tp.replace(DIR_139_TARGET, "").strip("/")
+                                    real_strm_path = os.path.join(local_139_strm_dir, strm_sub_dir).replace("\\", "/")
+                                    refresh_dirs.add(real_strm_path)
+                                except Exception as e:
+                                    logger.error(f"❌ [139手动同步] 下发异常 ({tp}): {e}")
+
+                            # 汇报命中的所有版本路径
+                            msg_list = "\n".join([f" └ 📁 <code>{p}</code>" for p in target_paths])
+                            notifier.send_message(f"🎯 成功锁定 {len(target_paths)} 个版本目标，已下发生成：\n{msg_list}")
+
+                            # 🌟 3. 异步延时精准唤醒 Emby 刷新 (给 5000 端口 5 秒写盘时间)
+                            if refresh_dirs:
+                                bash_path = s.get("bash_path", DEFAULT_BASH_PATH)
+                                refresh_sh = s.get("refresh_sh_path", DEFAULT_REFRESH_SH)
+                                
+                                def delayed_manual_139_refresh(dirs_to_refresh):
+                                    time.sleep(5.0)
+                                    for r_dir in dirs_to_refresh:
+                                        try:
+                                            subprocess.Popen([bash_path, refresh_sh, r_dir], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                                            logger.info(f"⚡ [139手动同步] 已精准唤醒 Emby 局部刷新: {r_dir}")
+                                        except Exception as err:
+                                            logger.error(f"❌ [139手动同步] 唤醒刷新失败: {err}")
+                                        time.sleep(1.0)
+                                        
+                                threading.Thread(target=delayed_manual_139_refresh, args=(refresh_dirs,)).start()
+                                
+                            continue  
 
                         # 🌟 新增的动态开关与拉取指令
                         elif text in ["开启自动收割", "开启扫描", "/ascan"]:
@@ -3398,6 +3551,47 @@ def main_control_loop(client_obj):
 trigger_app = Flask(__name__)
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
+
+# ==========================================
+# 🌟 139 外部下载脚本专属入口 (统筹生成与刷新)
+# ==========================================
+@trigger_app.route('/api/trigger_139', methods=['GET', 'POST'])
+def trigger_139():
+    target_dir = request.args.get('path')
+    if not target_dir and request.is_json:
+        target_dir = request.json.get('path')
+        
+    if target_dir:
+        def handle_139_external():
+            logger.info(f"⚡ [外部139投递] 收到闪电信号，目标: {target_dir}")
+            
+            # 1. 替下载脚本把原请求转发给 5000 端口管家去造物
+            try: requests.get(f"{API_5000_URL}/api/sync?drive=139&path={parse.quote(target_dir)}", timeout=3).close()
+            except: pass
+            
+            # 2. 算路并延迟唤醒 Emby (完美解耦)
+            try:
+                s = load_json(SETTINGS_FILE)
+                bash_path = s.get("bash_path", DEFAULT_BASH_PATH)
+                refresh_sh = s.get("refresh_sh_path", DEFAULT_REFRESH_SH)
+                
+                # 🌟 极简调用：从 settings.json 读取，读不到就直接用顶部的全局变量，绝不硬编码！
+                local_139_strm_dir = s.get("local_139_strm_dir", DEFAULT_139_LOCAL_STRM)
+                
+                # 推算：切除云端根目录 /139/139cas，拼接本地绝对路径
+                strm_sub_dir = target_dir.replace(DIR_139_TARGET, "").strip("/")
+                real_strm_path = os.path.join(local_139_strm_dir, strm_sub_dir).replace("\\", "/")
+                
+                time.sleep(5.0) # 等 5000 端口写盘结束
+                subprocess.Popen([bash_path, refresh_sh, real_strm_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                logger.info(f"⚡ [外部139投递] 已精准唤醒 Emby 刷新: {real_strm_path}")
+            except Exception as e:
+                logger.error(f"❌ [外部139投递] 唤醒 Emby 失败: {e}")
+                
+        threading.Thread(target=handle_139_external).start()
+        return "✅ 139 外部投递信号已由总控接管", 200
+        
+    return "❌ 缺少 path 参数", 400
 # ==========================================
 # 🌟 5555 端口：全域双轨智能路由 (支持本地与云端混动)
 # ==========================================

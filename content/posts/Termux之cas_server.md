@@ -148,7 +148,7 @@ HTML_TEMPLATE = r"""
 <script src="https://cdnjs.cloudflare.com/ajax/libs/js-sha256/0.9.0/sha256.min.js"></script>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-:root { --bg: #0f172a; --card: #1e293b; --border: #334155; --text: #e2e8f0; --dim: #94a3b8; --accent: #3b82f6; --accent-h: #2563eb; --ok: #22c55e; --err: #ef4444; }
+:root { --bg: #0f172a; --card: #1e293b; --border: #334155; --text: #e2e8f0; --dim: #94a3b8; --accent: #3b82f6; --accent-h: #2563eb; --ok: #22c55e; --err: #ef4444; --json: #f59e0b; }
 body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: var(--bg); color: var(--text); padding: 24px; min-height: 100vh; }
 .wrap { max-width: 850px; margin: 0 auto; }
 h1 { font-size: 22px; margin-bottom: 4px; color: #facc15; }
@@ -165,10 +165,12 @@ h1 { font-size: 22px; margin-bottom: 4px; color: #facc15; }
 .final-path-text { color: #fff; font-family: monospace; font-size: 13px; word-break: break-all; }
 
 /* 运行模式切换 */
-.mode-tabs { display: flex; gap: 10px; margin-bottom: 15px; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+.mode-tabs { display: flex; gap: 10px; margin-bottom: 15px; border-bottom: 1px solid var(--border); padding-bottom: 10px; flex-wrap: wrap; }
 .tab { padding: 8px 16px; border-radius: 6px; font-size: 13px; cursor: pointer; background: var(--border); color: var(--dim); border: none; font-weight: bold; transition: all 0.2s; }
 .tab:hover { background: #475569; }
 .tab.active { background: var(--accent); color: #fff; }
+.tab-json { border: 1px solid var(--json); color: var(--json); background: transparent; }
+.tab-json.active { background: var(--json); color: #fff; }
 
 .drop { border: 2px dashed var(--border); border-radius: 12px; padding: 35px; text-align: center; cursor: pointer; transition: all 0.2s; }
 .drop:hover, .drop.over { border-color: var(--accent); background: rgba(59,130,246,.05); }
@@ -214,7 +216,7 @@ h1 { font-size: 22px; margin-bottom: 4px; color: #facc15; }
   <p class="sub">全面支持 189天翼云(分片拼装) & 139移动云盘(SHA256) · 物理目录严格隔离存放</p>
 
   <!-- 1. Emby 路径配置 -->
-  <div class="card">
+  <div class="card" id="cardCategory">
     <div class="card-t">📁 1. 自动归档分类配置 (决定落盘文件夹)</div>
     <div class="path-builder">
       <div class="pb-group">
@@ -247,11 +249,12 @@ h1 { font-size: 22px; margin-bottom: 4px; color: #facc15; }
       </select>
       <button class="tab active" id="tabLocal" onclick="switchMode('local')">🌐 跨网络计算 </button>
       <button class="tab" id="tabServer" onclick="switchMode('server')">🖥️ 服务器本地 </button>
+      <button class="tab tab-json" id="tabJson" onclick="switchMode('json')">🔄 异构 JSON 转换/拆包</button>
     </div>
 
     <!-- 模式 A：浏览器跨网络选择计算 -->
     <div id="panelLocal">
-      <div class="drop" id="drop" onclick="document.getElementById('finput').click()">
+      <div class="drop" id="dropLocal" onclick="document.getElementById('finput').click()">
         <div style="font-size: 24px;">☁️</div>
         <div class="drop-text">点击或拖拽电脑/手机本地视频到此处<br><span style="color:#64748b;font-size:11px;">(文件添加后处于等待状态，需手动点击开始按钮执行计算)</span></div>
       </div>
@@ -276,12 +279,21 @@ h1 { font-size: 22px; margin-bottom: 4px; color: #facc15; }
       </div>
     </div>
 
+    <!-- 模式 C：异构 JSON 转换 -->
+    <div id="panelJson" style="display: none;">
+      <div class="drop" id="dropJson" onclick="document.getElementById('fjson').click()" style="border-color:var(--json)">
+        <div style="font-size: 24px;">📦</div>
+        <div class="drop-text" style="color:var(--json)">点击或拖拽别人分享的批量 JSON 文件到此处<br><span style="font-size:11px;">(自动按 JSON 内的目录结构拆分成单体 .cas 落地服务器)</span></div>
+      </div>
+      <input type="file" id="fjson" accept=".json" style="display: none;" onchange="handleJsonFile(event)">
+    </div>
+
     <!-- 任务队列面板 -->
     <div class="flist" id="flist"></div>
     
     <!-- 全局操作面板 -->
     <div class="btns">
-      <button class="btn btn-g" id="btnGo" onclick="executeTasks()">🚀 计算&归档</button>
+      <button class="btn btn-g" id="btnGo" onclick="executeTasks()">🚀 执行任务</button>
       <button class="btn btn-s" id="btnCopy" disabled onclick="copyJson()">📋 复制json</button>
       <button class="btn btn-p" id="btnZip" disabled onclick="downloadCasFile()">📥 下载.cas文件</button>
       <button class="btn btn-s" id="btnClear" onclick="resetForm()">🗑️ 清空队列</button>
@@ -307,7 +319,6 @@ let currentPayloads = [];
 const LARGE_FILE_THRESHOLD = 26 * 1024 * 1024 * 1024;
 const CHUNK_SIZE = 4 * 1024 * 1024;
 
-// 动态分片计算（对齐天翼云28G防爆机制）
 function getPartSize(fileSize) {
     if (fileSize > LARGE_FILE_THRESHOLD) {
         return 20 * 1024 * 1024;
@@ -322,16 +333,29 @@ function switchMode(mode) {
         return;
     }
     activeMode = mode;
-    if (mode === 'server') {
-        $('tabServer').classList.add('active');
-        $('tabLocal').classList.remove('active');
-        $('panelServer').style.display = 'block';
-        $('panelLocal').style.display = 'none';
-    } else {
-        $('tabServer').classList.remove('active');
+    
+    // UI Tab 切换
+    $('tabLocal').className = 'tab';
+    $('tabServer').className = 'tab';
+    $('tabJson').className = 'tab tab-json';
+    
+    $('panelLocal').style.display = 'none';
+    $('panelServer').style.display = 'none';
+    $('panelJson').style.display = 'none';
+    
+    if (mode === 'local') {
         $('tabLocal').classList.add('active');
-        $('panelServer').style.display = 'none';
         $('panelLocal').style.display = 'block';
+        $('cardCategory').style.display = 'block';
+    } else if (mode === 'server') {
+        $('tabServer').classList.add('active');
+        $('panelServer').style.display = 'block';
+        $('cardCategory').style.display = 'block';
+    } else if (mode === 'json') {
+        $('tabJson').classList.add('active');
+        $('panelJson').style.display = 'block';
+        $('cloudType').value = '139'; // 强制跳到 139 模式
+        $('cardCategory').style.display = 'none'; // 隐藏上方手动分类，因为从 json 自动读
     }
     resetForm();
 }
@@ -399,25 +423,92 @@ function fmt(b) {
 }
 
 function esc(s) { 
-    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); 
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); 
 }
 
-// 拖拽组件事件绑定
-const dropEl = $('drop');
-dropEl.addEventListener('dragover', function(e) { 
-    e.preventDefault(); 
-    dropEl.classList.add('over'); 
-});
-dropEl.addEventListener('dragleave', function() { 
-    dropEl.classList.remove('over'); 
-});
-dropEl.addEventListener('drop', function(e) {
-    e.preventDefault(); 
-    dropEl.classList.remove('over');
-    if (e.dataTransfer.files.length) {
-        handleLocalFiles({ target: { files: e.dataTransfer.files } });
-    }
-});
+// === 拖拽组件事件绑定 ===
+const bindDrop = (elId, handler) => {
+    const el = $(elId);
+    if(!el) return;
+    el.addEventListener('dragover', function(e) { e.preventDefault(); el.classList.add('over'); });
+    el.addEventListener('dragleave', function() { el.classList.remove('over'); });
+    el.addEventListener('drop', function(e) {
+        e.preventDefault(); el.classList.remove('over');
+        if (e.dataTransfer.files.length) handler({ target: { files: e.dataTransfer.files } });
+    });
+};
+bindDrop('dropLocal', handleLocalFiles);
+bindDrop('dropJson', handleJsonFile);
+
+// =====================================
+// 模式 C：异构 JSON 转换拆包逻辑
+// =====================================
+function handleJsonFile(e) {
+    const files = e.target.files;
+    if (!files.length) return;
+    const file = files[0];
+    
+    const reader = new FileReader();
+    reader.onload = function(evt) {
+        try {
+            const parsedData = JSON.parse(evt.target.result);
+            if (!Array.isArray(parsedData)) throw new Error("JSON 不是数组格式");
+            
+            $('flist').innerHTML = '';
+            localQueue = [];
+            
+            for (let i = 0; i < parsedData.length; i++) {
+                const item = parsedData[i];
+                if (!item.name || !item.sha256) continue;
+                
+                // 从长路径中抠出文件名和目录
+                // 例如: "动漫/神澜奇域无双珠 (2022)/Season 1/S01E28.mp4"
+                const normalizedPath = item.name.replace(/\\/g, '/');
+                const lastSlashIdx = normalizedPath.lastIndexOf('/');
+                let filename = normalizedPath;
+                let categoryPath = "未分类归档";
+                
+                if (lastSlashIdx !== -1) {
+                    filename = normalizedPath.substring(lastSlashIdx + 1);
+                    categoryPath = normalizedPath.substring(0, lastSlashIdx);
+                }
+                
+                // 组装成我们的标准 Payload
+                const casPayload = {
+                    name: filename,
+                    size: parseInt(item.size),
+                    md5: "",
+                    sliceMd5: "",
+                    sha256: item.sha256,
+                    create_time: String(Math.floor(Date.now() / 1000))
+                };
+                
+                // 推入队列
+                localQueue.push({
+                    file: { name: filename, size: item.size },
+                    state: 'wait',
+                    progress: 0,
+                    backendObj: null,
+                    casObj: casPayload,
+                    autoCategory: categoryPath
+                });
+            }
+            
+            if(localQueue.length > 0) {
+                renderLocalList();
+                alert(`成功解析了 ${localQueue.length} 个文件特征，点击执行任务进行落盘。`);
+            } else {
+                alert("未在 JSON 中找到有效的 name 和 sha256 字段。");
+            }
+            
+        } catch (err) {
+            alert("解析 JSON 失败: " + err.message);
+        }
+    };
+    reader.readAsText(file);
+    $('fjson').value = '';
+}
+
 
 function handleLocalFiles(e) {
     const files = e.target.files;
@@ -426,7 +517,7 @@ function handleLocalFiles(e) {
     smartExtract(files[0].name);
     
     for (let i = 0; i < files.length; i++) {
-        localQueue.push({ file: files[i], state: 'wait', progress: 0, md5: '', sliceMd5: '', backendObj: null, casObj: null });
+        localQueue.push({ file: files[i], state: 'wait', progress: 0, backendObj: null, casObj: null });
     }
     renderLocalList();
     $('finput').value = '';
@@ -441,7 +532,7 @@ function renderLocalList() {
         
         let stText = '';
         if (item.state === 'wait') stText = '⏳等待触发';
-        else if (item.state === 'work') stText = '⚙️计算中';
+        else if (item.state === 'work') stText = '⚙️处理中';
         else if (item.state === 'done') stText = '✓完成';
         else stText = '✗失败';
         
@@ -451,8 +542,13 @@ function renderLocalList() {
         if (item.backendObj) {
             badge = '<span style="color:var(--ok); font-size:12px; margin-left:8px;">[本地安全归档]</span>';
         }
+        
+        let pathTip = '';
+        if (activeMode === 'json' && item.autoCategory) {
+            pathTip = `<div style="font-size:11px; color:var(--dim);">自动归档目录: 139cas/${item.autoCategory}</div>`;
+        }
 
-        row.innerHTML = '<div class="name">' + esc(item.file.name) + badge + '</div>' +
+        row.innerHTML = '<div class="name">' + esc(item.file.name) + badge + pathTip + '</div>' +
                         '<div class="size">' + fmt(item.file.size) + '</div>' +
                         '<div class="st ' + item.state + '">' + stText + prog + '</div>';
         $('flist').appendChild(row);
@@ -465,14 +561,14 @@ async function executeTasks() {
     
     const ct = $('cloudType').value;
     
-    if (activeMode === 'local') {
+    if (activeMode === 'local' || activeMode === 'json') {
         if (localQueue.length === 0) {
-            alert("请先添加视频文件到列表！");
+            alert("请先添加文件或解析 JSON 到列表！");
             return;
         }
         const pendingTasks = localQueue.filter(q => q.state === 'wait' || q.state === 'fail');
         if (pendingTasks.length === 0) {
-            alert("所有文件已计算完毕！");
+            alert("所有文件已处理完毕！");
             return;
         }
         
@@ -491,45 +587,54 @@ async function executeTasks() {
             try {
                 let casPayload = {};
                 
-                // --- 139 移动云盘逻辑 ---
-                if (ct === '139') {
-                    const shaAlgo = sha256.create();
-                    let off = 0;
-                    while (off < item.file.size) {
-                        const end = Math.min(off + CHUNK_SIZE, item.file.size);
-                        const buf = await item.file.slice(off, end).arrayBuffer();
-                        shaAlgo.update(buf);
-                        off = end;
-                        item.progress = off / item.file.size;
-                        renderLocalList();
-                        await new Promise(r => setTimeout(r, 0));
+                // 如果是 JSON 拆包模式，不需要计算，直接用现成的 casObj
+                if (activeMode === 'json') {
+                    casPayload = item.casObj;
+                    item.progress = 1;
+                } else {
+                    // --- 139 移动云盘逻辑 ---
+                    if (ct === '139') {
+                        const shaAlgo = sha256.create();
+                        let off = 0;
+                        while (off < item.file.size) {
+                            const end = Math.min(off + CHUNK_SIZE, item.file.size);
+                            const buf = await item.file.slice(off, end).arrayBuffer();
+                            shaAlgo.update(buf);
+                            off = end;
+                            item.progress = off / item.file.size;
+                            renderLocalList();
+                            await new Promise(r => setTimeout(r, 0));
+                        }
+                        casPayload = { 
+                            name: item.file.name, 
+                            size: item.file.size, 
+                            md5: "", 
+                            sliceMd5: "", 
+                            sha256: shaAlgo.hex().toLowerCase(), 
+                            create_time: String(Math.floor(Date.now() / 1000)) 
+                        };
+                    } 
+                    // --- 189 天翼云盘逻辑 ---
+                    else {
+                        const hashes = await readLocalFileMd5(item.file, function(p) {
+                            item.progress = p;
+                            renderLocalList();
+                        });
+                        casPayload = { 
+                            name: item.file.name, 
+                            size: item.file.size, 
+                            md5: hashes.md5, 
+                            sliceMd5: hashes.sliceMd5, 
+                            create_time: String(Math.floor(Date.now() / 1000)), 
+                            cloud: '189' 
+                        };
                     }
-                    casPayload = { 
-                        name: item.file.name, 
-                        size: item.file.size, 
-                        md5: "", 
-                        sliceMd5: "", 
-                        sha256: shaAlgo.hex().toLowerCase(), 
-                        create_time: String(Math.floor(Date.now() / 1000)) 
-                    };
-                } 
-                // --- 189 天翼云盘逻辑 ---
-                else {
-                    const hashes = await readLocalFileMd5(item.file, function(p) {
-                        item.progress = p;
-                        renderLocalList();
-                    });
-                    casPayload = { 
-                        name: item.file.name, 
-                        size: item.file.size, 
-                        md5: hashes.md5, 
-                        sliceMd5: hashes.sliceMd5, 
-                        create_time: String(Math.floor(Date.now() / 1000)), 
-                        cloud: '189' 
-                    };
                 }
                 
                 const b64Str = btoa(unescape(encodeURIComponent(JSON.stringify(casPayload))));
+                
+                // 决定落盘目录：如果是 json 模式，使用自带的 autoCategory，否则使用 UI 填写的 categoryInput
+                const finalCategory = (activeMode === 'json' && item.autoCategory) ? item.autoCategory : $('categoryInput').value;
 
                 // 向后端发起写入指令，传递 cloud_type 进行物理隔离
                 const res = await fetch('/api/save_cas_only', {
@@ -538,8 +643,8 @@ async function executeTasks() {
                     body: JSON.stringify({ 
                         cas_data: casPayload, 
                         b64: b64Str, 
-                        category: $('categoryInput').value, 
-                        cloud_type: ct 
+                        category: finalCategory, 
+                        cloud_type: (activeMode === 'json' ? '139' : ct) // json模式强制落盘为139
                     })
                 });
                 const data = await res.json();
@@ -693,7 +798,11 @@ function downloadCasFile() {
     zip.generateAsync({ type: 'blob', compression: 'STORE' }).then(function(blob) {
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = 'cas_' + $('cloudType').value + '_' + new Date().getTime() + '.zip';
+        
+        // 文件名动态跟随所选云盘
+        const ct = (activeMode === 'json') ? '139' : $('cloudType').value;
+        a.download = 'cas_' + ct + '_' + new Date().getTime() + '.zip';
+        
         a.click();
         URL.revokeObjectURL(a.href);
     });
@@ -708,15 +817,17 @@ function resetForm() {
     localQueue = [];
     currentPayloads = [];
     
-    // 不重置基础类别，只清除名称和季数
     $('catName').value = ''; 
     $('catYear').value = ''; 
     $('catSeason').value = '';
+    
     if (activeMode === 'server') {
         $('serverSubPath').value = '';
         $('serverSpecificFile').value = '';
-    } else {
+    } else if (activeMode === 'local') {
         $('finput').value = '';
+    } else {
+        $('fjson').value = '';
     }
     buildPath();
 }
@@ -800,7 +911,7 @@ def api_process_server_folder():
     return jsonify({"results": results})
 
 
-# API 2：保存前端传来的 CAS 特征（本地浏览器跨网络模式）
+# API 2：保存前端传来的 CAS 特征（本地浏览器跨网络模式 & JSON 拆包模式共用）
 @app.route('/api/save_cas_only', methods=['POST'])
 def api_save_cas_only():
     req = request.get_json()
