@@ -49,6 +49,8 @@ rmh - ❎ 带剧名删除下载历史记录
 clh - ❎ 清除没订阅的下载历史记录
 clean - ⭕️ 清除下载碎片
 cancel - ⭕️ 终止下载 (all/剧名(+e01/s01)/.mp4)
+pause - 🛑 暂停下载上传
+resume - ✅ 恢复下载上传
 setdir - ❇️ 设置上传目录
 ping - 💓 查看系统是否活着、存活时间、雷达正在盯防多少部剧
 help - 📖 查看随身说明书与指令语法
@@ -166,6 +168,8 @@ GLOBAL_MEDIA_GROUPS = {}  # 🔥 新增：用于跟踪相册合并发送的无�
 GLOBAL_CANCEL_TASKS = set() 
 GLOBAL_TRACKED_GIDS = set()  
 ORPHAN_PROMPTED_GIDS = set() 
+GLOBAL_PAUSE_EVENT = asyncio.Event()  # 🔥 新增：全局暂停指令锁
+GLOBAL_PAUSE_EVENT.set()              # 🔥 新增：默认状态为绿灯通行
 
 # 🔥 核心更新：完全独立的双轨锁 (互不阻塞)
 GLOBAL_TRANSFER_LOCK = asyncio.Semaphore(1)   # TG 下载专属锁
@@ -335,23 +339,18 @@ def extract_pure_episode(search_text, drama_anchor=None):
     return None
 
 def extract_split_part(search_text):
-    # 1. 兼容老外标准的 CD/Part/PT，以及中文的“部分”
-    m1 = re.search(r'(?i)(?:cd|part|pt|部分)[\s_.-]*(\d{1,2})(?!\d)', search_text)
+    # 严格加上 \b 边界，防止乱匹配
+    m1 = re.search(r'(?i)\b(?:cd|part|pt|部分)[\s_.-]*(\d{1,2})\b', search_text)
     if m1: return f"pt{m1.group(1)}"
     
     m2 = re.search(r'第\s*(\d{1,2})\s*部分', search_text)
     if m2: return f"pt{m2.group(1)}"
     
-    # 2. 兼容中文 (上) (中) (下) 或者 上篇、下部、上卷
-    m_cn = re.search(r'[(（【\[]\s*(上|中|下)\s*[)）】\]]|(上|中|下)(?:篇|部|卷|集)', search_text)
+    m_cn = re.search(r'[(（【\[]\s*(上|中|下)\s*[)）】\]]|(上|中|下)(?:篇|部|卷)', search_text)
     if m_cn:
         val = m_cn.group(1) or m_cn.group(2)
         return {"上": "pt1", "中": "pt2", "下": "pt3"}.get(val, "")
         
-    # 3. 兼容简单粗暴的连字符格式，如 15-1, 15-2
-    m_dash = re.search(r'(?<!\d)\d{1,3}-(\d{1})(?!\d)', search_text)
-    if m_dash: return f"pt{m_dash.group(1)}"
-    
     return ""
 
 def extract_media_tags(search_text):
@@ -574,6 +573,7 @@ async def magnet_upload_task(local_path, target_dir_189, cat, folder_name, folde
                                 sent = 0
                                 chunk_size = 1024 * 1024
                                 while True:
+                                    await GLOBAL_PAUSE_EVENT.wait()  # 🔥 拦截 189 上传
                                     chunk = f_upload.read(chunk_size)
                                     if not chunk: break
                                     sent += len(chunk)
@@ -685,6 +685,7 @@ async def magnet_upload_task(local_path, target_dir_189, cat, folder_name, folde
                                     sent = 0
                                     chunk_size = 1024 * 1024
                                     while True:
+                                        await GLOBAL_PAUSE_EVENT.wait()  # 🔥 拦截 139 上传
                                         chunk = f_upload.read(chunk_size)
                                         if not chunk: break
                                         sent += len(chunk)
@@ -867,6 +868,7 @@ async def bg_upload_retry_task(local_path, target_dir_189, cat, folder_name, fol
                             sent = 0
                             chunk_size = 1024 * 1024 
                             while True:
+                                await GLOBAL_PAUSE_EVENT.wait()  # 🔥 拦截 189 补推
                                 chunk = f_upload.read(chunk_size)
                                 if not chunk: break
                                 sent += len(chunk)
@@ -973,6 +975,7 @@ async def bg_upload_retry_task(local_path, target_dir_189, cat, folder_name, fol
                                     sent = 0
                                     chunk_size = 1024 * 1024
                                     while True:
+                                        await GLOBAL_PAUSE_EVENT.wait()  # 🔥 拦截 139 上传
                                         chunk = f_upload.read(chunk_size)
                                         if not chunk: break
                                         sent += len(chunk)
@@ -1153,7 +1156,7 @@ async def handle_magnet_execution(client, message, magnet_link, config_text, res
             args.pop(i)
 
     STANDARD_CATS = ["华语剧", "欧美剧", "日韩剧", "短剧", "华语电影", "欧美电影", "日韩电影", "演唱会", "国漫", "日漫", "综艺", "纪录片"]
-    cat_idx = next((i for i, arg in enumerate(args) if arg in STANDARD_CATS), -1)
+    cat_idx = next((i for i, arg in enumerate(args) if any(arg.startswith(c) for c in STANDARD_CATS)), -1)
     if cat_idx == -1: 
         if message: 
             try: await message.reply_text("⚠️ 必须提供有效分类(如 国漫, 华语剧, 电影 等)。")
@@ -1472,11 +1475,27 @@ async def handle_magnet_execution(client, message, magnet_link, config_text, res
 # =================================================================
 STANDARD_CATS = ["华语剧", "欧美剧", "日韩剧", "短剧", "华语电影", "欧美电影", "日韩电影", "演唱会", "国漫", "日漫", "综艺", "纪录片"]
 
-@app.on_message(filters.chat(COMMAND_CENTER_CHAT) & filters.command(["sub", "unsub", "list", "add", "del", "go", "history", "ping", "rm", "clean", "scan", "rmh", "setdir", "cancel", "mag", "reup", "clh"]) & filters.user("me"))
+@app.on_message(filters.chat(COMMAND_CENTER_CHAT) & filters.command(["sub", "unsub", "list", "add", "del", "go", "history", "ping", "rm", "clean", "scan", "rmh", "setdir", "cancel", "mag", "reup", "clh", "pause", "resume"]) & filters.user("me"))
 async def manage_system_commands(client, message):
     global GLOBAL_STOP_SWEEP
     command = message.command[0].lower()
     config = load_listener_config()
+
+    if command == "pause":
+        GLOBAL_PAUSE_EVENT.clear() # 切成红灯，所有 TG 传输原地挂起
+        try: # 顺手把后端的 Aria2 下载也强行挂起，彻底榨干宽带留给 BT
+            async with httpx.AsyncClient(timeout=3.0) as h:
+                await h.post(ARIA2_RPC_URL, json={"jsonrpc":"2.0", "id":"tg", "method":"aria2.pauseAll", "params":[f"token:{ARIA2_RPC_SECRET}"]})
+        except: pass
+        return await message.reply_text("⏸️ **[System Paused]** 全线挂起！\nTG拉取、云端直推、Aria2底层引擎已全部急刹车，宽带已完全释放给 BT！")
+
+    if command == "resume":
+        GLOBAL_PAUSE_EVENT.set() # 切成绿灯，原地复活
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as h:
+                await h.post(ARIA2_RPC_URL, json={"jsonrpc":"2.0", "id":"tg", "method":"aria2.unpauseAll", "params":[f"token:{ARIA2_RPC_SECRET}"]})
+        except: pass
+        return await message.reply_text("▶️ **[System Resumed]** 封印解除！\n双轨传输引擎与 Aria2 磁力引擎恢复全速连轴转！")
     
     # 🔥 核心更新：批量本地遗留文件强制重推引擎
     if command == "reup":
@@ -1493,7 +1512,7 @@ async def manage_system_commands(client, message):
                 
         custom_year = next((args.pop(i) for i, arg in enumerate(args) if arg.isdigit() and len(arg) == 4 and (1900 < int(arg) < 2100)), None)
         
-        cat_idx = next((i for i, arg in enumerate(args) if arg in STANDARD_CATS), -1)
+        cat_idx = next((i for i, arg in enumerate(args) if any(arg.startswith(c) for c in STANDARD_CATS)), -1)
         category = args.pop(cat_idx) if cat_idx != -1 else (args.pop(-1) if len(args) > 1 else "未分类")
 
         kw = args[0].lower() if args else "all"
@@ -1777,7 +1796,7 @@ async def manage_system_commands(client, message):
                 enable_xm = True
                 args.pop(i)
 
-        cat_idx = next((i for i, arg in enumerate(args) if arg in STANDARD_CATS), -1)
+        cat_idx = next((i for i, arg in enumerate(args) if any(arg.startswith(c) for c in STANDARD_CATS)), -1)
         if cat_idx == -1: return await message.reply_text("⚠️ 请提供有效分类。")
         category = args.pop(cat_idx)
         
@@ -1910,7 +1929,7 @@ async def manage_system_commands(client, message):
             if args[i].lower().startswith("v="): version_suffix = args.pop(i)[2:]
             elif args[i].lower().startswith("f="): file_suffix = args.pop(i)[2:]
         custom_year = next((args.pop(i) for i, arg in enumerate(args) if arg.isdigit() and len(arg) == 4 and (1900 < int(arg) < 2100)), None)
-        cat_idx = next((i for i, arg in enumerate(args) if arg in STANDARD_CATS), -1)
+        cat_idx = next((i for i, arg in enumerate(args) if any(arg.startswith(c) for c in STANDARD_CATS)), -1)
         if cat_idx == -1:
             search_kw = " ".join(args).lower()
             matched_item = None
@@ -2079,16 +2098,21 @@ async def media_routing_gateway(client, message):
             file_size_mb = media.file_size / (1024 * 1024) if getattr(media, "file_size", 0) else 0
             if not (min_mb <= file_size_mb <= max_mb): return 
             
-            # 🔥 统一的“上下集/相册”双重识别逻辑
+            # 🔥 统一的“上下集”识别逻辑（完美兼顾相册无字天书与批量发集数）
             split_part_tag = extract_split_part(text_to_scan)
             if not split_part_tag and getattr(message, 'media_group_id', None):
-                mg_id = message.media_group_id
-                if mg_id not in GLOBAL_MEDIA_GROUPS:
-                    GLOBAL_MEDIA_GROUPS[mg_id] = {"count": 1, "msgs": {message.id: 1}}
-                elif message.id not in GLOBAL_MEDIA_GROUPS[mg_id]["msgs"]:
-                    GLOBAL_MEDIA_GROUPS[mg_id]["count"] += 1
-                    GLOBAL_MEDIA_GROUPS[mg_id]["msgs"][message.id] = GLOBAL_MEDIA_GROUPS[mg_id]["count"]
-                split_part_tag = f"pt{GLOBAL_MEDIA_GROUPS[mg_id]['msgs'][message.id]}"
+                # 💎 核心大招：相册ID + 集数！批量发的正常集数不会互相累加！
+                mg_key = f"{message.media_group_id}_{ep_num}"
+                if mg_key not in GLOBAL_MEDIA_GROUPS:
+                    GLOBAL_MEDIA_GROUPS[mg_key] = {"count": 1, "msgs": {message.id: 1}}
+                elif message.id not in GLOBAL_MEDIA_GROUPS[mg_key]["msgs"]:
+                    GLOBAL_MEDIA_GROUPS[mg_key]["count"] += 1
+                    GLOBAL_MEDIA_GROUPS[mg_key]["msgs"][message.id] = GLOBAL_MEDIA_GROUPS[mg_key]["count"]
+                
+                # 🔥 绝不给正常单集强加 pt1！只有出现第2个相同的集数时，才开始打 pt2, pt3 防丢弃
+                part_count = GLOBAL_MEDIA_GROUPS[mg_key]['msgs'][message.id]
+                if part_count > 1:
+                    split_part_tag = f"pt{part_count}"
 
             # 重新组装物理标签
             auto_tags = extract_media_tags(text_to_scan)
@@ -2125,6 +2149,16 @@ async def media_routing_gateway(client, message):
             file_season = route_info.get("file_season", folder_season)
             year = route_info.get("year")
             if not year: year, _ = await fetch_tmdb_details(search_kw)
+            
+            # 🔥 补丁：前台雷达同步剧场版/特别篇判定，防止由于没提取到集数在网关处就被当成垃圾扔掉
+            if not is_movie:
+                # 💎 修复超级误杀坑：必须是独立的 ova 或 sp 单词，绝不能匹配到 supernova 或 support！
+                is_special = bool(re.search(r'剧场版|特别篇|(?<![a-zA-Z])ova(?![a-zA-Z])|(?<![a-zA-Z])sp(?![a-zA-Z])', text_to_scan, re.IGNORECASE)) or file_season == 0
+                if is_special:
+                    file_season = 0
+                    folder_season = 0
+                if ep_num is None and (split_part_tag or is_special):
+                    ep_num = 1
             
             pure_drama_name = drama_key[:-len(f"_{db_version}")] if db_version and drama_key.endswith(f"_{db_version}") else drama_key
             folder_name = f"{pure_drama_name} ({year})" if year else pure_drama_name
@@ -2204,16 +2238,19 @@ async def process_media_transfer(client, message, status, override_info=None):
     auto_tags = extract_media_tags(text_to_scan)
     is_movie = "电影" in cat or cat in ["演唱会", "纪录片"]
     
-    # 🔥 双重识别逻辑（相册无字天书防重）
+    # 🔥 1. 准确解析分段标签（同步相册无字天书防污染机制）
     split_part_tag = extract_split_part(text_to_scan)
     if not split_part_tag and getattr(message, 'media_group_id', None):
-        mg_id = message.media_group_id
-        if mg_id not in GLOBAL_MEDIA_GROUPS:
-            GLOBAL_MEDIA_GROUPS[mg_id] = {"count": 1, "msgs": {message.id: 1}}
-        elif message.id not in GLOBAL_MEDIA_GROUPS[mg_id]["msgs"]:
-            GLOBAL_MEDIA_GROUPS[mg_id]["count"] += 1
-            GLOBAL_MEDIA_GROUPS[mg_id]["msgs"][message.id] = GLOBAL_MEDIA_GROUPS[mg_id]["count"]
-        split_part_tag = f"pt{GLOBAL_MEDIA_GROUPS[mg_id]['msgs'][message.id]}"
+        mg_key = f"{message.media_group_id}_{ep_num}"
+        if mg_key not in GLOBAL_MEDIA_GROUPS:
+            GLOBAL_MEDIA_GROUPS[mg_key] = {"count": 1, "msgs": {message.id: 1}}
+        elif message.id not in GLOBAL_MEDIA_GROUPS[mg_key]["msgs"]:
+            GLOBAL_MEDIA_GROUPS[mg_key]["count"] += 1
+            GLOBAL_MEDIA_GROUPS[mg_key]["msgs"][message.id] = GLOBAL_MEDIA_GROUPS[mg_key]["count"]
+            
+        part_count = GLOBAL_MEDIA_GROUPS[mg_key]['msgs'][message.id]
+        if part_count > 1:
+            split_part_tag = f"pt{part_count}"
     
     clean_base = re.sub(r'\s*\(\d{4}\)', '', folder).strip()
     if version_suffix and clean_base.endswith(version_suffix): clean_base = clean_base[:-len(version_suffix)].strip()
@@ -2224,7 +2261,7 @@ async def process_media_transfer(client, message, status, override_info=None):
     res_list = [t for t in auto_list if t.lower() in ["2160p", "1080p", "720p", "4k", "8k"]]
     other_auto = [t for t in auto_list if t not in res_list]
 
-    # 🔥 找回被我漏掉的物理标签去重逻辑
+    # 🔥 2. 物理标签去重
     raw_physical_tags = []
     if split_part_tag: raw_physical_tags.append(split_part_tag) 
     raw_physical_tags.extend(res_list); raw_physical_tags.extend(f_list); raw_physical_tags.extend(other_auto) 
@@ -2236,7 +2273,7 @@ async def process_media_transfer(client, message, status, override_info=None):
     combined_physical_tags = ".".join(final_physical_tags)
     ver_tag_physical = f".{combined_physical_tags}" if combined_physical_tags else ""
     
-    # 🔥 找回被我漏掉的历史标签去重逻辑
+    # 🔥 3. 历史标签去重
     raw_history_tags = []
     if split_part_tag: raw_history_tags.append(split_part_tag)
     raw_history_tags.extend(res_list); raw_history_tags.extend(f_list)   
@@ -2251,18 +2288,15 @@ async def process_media_transfer(client, message, status, override_info=None):
     
     current_mount = get_mount_root()
     
-    # 🔥 Emby 尊享级补丁：针对“剧场版”或“特别篇”被放进剧集分类的情况。
+    # 🔥 4. Emby 尊享级补丁：剧场版/特别篇自动归入 S00
     if not is_movie:
-        # 1. 嗅探是否为剧场版/特别篇
-        is_special = "剧场版" in text_to_scan or "特别篇" in text_to_scan or "ova" in text_to_scan.lower() or "sp" in text_to_scan.lower() or file_season == 0
-        
-        # 2. 如果是特别篇，强制将其分配到 S00 航线！
+        # 💎 修复超级误杀坑：前后不能有其他英文字母，精确锁定 SP 和 OVA！
+        is_special = bool(re.search(r'剧场版|特别篇|(?<![a-zA-Z])ova(?![a-zA-Z])|(?<![a-zA-Z])sp(?![a-zA-Z])', text_to_scan, re.IGNORECASE)) or file_season == 0
         if is_special:
             file_season = 0
             folder_season = 0
-            
-        # 3. 如果没抓到集数，但有分段标签（如下篇 pt2），或者它是剧场版，为了防止被当成垃圾扔掉，默认设为第 1 集（即 S00E01）
-        if ep_num is None and (split_part_tag or is_special):
+            ep_num = 1  # 强行锁定为第1集，无视标题里的干扰数字，保证 pt1 和 pt2 在 Emby 完美合并为一部！
+        elif ep_num is None and split_part_tag:
             ep_num = 1
             
     if is_movie:
@@ -2321,12 +2355,18 @@ async def process_media_transfer(client, message, status, override_info=None):
             while True:
                 if retry_count >= max_retries: break
                 current_bytes = os.path.getsize(local_path) if os.path.exists(local_path) else 0
-                if current_bytes > total_bytes:
+                
+                # 🔥 终极防误删补丁：兼容洗码体积！
+                # 洗码会在尾部追加 32~128 字节，这里给出 512 字节的宽容度。
+                # 只要本地文件等于原大小，或者因洗码比原大小大了一丁点，都直接判作下载完成！
+                if total_bytes <= current_bytes <= total_bytes + 512:
+                    downloaded_bytes = current_bytes
+                    break
+                # 只有当文件体积异常大（比如真的混入了脏数据），才删掉重下
+                elif current_bytes > total_bytes + 512:
                     try: os.remove(local_path)
                     except: pass
                     current_bytes = 0
-                if current_bytes == total_bytes:
-                    downloaded_bytes = current_bytes; break
                     
                 completed_chunks = current_bytes // chunk_size
                 secure_bytes = completed_chunks * chunk_size
@@ -2345,6 +2385,7 @@ async def process_media_transfer(client, message, status, override_info=None):
                     start_time = time.time()
                     with open(local_path, open_mode) as f:
                         async for chunk in client.stream_media(message, offset=completed_chunks):
+                            await GLOBAL_PAUSE_EVENT.wait()  # 🔥 红灯挂起，绿灯放行！
                             yielded_any = True
                             if task_lock_key in GLOBAL_CANCEL_TASKS or "ALL" in GLOBAL_CANCEL_TASKS: break 
                             f.write(chunk)

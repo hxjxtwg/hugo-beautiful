@@ -677,18 +677,19 @@ async def send_push_notification(title, content):
             await notify_steward_log(f"⚠️ [TG推送异常] 网络或代理出错: {e}", level="WARNING")
 
 async def trigger_strm_sync(drive, folder_path):
-    """通知管家 (5000端口) 局部扫描并生成 STRM"""
-    url = f"{STEWARD_BASE_URL}/api/sync"
-    params = {"drive": str(drive), "path": folder_path}
+    """🌟 修正：通知远端 5555 端口中继器去接管 139 盘后续工作"""
+    url = f"{RELAY_BASE_URL}/api/trigger_139"
+    params = {"path": folder_path}
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        # 🛡️ 核心修复：增加 proxy=None 和 trust_env=False，绝对防止请求被翻墙软件劫持
+        async with httpx.AsyncClient(timeout=10.0, proxy=None, trust_env=False) as client:
             resp = await client.get(url, params=params)
             if resp.status_code == 200:
-                await notify_steward_log(f"🎬 [STRM同步成功-{drive}] 目录: `{folder_path}`")
+                await notify_steward_log(f"🚀 [139后续触发] 成功通知 5555 中继器接管目录: `{folder_path}`")
             else:
-                await notify_steward_log(f"⚠️ [STRM同步异常-{drive}] HTTP {resp.status_code}", level="WARNING")
+                await notify_steward_log(f"⚠️ [139后续触发异常] HTTP {resp.status_code}", level="WARNING")
     except Exception as e:
-        await notify_steward_log(f"⚠️ [STRM同步失败-{drive}]: {e}", level="WARNING")
+        await notify_steward_log(f"⚠️ [139后续触发失败]: {e}", level="WARNING")
 
 async def trigger_189_local_script(folder_path):
     """🌟 修正：通知远端 5555 端口中继器去接管 189 盘后续工作"""
@@ -876,6 +877,7 @@ async def main():
     await notify_steward_log(f"📦 [主盘交接启动] 共 {len(video_tasks)} 个视频，优先全力送入天翼...")
 
     for actual_video_path, actual_video_name in video_tasks:
+        actual_video_name = actual_video_name.replace("'", "")
         if not os.path.exists(actual_video_path):
             continue
             
@@ -903,8 +905,9 @@ async def main():
         
         if os.path.exists(final_cas_path):
             await notify_steward_log(f"⏭️ [天翼跳过] 侦测到本地已存在镜像 `{cas_file_name}`，执行跳过处理。")
-            await trigger_189_local_script(local_cas_dir)
-            continue 
+            # 👇 修改这里：把 local_cas_dir 改成 final_cas_path
+            await trigger_189_local_script(final_cas_path) 
+            continue
 
         await notify_steward_log(f"🚚 [主盘流转] 正在原样运送: `{actual_video_name}` ➔ 天翼云端 (5244)")
         
@@ -940,8 +943,8 @@ async def main():
                     
                     await bg_fetch_cas_task(cas_target_full, final_cas_path, sub_path, cas_file_name, OLIST_URL, OLIST_TOKEN, "天翼")
                     
-                    # 🌟 修正：传完并拿到 CAS 后，把本地真实的 CAS 文件夹路径喂给 5555 脚本
-                    await trigger_189_local_script(local_cas_dir)
+                    # 👇 修改这里：把 local_cas_dir 改成 final_cas_path
+                    await trigger_189_local_script(final_cas_path)
                     
                     break 
                 else:
@@ -1112,7 +1115,7 @@ async def main():
                     await asyncio.sleep(delay)
 
         # 并发锁定
-        CONCURRENT_LIMIT = 2
+        CONCURRENT_LIMIT = 1
         semaphore = asyncio.Semaphore(CONCURRENT_LIMIT)
 
         async def run_with_sem(path, name):
