@@ -31,10 +31,10 @@ description: ""
 ### 1.打开 cmd 命令行，进入这个新的、空的文件夹：
 ```bash
 ##新建文件夹
-mkdir d:\Tools\dav
+mkdir d:\Apps\dav
 ##进入文件夹目录
 d:
-cd D:\Tools\dav
+cd D:\Apps\dav
 ```
 ### 2. 安装“打包工具”：
 ```bash
@@ -46,7 +46,7 @@ npx cap init
 ```
 * App Name? -> 我的导航 (您自己起名)
 
-* App ID? -> com.myname.nav (您自己起ID)
+* App ID? -> com.xxsky.nav (您自己起ID)
 
 * web asset directory? -> public
 
@@ -76,7 +76,8 @@ echo "<html></html>" > public/index.html
   "webDir": "public",
 
   "server": {
-    "url": "https://[您的导航站网址]"
+    "url": "https://[您的导航站网址]",
+    "cleartext": true
   }
 }
 ```
@@ -400,6 +401,38 @@ Android Studio 现在会自动生成所有不同尺寸（mdpi, hdpi, xhdpi 等�
 ### 5. 在右下角弹出的通知中，点击 "Locate" (定位)。
 
 ### 6. 最终成品： 您会得到 app-debug.apk 文件，它现在是“布局完美”且“功能完美”的。
+
+## 步骤六：
+强制排除掉冲突的旧包
+
+1.打开你的电脑文件夹，直接进入 C:\Users\Administrator\.gradle 目录。
+
+2.在该文件夹下新建一个文本文档，将其重命名为 init.gradle（必须确保删除了 .txt 后缀）。
+
+3.用记事本打开这个文件，直接粘贴以下代码并保存：
+```
+allprojects {
+    configurations.all {
+        exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk7'
+        exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk8'
+    }
+}
+```
+电脑里安装了 NVM for Windows（Node版本管理器）。
+
+NVM 会强制接管系统的 Node.js 运行环境。只要它存在，你刚才通过官方安装包（.msi）手动安装的 24.20.0 就会被直接“屏蔽”掉，导致命令行依然固执地使用 NVM 锁定的旧版本（20.19.5）。
+
+既然有 NVM 接管，最快的解决方式是直接用它的命令来切换版本，完全不需要去控制面板卸载东西。请直接在刚才那个黑色命令行窗口中按顺序执行以下命令：
+
+* 下载新版本
+输入 nvm install 24.20.0 并回车，等待下载完成。
+
+* 切换到新版本
+输入 nvm use 24.20.0 并回车，系统会提示版本已切换。
+
+* 验证并继续
+输入 node -v，此时屏幕应该会正确显示 v24.20.0。
+确认无误后，直接输入你的打包同步命令 npx cap sync android 即可顺利执行。
 
 
 
