@@ -326,7 +326,7 @@ Android Studio 现在会自动生成所有不同尺寸（mdpi, hdpi, xhdpi 等�
 
 * 把logo.png 复制到这个文件夹里。 (我们不再需要 drawable-hdpi那些文件夹了)
 
-###3. 创建“智能”布局文件 (splash_layout.xml)
+### 3. 创建“智能”布局文件 (splash_layout.xml)
 
 * 回到 Android Studio。
 
@@ -433,6 +433,161 @@ NVM 会强制接管系统的 Node.js 运行环境。只要它存在，你刚才�
 * 验证并继续
 输入 node -v，此时屏幕应该会正确显示 v24.20.0。
 确认无误后，直接输入你的打包同步命令 npx cap sync android 即可顺利执行。
+
+## 步骤七：
+net::ERR_CLEARTEXT_NOT_PERMITTED 是 Android 开发中最常见的安全限制问题
+
+第一步：找到 AndroidManifest.xml 文件
+在 Android Studio 左侧的目录树中，依次展开 app -> manifests，双击打开 AndroidManifest.xml。
+
+第二步：添加允许明文流量的代码
+在文件里找到 <application 开头的那一段，在它里面的空白处（不要破坏原有的代码）加上这一行核心指令：
+```
+android:usesCleartextTraffic="true"
+```
+加完之后，你的 <application 标签看起来应该是类似这样的：
+```
+<application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/AppTheme"
+        android:usesCleartextTraffic="true"> <!-- 【就是加上这一行】 -->
+        
+        <!-- 下面是其他的 activity 等配置... -->
+    </application>
+```
+第三步：重新打包运行
+加完这行代码后直接保存，点击顶部的绿色三角形（Run）重新编译安装到手机。
+
+再次打开你的导航 App，点击局域网的 Emby、Oplist 等内网 HTTP 链接，就可以完美顺畅地跳转打开了，不会再有任何拦截。
+
+## 附录：
+longpt网站封装带下载种子功能的MainActivity.java
+
+```
+// 【【【 关键：这是您的 ID ！】】】
+package com.xxsky.longpt;
+
+import android.graphics.Color;
+import android.os.Bundle;
+import android.view.View;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import com.getcapacitor.BridgeActivity;
+import com.getcapacitor.WebViewListener;
+
+import android.app.DownloadManager;
+import android.net.Uri;
+import android.os.Environment;
+import android.webkit.CookieManager;
+import android.webkit.DownloadListener;
+import android.webkit.URLUtil;
+import android.widget.Toast;
+
+// 【新增的解码与正则表达式工具】
+import java.net.URLDecoder;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public class MainActivity extends BridgeActivity {
+
+    private WebView webView;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        // --- 【保留】沉浸式状态栏修复 ---
+        getWindow().getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE |
+                        View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+        );
+        getWindow().setStatusBarColor(Color.TRANSPARENT);
+
+        // --- 【保留】链接覆盖修复 ---
+        this.webView = this.bridge.getWebView();
+        WebSettings webSettings = this.webView.getSettings();
+        webSettings.setJavaScriptCanOpenWindowsAutomatically(true);
+
+        this.webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                view.loadUrl(url);
+                return true;
+            }
+        });
+
+        // --- 【修复】接管下载功能并使用正则处理 PT 站文件名 ---
+        this.webView.setDownloadListener(new DownloadListener() {
+            @Override
+            public void onDownloadStart(String url, String userAgent, String contentDisposition, String mimeType, long contentLength) {
+                DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
+
+                // 传递网页 Cookie 绕过 PT 站下载权限拦截
+                String cookies = CookieManager.getInstance().getCookie(url);
+                request.addRequestHeader("cookie", cookies);
+                request.addRequestHeader("User-Agent", userAgent);
+
+                // 1. 获取基础文件名（安卓默认 API，通常会取到 download.php）
+                String fileName = URLUtil.guessFileName(url, contentDisposition, mimeType);
+
+                // 2. 利用正则表达式从 HTTP 头部强行提取被 URL 编码的真实文件名
+                if (contentDisposition != null) {
+                    try {
+                        Matcher m1 = Pattern.compile("filename\\*\\s*=\\s*UTF-8''([^;]+)", Pattern.CASE_INSENSITIVE).matcher(contentDisposition);
+                        Matcher m2 = Pattern.compile("filename\\s*=\\s*\"?([^\";]+)\"?", Pattern.CASE_INSENSITIVE).matcher(contentDisposition);
+                        if (m1.find()) {
+                            fileName = URLDecoder.decode(m1.group(1), "UTF-8");
+                        } else if (m2.find()) {
+                            fileName = URLDecoder.decode(m2.group(1), "UTF-8");
+                        }
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                }
+
+                // 3. 正则清理标签：剔除开头无用的站点前缀，保持名称干净并保留 H265、2160p 等关键参数
+                fileName = fileName.replaceAll("^\\[.*?\\][\\.\\s_-]*", "");
+
+                // 4. 极端情况兜底防错，确保后缀正确
+                if (fileName.startsWith("download.php")) {
+                    fileName = "PT_Torrent_" + System.currentTimeMillis() + ".torrent";
+                } else if (!fileName.endsWith(".torrent") && mimeType != null && mimeType.contains("torrent")) {
+                    fileName = fileName + ".torrent";
+                }
+
+                // 呼出系统下载器并存入 Download 文件夹
+                request.setDescription("正在下载...");
+                request.setTitle(fileName);
+                request.allowScanningByMediaScanner();
+                request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+                request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
+
+                DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+                dm.enqueue(request);
+
+                Toast.makeText(getApplicationContext(), "开始下载: " + fileName, Toast.LENGTH_SHORT).show();
+            }
+        });
+    }
+
+    // --- 【保留】返回键逻辑修复 ---
+    @Override
+    public void onBackPressed() {
+        if (this.webView.canGoBack()) {
+            this.webView.goBack();
+        } else {
+            super.onBackPressed();
+        }
+    }
+}
+```
+
+
 
 
 

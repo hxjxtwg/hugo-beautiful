@@ -159,6 +159,8 @@ lsub - 🔍 [查库] 查看收割入库清单
 mode - ⚙️ [设置模式] 切换189管家STRM生成模式(A/B/C)
 139 - ☁️ [139收割 处理139 扫139] 触发5255端口openlist生成cas
 sync139 - ☁️ [同步139] 触发139移动云盘专属STRM生成
+recloud - ☁️ [恢复云端] 触发云端增量生成STRM文件
+reall - ☁️ [全库重建] 重建媒体库
 cancel - 🚫 [取消] 解除监控任务并清理关联记忆
 ```
 
@@ -457,13 +459,29 @@ CAT_ROUTER = {
 
 def load_json(filepath):
     if os.path.exists(filepath):
-        with open(filepath, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                content = f.read().strip()
+                if not content: 
+                    return {}  # 🌟 防御 1：如果是0字节空文件，直接返回空字典，绝不报错
+                return json.loads(content)
+        except Exception as e:
+            # 🌟 防御 2：如果 JSON 格式彻底烂了，拦截报错并输出日志，保证系统继续运行
+            logger.error(f"🚨 [致命警告] 数据库文件损坏，已自动重置为空库: {os.path.basename(filepath)} - 错误: {e}")
+            return {}
     return {}
 
 def save_json(filepath, data):
-    with open(filepath, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    """🛡️ 原子级写入：先写临时文件再瞬间替换，绝对防止断电或高并发导致的文件损坏"""
+    tmp_path = f"{filepath}.tmp"
+    try:
+        # 1. 先安全地把数据写到临时文件里
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        # 2. 瞬间重命名覆盖原文件 (在 Linux/Android 底层这是原子操作，绝对不会冲突)
+        os.replace(tmp_path, filepath)
+    except Exception as e:
+        logger.error(f"🚨 [写盘错误] 无法保存数据到 {filepath}: {e}")
 
 if not os.path.exists(SETTINGS_FILE):
     save_json(SETTINGS_FILE, {"auto_scan_cas": False, "auto_check_subs": True})
@@ -1780,6 +1798,7 @@ def scan_local_dropbox(specific_dir=None):
     changed = False
     updated_dirs = set()
 
+    # 🌟 100% 恢复你原汁原味的清理逻辑，一行不差！
     keys_to_delete = [path for path in monitor_history.keys() if not os.path.exists(path)]
     for k in keys_to_delete:
         del monitor_history[k]
@@ -1984,11 +2003,12 @@ def main_control_loop(client_obj):
         settings = load_json(SETTINGS_FILE)
         logger.info("==========================================")
         logger.info("🛸 [系统] 定时唤醒：引擎升空，接管侦测作业...")
+
         if settings.get("auto_check_subs", True):
             check_subscriptions(client_obj)
         if settings.get("auto_scan_cas", False):
             process_cas_via_olist_api()
-            
+           
         # 👇 新增：本地投递箱极速雷达
         if settings.get("auto_scan_local", True):
             scan_local_dropbox()
@@ -2963,6 +2983,56 @@ def main_control_loop(client_obj):
                             if ghost_count > 0: msg_str += f"👻 执行垃圾回收：清除了 {ghost_count} 条残留历史记忆！"
                             else: msg_str += "✨ 历史记录库非常干净，无残留垃圾。"
                             notifier.send_message(f"🩺 体检报告：\n{msg_str}")
+                        
+                        # ====== 🚀 终极抢救：全自动分块重建 (防 Termux 崩溃版) ======
+                        elif text == "全库重建" or text.startswith("/reall"):
+                            notifier.send_message("🚨 收到全库重建指令！为防 Termux 内存爆炸，引擎已启动【切片下发模式】...")
+                            try:
+                                r_log = requests.post(f"{API_5244_URL}/api/auth/login", json={"username": OLIST_USER, "password": OLIST_PASS}, timeout=5).json()
+                                if r_log.get("code") == 200:
+                                    o_headers = {"Authorization": r_log["data"]["token"], "Content-Type": "application/json"}
+                                    
+                                    # 提取所有分类基点
+                                    radar_bases = set()
+                                    for l_cat, s_cat in CAT_ROUTER.values():
+                                        sub_p = f"{l_cat}/{s_cat}".strip('/') if s_cat else l_cat
+                                        radar_bases.add(get_openlist_path(f"{DIR_CAS_ROOT}/{sub_p}".replace("//", "/")))
+                                    
+                                    matched_paths = []
+                                    # 钻透目录，细化到单部剧的层级
+                                    for base_p in radar_bases:
+                                        r_list = requests.post(f"{API_5244_URL}/api/fs/list", json={"path": base_p}, headers=o_headers, timeout=5).json()
+                                        if r_list.get("code") == 200:
+                                            ym_dirs = [item["name"] for item in (r_list.get("data") or {}).get("content", []) if item["is_dir"] and re.match(r'^\d{4,6}$', item["name"])]
+                                            for ym in ym_dirs:
+                                                ym_path = f"{base_p}/{ym}"
+                                                r_shows = requests.post(f"{API_5244_URL}/api/fs/list", json={"path": ym_path}, headers=o_headers, timeout=5).json()
+                                                if r_shows.get("code") == 200:
+                                                    for s_item in (r_shows.get("data") or {}).get("content", []):
+                                                        if s_item["is_dir"]:
+                                                            matched_paths.append(f"{ym_path}/{s_item['name']}")
+                                    
+                                    if matched_paths:
+                                        notifier.send_message(f"🎯 扫描完毕！共锁定 {len(matched_paths)} 个独立剧集目录，开始逐一下发...")
+                                        
+                                        # 扔进后台线程跑，防止阻塞 TG 机器人主循环
+                                        def rebuild_task():
+                                            for i, mp in enumerate(matched_paths, 1):
+                                                # 穿透云端缓存
+                                                requests.post(f"{API_5244_URL}/api/fs/list", json={"path": mp, "refresh": True}, headers=o_headers, timeout=10).close()
+                                                time.sleep(1.0)
+                                                try: 
+                                                    requests.get(f"{API_5000_URL}/api/sync", params={"path": mp}, timeout=3).close()
+                                                    logger.info(f"[{i}/{len(matched_paths)}] ✅ 成功下发: {mp}")
+                                                except: pass
+                                                # ⏳ 核心：给 5000 端口 2 秒缓冲时间，写完盘释放内存！
+                                                time.sleep(2.0) 
+                                            notifier.send_message(f"🎉 189 全库 STRM 重建完毕！")
+                                            
+                                        threading.Thread(target=rebuild_task).start()
+                            except Exception as e:
+                                notifier.send_message(f"❌ 全库重建异常: {e}")
+                            continue
 
                         elif text.startswith("刷新") or text.startswith("入库"):
                             match_refresh = re.match(r'^(刷新|入库)\s+(.*)', text)
@@ -3139,6 +3209,130 @@ def main_control_loop(client_obj):
                                 # =================================================================
                                 # 🌟 终极双轨驱动装甲替换结束
                                 # =================================================================
+                        # ==========================================
+                        # 🚑 独立专属指令：【恢复云端】 (严格对比、缺一补一、死等管家完成)
+                        # ==========================================
+                        elif text.startswith("恢复云端") or text.startswith("/recloud"):
+                            base_kw = text.replace("恢复云端", "").strip()
+                            if not base_kw:
+                                notifier.send_message("❌ 请输入目标，例如：\n恢复云端 华语剧\n恢复云端 /177/177-秒传/电视剧")
+                                continue
+
+                            notifier.send_message(f"🚑 收到指令！目标: [{base_kw}]\n🛡️ 【精准对账+30秒生成】已开启：逐个文件严格对比，少一集补一集，管家彻30秒生成完毕再进入下一部！")
+                            
+                            try:
+                                r_log = requests.post(f"{API_5244_URL}/api/auth/login", json={"username": OLIST_USER, "password": OLIST_PASS}, timeout=5).json()
+                                if r_log.get("code") != 200:
+                                    notifier.send_message("❌ OpenList 登录失败。")
+                                    continue
+                                o_headers = {"Authorization": r_log["data"]["token"], "Content-Type": "application/json"}
+                                
+                                scan_bases = []
+                                # 1. 支持绝对路径 (哪怕输错层级也能救)
+                                if base_kw.startswith("/"):
+                                    scan_bases.append(get_openlist_path(base_kw))
+                                # 2. 支持字典里的精确小分类，如 华语剧
+                                elif base_kw in CAT_ROUTER:
+                                    l_cat, s_cat = CAT_ROUTER[base_kw]
+                                    scan_bases.append(get_openlist_path(f"{DIR_CAS_ROOT}/{l_cat}/{s_cat}".strip('/').replace("//", "/")))
+                                # 3. 如果是大词(如"电视剧")，把底下所有分类目录全包进去
+                                else:
+                                    for l_cat, s_cat in CAT_ROUTER.values():
+                                        sub_p = f"{l_cat}/{s_cat}".strip('/') if s_cat else l_cat
+                                        if base_kw in sub_p:
+                                            scan_bases.append(get_openlist_path(f"{DIR_CAS_ROOT}/{sub_p}".replace("//", "/")))
+                                    # 如果什么都没匹配上，强制扫描整个大库
+                                    if not scan_bases:
+                                        scan_bases.append(get_openlist_path(DIR_CAS_ROOT))
+
+                                # 去重
+                                scan_bases = list(set(scan_bases))
+
+                                def do_segmented_recovery():
+                                    s = load_json(SETTINGS_FILE)
+                                    local_strm_dir = s.get("local_strm_dir", DEFAULT_LOCAL_STRM)
+                                    total_rebuild = 0
+                                    
+                                    # 🌟 终极杀招：无限递归扫描！不管你在哪一层，一律钻到底找 .cas！
+                                    def scan_for_shows(current_path):
+                                        nonlocal total_rebuild
+                                        try:
+                                            res = requests.post(f"{API_5244_URL}/api/fs/list", json={"path": current_path, "refresh": True}, headers=o_headers, timeout=10).json()
+                                            if res.get("code") != 200: return
+                                        except: return
+                                        
+                                        items = (res.get("data") or {}).get("content", [])
+                                        
+                                        # 检查当前目录下有没有 .cas 文件
+                                        has_cas = False
+                                        for item in items:
+                                            if not item["is_dir"] and item["name"].lower().endswith(".cas"):
+                                                has_cas = True
+                                                break
+                                                
+                                        if has_cas:
+                                            # 这证明已经到达最底层的剧集目录！查岗本地 STRM！
+                                            strm_sub_dir = current_path.split(DIR_CAS_ROOT)[-1].strip("/")
+                                            target_local_dir = os.path.join(local_strm_dir, strm_sub_dir).replace("\\", "/")
+                                            
+                                            need_rebuild = False
+                                            
+                                            # 场景1：如果本地连这个文件夹都没有，直接判定为缺漏
+                                            if not os.path.exists(target_local_dir):
+                                                need_rebuild = True
+                                            else:
+                                                import re
+                                                local_strms = [f.lower() for f in os.listdir(target_local_dir) if f.endswith(".strm")]
+                                                
+                                                for item in items:
+                                                    if not item["is_dir"] and item["name"].lower().endswith(".cas"):
+                                                        cloud_raw = item["name"][:-4].lower()
+                                                        # 将云端名字拆解成纯词块和数字（如 's01e01', '1080p', '神雕侠侣'）
+                                                        cloud_keys = set(re.findall(r'[a-z0-9\u4e00-\u9fa5]+', cloud_raw))
+                                                        
+                                                        is_matched = False
+                                                        for loc in local_strms:
+                                                            loc_keys = set(re.findall(r'[a-z0-9\u4e00-\u9fa5]+', loc[:-5]))
+                                                            # 🎯 核心绝杀：只要本地名字里包含的核心词块（含集数），能100%在云端名字里找到，说明就是它！
+                                                            # 这完美兼容了你过滤冗余标签的洗名逻辑，绝不误判！
+                                                            if loc_keys and loc_keys.issubset(cloud_keys):
+                                                                is_matched = True
+                                                                break
+                                                                
+                                                        if not is_matched:
+                                                            need_rebuild = True
+                                                            break # 只要发现哪怕一集在本地匹配不上，立刻叫管家！
+                                            
+                                            # 如果发现空洞，喂给 5000 端口
+                                            if need_rebuild:
+                                                logger.warning(f"🚑 发现真实缺漏文件，立即交由管家补齐: {current_path}")
+                                                try:
+                                                    requests.get(f"{API_5000_URL}/api/sync", params={"path": current_path}, timeout=5)
+                                                except Exception as e:
+                                                    pass
+                                                total_rebuild += 1
+                                                
+                                                # 保留你聪明修改的 15 秒缓冲，极其稳定！
+                                                logger.info(f"⏳ 缓冲防爆：等待管家落盘，休眠 15 秒...")
+                                                time.sleep(15.0)
+                                                
+                                            return # 搜到 .cas 就证明到底了，不用再往这层往下搜了
+                                            
+                                        # 如果这层没有 .cas，说明还没到底，继续往子文件夹里钻！
+                                        for item in items:
+                                            if item["is_dir"]:
+                                                scan_for_shows(f"{current_path}/{item['name']}")
+
+                                    for base_p in scan_bases:
+                                        notifier.send_message(f"🔎 启动极限穿透扫描: {base_p}")
+                                        scan_for_shows(base_p)
+                                        
+                                    notifier.send_message(f"🎉 扫描结束！本次总计精准抢救并补全了 {total_rebuild} 部存在缺漏的剧集！")
+
+                                threading.Thread(target=do_segmented_recovery).start()
+                            except Exception as e:
+                                notifier.send_message(f"❌ 恢复指令异常: {e}")
+                            continue
 
                         elif text.startswith("补档"):
                             match_fill = re.match(r'^补档\s+(.*?)\s+(http[s]?://\S+)', text)
