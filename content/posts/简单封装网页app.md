@@ -465,7 +465,7 @@ android:usesCleartextTraffic="true"
 再次打开你的导航 App，点击局域网的 Emby、Oplist 等内网 HTTP 链接，就可以完美顺畅地跳转打开了，不会再有任何拦截。
 
 ## 附录：
-longpt网站封装带下载种子功能的MainActivity.java
+1.longpt网站封装带下载种子功能的MainActivity.java
 
 ```
 // 【【【 关键：这是您的 ID ！】】】
@@ -587,6 +587,387 @@ public class MainActivity extends BridgeActivity {
 }
 ```
 
+2.增加自动复制功能
+```
+// 【【【 关键：这是您的 ID ！】】】
+package com.xxsky.longpt;
+
+import android.graphics.Color;
+import android.os.Bundle;
+import android.view.View;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import com.getcapacitor.BridgeActivity;
+
+import android.app.DownloadManager;
+import android.net.Uri;
+import android.os.Environment;
+import android.webkit.CookieManager;
+import android.webkit.DownloadListener;
+import android.webkit.URLUtil;
+import android.widget.Toast;
+
+import java.net.URLDecoder;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+// --- 【新增的剪贴板必备工具】 ---
+import android.content.ClipboardManager;
+import android.content.ClipData;
+import android.content.Context;
+
+public class MainActivity extends BridgeActivity {
+
+    private WebView webView;
+
+    // --- 【新增核心】这是一个连接网页和安卓原生剪贴板的“桥梁” ---
+    class JSBridge {
+        @android.webkit.JavascriptInterface
+        public void copyText(String text) {
+            ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            ClipData clip = ClipData.newPlainText("Copied", text);
+            clipboard.setPrimaryClip(clip);
+            // 呼出安卓原生底层提示，无视网页限制
+            runOnUiThread(() -> Toast.makeText(getApplicationContext(), "✅ 已自动复制: " + text, Toast.LENGTH_SHORT).show());
+        }
+    }
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        // --- 【保留】沉浸式状态栏修复 ---
+        getWindow().getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE |
+                        View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+        );
+        getWindow().setStatusBarColor(Color.TRANSPARENT);
+
+        this.webView = this.bridge.getWebView();
+        WebSettings webSettings = this.webView.getSettings();
+        webSettings.setJavaScriptCanOpenWindowsAutomatically(true);
+
+        // --- 【保留】电脑端网页自适应与缩放优化 ---
+        webSettings.setUseWideViewPort(true); 
+        webSettings.setLoadWithOverviewMode(true); 
+        webSettings.setSupportZoom(true);
+        webSettings.setBuiltInZoomControls(true);
+        webSettings.setDisplayZoomControls(false); 
+
+        // --- 【保留】防频繁掉线与多媒体加载优化 ---
+        webSettings.setDomStorageEnabled(true);
+        webSettings.setDatabaseEnabled(true);
+        webSettings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+
+        // --- 【关键配置】将剪贴板桥梁注册到内核中 ---
+        this.webView.addJavascriptInterface(new JSBridge(), "AndroidClipboard");
+
+        // --- 【原生增强】如果长按的是标准的超链接，直接底层拦截并复制 ---
+        this.webView.setOnLongClickListener(new View.OnLongClickListener() {
+            @Override
+            public boolean onLongClick(View v) {
+                WebView.HitTestResult result = ((WebView) v).getHitTestResult();
+                if (result != null && result.getType() == WebView.HitTestResult.SRC_ANCHOR_TYPE) {
+                    String url = result.getExtra();
+                    if (url != null) {
+                        ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                        clipboard.setPrimaryClip(ClipData.newPlainText("URL", url));
+                        Toast.makeText(getApplicationContext(), "✅ 链接已复制", Toast.LENGTH_SHORT).show();
+                        return true; 
+                    }
+                }
+                return false;
+            }
+        });
+
+        this.webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                view.loadUrl(url);
+                return true;
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                
+                // --- 【黑科技】强制注入“长按一键自动复制”脚本 ---
+                view.evaluateJavascript(
+                    "javascript:(function() { " +
+                    "  var style = document.createElement('style');" +
+                    "  style.innerHTML = '* { -webkit-user-select: text !important; user-select: text !important; }';" +
+                    "  document.head.appendChild(style);" +
+                    "  var longPressTimer;" +
+                    "  document.addEventListener('touchstart', function(e) { " +
+                    "    longPressTimer = setTimeout(function() { " +
+                    "      var text = window.getSelection().toString();" +
+                    "      if(!text) { text = (e.target.innerText || e.target.value || '').trim(); }" +
+                    "      if(text && text.length > 0) { AndroidClipboard.copyText(text); } " +
+                    "    }, 600); " + // 手指按住 0.6 秒即触发自动复制
+                    "  });" +
+                    "  document.addEventListener('touchend', function() { clearTimeout(longPressTimer); });" +
+                    "  document.addEventListener('touchmove', function() { clearTimeout(longPressTimer); });" +
+                    "})()", null);
+            }
+        });
+
+        // --- 【保留】接管下载功能并使用正则处理 PT 站文件名 ---
+        this.webView.setDownloadListener(new DownloadListener() {
+            @Override
+            public void onDownloadStart(String url, String userAgent, String contentDisposition, String mimeType, long contentLength) {
+                DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
+
+                String cookies = CookieManager.getInstance().getCookie(url);
+                request.addRequestHeader("cookie", cookies);
+                request.addRequestHeader("User-Agent", userAgent);
+
+                String fileName = URLUtil.guessFileName(url, contentDisposition, mimeType);
+
+                if (contentDisposition != null) {
+                    try {
+                        Matcher m1 = Pattern.compile("filename\\*\\s*=\\s*UTF-8''([^;]+)", Pattern.CASE_INSENSITIVE).matcher(contentDisposition);
+                        Matcher m2 = Pattern.compile("filename\\s*=\\s*\"?([^\";]+)\"?", Pattern.CASE_INSENSITIVE).matcher(contentDisposition);
+                        if (m1.find()) {
+                            fileName = URLDecoder.decode(m1.group(1), "UTF-8");
+                        } else if (m2.find()) {
+                            fileName = URLDecoder.decode(m2.group(1), "UTF-8");
+                        }
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                }
+
+                fileName = fileName.replaceAll("^\\[.*?\\][\\.\\s_-]*", "");
+
+                if (fileName.startsWith("download.php")) {
+                    fileName = "PT_Torrent_" + System.currentTimeMillis() + ".torrent";
+                } else if (!fileName.endsWith(".torrent") && mimeType != null && mimeType.contains("torrent")) {
+                    fileName = fileName + ".torrent";
+                }
+
+                request.setDescription("正在下载...");
+                request.setTitle(fileName);
+                request.allowScanningByMediaScanner();
+                request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+                request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
+
+                DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+                dm.enqueue(request);
+
+                Toast.makeText(getApplicationContext(), "开始下载: " + fileName, Toast.LENGTH_SHORT).show();
+            }
+        });
+    }
+
+    // --- 【保留】返回键逻辑修复 ---
+    @Override
+    public void onBackPressed() {
+        if (this.webView.canGoBack()) {
+            this.webView.goBack();
+        } else {
+            super.onBackPressed();
+        }
+    }
+}
+```
+
+3.复制功能弹窗
+```
+// 【【【 关键：这是您的 ID ！】】】
+package com.xxsky.longpt;
+
+import android.graphics.Color;
+import android.os.Bundle;
+import android.view.View;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import com.getcapacitor.BridgeActivity;
+
+import android.app.DownloadManager;
+import android.net.Uri;
+import android.os.Environment;
+import android.webkit.CookieManager;
+import android.webkit.DownloadListener;
+import android.webkit.URLUtil;
+import android.widget.Toast;
+
+import java.net.URLDecoder;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+// --- 【新增：原生菜单与剪贴板需要的组件】 ---
+import android.view.ContextMenu;
+import android.view.MenuItem;
+import android.content.ClipboardManager;
+import android.content.Context;
+import android.content.ClipData;
+
+public class MainActivity extends BridgeActivity {
+
+    private WebView webView;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        // --- 【保留】沉浸式状态栏修复 ---
+        getWindow().getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE |
+                        View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+        );
+        getWindow().setStatusBarColor(Color.TRANSPARENT);
+
+        this.webView = this.bridge.getWebView();
+        WebSettings webSettings = this.webView.getSettings();
+        webSettings.setJavaScriptCanOpenWindowsAutomatically(true);
+
+        // --- 【保留】电脑端网页自适应与缩放优化 ---
+        webSettings.setUseWideViewPort(true); 
+        webSettings.setLoadWithOverviewMode(true); 
+        webSettings.setSupportZoom(true);
+        webSettings.setBuiltInZoomControls(true);
+        webSettings.setDisplayZoomControls(false); 
+
+        // --- 【保留】防频繁掉线与多媒体加载优化 ---
+        webSettings.setDomStorageEnabled(true);
+        webSettings.setDatabaseEnabled(true);
+        webSettings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+
+        // --- 【终极修复】向安卓系统注册原生长按菜单 ---
+        this.webView.setLongClickable(true);
+        registerForContextMenu(this.webView); // 核心：让 WebView 拥有呼出原生菜单的权限
+
+        // --- 【保留】破解网页 JS 的防复制机制 ---
+        this.webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                view.loadUrl(url);
+                return true;
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                view.evaluateJavascript(
+                    "javascript:(function() { " +
+                    "var style = document.createElement('style');" +
+                    "style.innerHTML = '* { -webkit-user-select: text !important; user-select: text !important; -webkit-touch-callout: default !important; }';" +
+                    "document.head.appendChild(style);" +
+                    "})()", null);
+            }
+        });
+
+        // --- 【保留】接管下载功能并使用正则处理 PT 站文件名 ---
+        this.webView.setDownloadListener(new DownloadListener() {
+            @Override
+            public void onDownloadStart(String url, String userAgent, String contentDisposition, String mimeType, long contentLength) {
+                DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
+
+                String cookies = CookieManager.getInstance().getCookie(url);
+                request.addRequestHeader("cookie", cookies);
+                request.addRequestHeader("User-Agent", userAgent);
+
+                String fileName = URLUtil.guessFileName(url, contentDisposition, mimeType);
+
+                if (contentDisposition != null) {
+                    try {
+                        Matcher m1 = Pattern.compile("filename\\*\\s*=\\s*UTF-8''([^;]+)", Pattern.CASE_INSENSITIVE).matcher(contentDisposition);
+                        Matcher m2 = Pattern.compile("filename\\s*=\\s*\"?([^\";]+)\"?", Pattern.CASE_INSENSITIVE).matcher(contentDisposition);
+                        if (m1.find()) {
+                            fileName = URLDecoder.decode(m1.group(1), "UTF-8");
+                        } else if (m2.find()) {
+                            fileName = URLDecoder.decode(m2.group(1), "UTF-8");
+                        }
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                }
+
+                fileName = fileName.replaceAll("^\\[.*?\\][\\.\\s_-]*", "");
+
+                if (fileName.startsWith("download.php")) {
+                    fileName = "PT_Torrent_" + System.currentTimeMillis() + ".torrent";
+                } else if (!fileName.endsWith(".torrent") && mimeType != null && mimeType.contains("torrent")) {
+                    fileName = fileName + ".torrent";
+                }
+
+                request.setDescription("正在下载...");
+                request.setTitle(fileName);
+                request.allowScanningByMediaScanner();
+                request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+                request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
+
+                DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+                dm.enqueue(request);
+
+                Toast.makeText(getApplicationContext(), "开始下载: " + fileName, Toast.LENGTH_SHORT).show();
+            }
+        });
+    }
+
+    // ==========================================================
+    // --- 【新增核心】创建长按原生菜单 ---
+    // ==========================================================
+    @Override
+    public void onCreateContextMenu(ContextMenu menu, View v, ContextMenu.ContextMenuInfo menuInfo) {
+        super.onCreateContextMenu(menu, v, menuInfo);
+        
+        // 探测用户手指当前按在什么东西上
+        WebView.HitTestResult result = this.webView.getHitTestResult();
+        if (result != null) {
+            int type = result.getType();
+            
+            // 如果按的是链接（比如 RSS 地址）
+            if (type == WebView.HitTestResult.SRC_ANCHOR_TYPE || type == WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE) {
+                menu.setHeaderTitle("操作链接");
+                menu.add(0, 1, 0, "复制链接地址"); // 动态添加一个复制按钮
+            } 
+            // 如果按的是纯图片
+            else if (type == WebView.HitTestResult.IMAGE_TYPE) {
+                menu.setHeaderTitle("操作图片");
+                menu.add(0, 2, 0, "复制图片链接");
+            }
+        }
+    }
+
+    // --- 【新增核心】点击菜单后的执行动作 ---
+    @Override
+    public boolean onContextItemSelected(MenuItem item) {
+        WebView.HitTestResult result = this.webView.getHitTestResult();
+        if (result == null) return false;
+
+        String url = result.getExtra(); // 抓取底层真实的网址
+        if (url == null) return false;
+
+        // 如果用户点击了“复制”
+        if (item.getItemId() == 1 || item.getItemId() == 2) {
+            // 调用安卓系统剪贴板
+            ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            ClipData clip = ClipData.newPlainText("Copied Link", url);
+            clipboard.setPrimaryClip(clip);
+            
+            // 底部弹个小提示
+            Toast.makeText(this, "✅ 已复制到剪贴板", Toast.LENGTH_SHORT).show();
+            return true;
+        }
+        return super.onContextItemSelected(item);
+    }
+    // ==========================================================
+
+
+    // --- 【保留】返回键逻辑修复 ---
+    @Override
+    public void onBackPressed() {
+        if (this.webView.canGoBack()) {
+            this.webView.goBack();
+        } else {
+            super.onBackPressed();
+        }
+    }
+}
+```
 
 
 
