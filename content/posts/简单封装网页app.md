@@ -969,6 +969,211 @@ public class MainActivity extends BridgeActivity {
 }
 ```
 
+4.修正复制为弹窗
+```
+// 【【【 关键：这是您的 ID ！】】】
+package com.xxsky.longpt;
+
+import android.graphics.Color;
+import android.os.Bundle;
+import android.view.View;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import com.getcapacitor.BridgeActivity;
+
+import android.app.DownloadManager;
+import android.net.Uri;
+import android.os.Environment;
+import android.webkit.CookieManager;
+import android.webkit.DownloadListener;
+import android.webkit.URLUtil;
+import android.widget.Toast;
+
+import java.net.URLDecoder;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+// --- 【新增：独立弹窗与剪贴板组件】 ---
+import android.app.AlertDialog;
+import android.content.DialogInterface;
+import android.content.ClipboardManager;
+import android.content.Context;
+import android.content.ClipData;
+
+public class MainActivity extends BridgeActivity {
+
+    private WebView webView;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        // --- 【保留】沉浸式状态栏修复 ---
+        getWindow().getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE |
+                        View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+        );
+        getWindow().setStatusBarColor(Color.TRANSPARENT);
+
+        this.webView = this.bridge.getWebView();
+        WebSettings webSettings = this.webView.getSettings();
+        webSettings.setJavaScriptCanOpenWindowsAutomatically(true);
+
+        // --- 【保留】电脑端网页自适应与缩放优化 ---
+        webSettings.setUseWideViewPort(true); 
+        webSettings.setLoadWithOverviewMode(true); 
+        webSettings.setSupportZoom(true);
+        webSettings.setBuiltInZoomControls(true);
+        webSettings.setDisplayZoomControls(false); 
+
+        // --- 【保留】防频繁掉线与多媒体加载优化 ---
+        webSettings.setDomStorageEnabled(true);
+        webSettings.setDatabaseEnabled(true);
+        webSettings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+
+        // --- 【保留】破解网页 JS 的防复制机制 ---
+        this.webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                view.loadUrl(url);
+                return true;
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                view.evaluateJavascript(
+                    "javascript:(function() { " +
+                    "var style = document.createElement('style');" +
+                    "style.innerHTML = '* { -webkit-user-select: text !important; user-select: text !important; -webkit-touch-callout: default !important; }';" +
+                    "document.head.appendChild(style);" +
+                    "document.oncontextmenu = null; " +
+                    "window.oncontextmenu = null; " +
+                    "document.onselectstart = null; " +
+                    "})()", null);
+            }
+        });
+
+        // ==========================================================
+        // --- 【终极修复】独立剥离的长按事件，彻底杜绝缩放误触 ---
+        // ==========================================================
+        this.webView.setLongClickable(true);
+        this.webView.setOnLongClickListener(new View.OnLongClickListener() {
+            @Override
+            public boolean onLongClick(View v) {
+                WebView.HitTestResult result = ((WebView) v).getHitTestResult();
+                if (result != null) {
+                    int type = result.getType();
+                    
+                    // 1. 如果用户长按的是超链接（比如 RSS 地址）
+                    if (type == WebView.HitTestResult.SRC_ANCHOR_TYPE || type == WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE) {
+                        final String url = result.getExtra();
+                        if (url != null) {
+                            new AlertDialog.Builder(MainActivity.this)
+                                .setTitle("链接操作")
+                                .setItems(new String[]{"复制链接地址"}, new DialogInterface.OnClickListener() {
+                                    @Override
+                                    public void onClick(DialogInterface dialog, int which) {
+                                        if (which == 0) {
+                                            ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                                            ClipData clip = ClipData.newPlainText("Copied Link", url);
+                                            clipboard.setPrimaryClip(clip);
+                                            Toast.makeText(MainActivity.this, "✅ 链接已复制", Toast.LENGTH_SHORT).show();
+                                        }
+                                    }
+                                }).show();
+                            return true; // 告诉系统：这个长按我处理了，不要再触发其他动作
+                        }
+                    } 
+                    // 2. 如果用户长按的是图片
+                    else if (type == WebView.HitTestResult.IMAGE_TYPE) {
+                        final String url = result.getExtra();
+                        if (url != null) {
+                            new AlertDialog.Builder(MainActivity.this)
+                                .setTitle("图片操作")
+                                .setItems(new String[]{"复制图片地址"}, new DialogInterface.OnClickListener() {
+                                    @Override
+                                    public void onClick(DialogInterface dialog, int which) {
+                                        if (which == 0) {
+                                            ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                                            ClipData clip = ClipData.newPlainText("Copied Image", url);
+                                            clipboard.setPrimaryClip(clip);
+                                            Toast.makeText(MainActivity.this, "✅ 图片地址已复制", Toast.LENGTH_SHORT).show();
+                                        }
+                                    }
+                                }).show();
+                            return true;
+                        }
+                    }
+                }
+                // 3. 如果长按的是普通文字，返回 false，让系统自己弹出蓝色的光标供用户拖选
+                return false; 
+            }
+        });
+        // ==========================================================
+
+
+        // --- 【保留】接管下载功能并使用正则处理 PT 站文件名 ---
+        this.webView.setDownloadListener(new DownloadListener() {
+            @Override
+            public void onDownloadStart(String url, String userAgent, String contentDisposition, String mimeType, long contentLength) {
+                DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
+
+                String cookies = CookieManager.getInstance().getCookie(url);
+                request.addRequestHeader("cookie", cookies);
+                request.addRequestHeader("User-Agent", userAgent);
+
+                String fileName = URLUtil.guessFileName(url, contentDisposition, mimeType);
+
+                if (contentDisposition != null) {
+                    try {
+                        Matcher m1 = Pattern.compile("filename\\*\\s*=\\s*UTF-8''([^;]+)", Pattern.CASE_INSENSITIVE).matcher(contentDisposition);
+                        Matcher m2 = Pattern.compile("filename\\s*=\\s*\"?([^\";]+)\"?", Pattern.CASE_INSENSITIVE).matcher(contentDisposition);
+                        if (m1.find()) {
+                            fileName = URLDecoder.decode(m1.group(1), "UTF-8");
+                        } else if (m2.find()) {
+                            fileName = URLDecoder.decode(m2.group(1), "UTF-8");
+                        }
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                }
+
+                fileName = fileName.replaceAll("^\\[.*?\\][\\.\\s_-]*", "");
+
+                if (fileName.startsWith("download.php")) {
+                    fileName = "PT_Torrent_" + System.currentTimeMillis() + ".torrent";
+                } else if (!fileName.endsWith(".torrent") && mimeType != null && mimeType.contains("torrent")) {
+                    fileName = fileName + ".torrent";
+                }
+
+                request.setDescription("正在下载...");
+                request.setTitle(fileName);
+                request.allowScanningByMediaScanner();
+                request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+                request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
+
+                DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+                dm.enqueue(request);
+
+                Toast.makeText(getApplicationContext(), "开始下载: " + fileName, Toast.LENGTH_SHORT).show();
+            }
+        });
+    }
+
+    // --- 【保留】返回键逻辑修复 ---
+    @Override
+    public void onBackPressed() {
+        if (this.webView.canGoBack()) {
+            this.webView.goBack();
+        } else {
+            super.onBackPressed();
+        }
+    }
+}
+```
+
 
 
 
