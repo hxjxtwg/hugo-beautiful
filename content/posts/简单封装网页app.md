@@ -969,7 +969,7 @@ public class MainActivity extends BridgeActivity {
 }
 ```
 
-4.修正复制为弹窗
+4.沉浸式
 ```
 // 【【【 关键：这是您的 ID ！】】】
 package com.xxsky.longpt;
@@ -1174,6 +1174,185 @@ public class MainActivity extends BridgeActivity {
 }
 ```
 
+5.标准式
+```
+// 【【【 关键：这是您的 ID ！】】】
+package com.xxsky.nav; 
 
+import android.os.Bundle;
+import android.view.View;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import com.getcapacitor.BridgeActivity;
+
+import android.app.DownloadManager;
+import android.net.Uri;
+import android.os.Environment;
+import android.webkit.CookieManager;
+import android.webkit.DownloadListener;
+import android.webkit.URLUtil;
+import android.widget.Toast;
+import java.net.URLDecoder;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import android.app.AlertDialog;
+import android.content.DialogInterface;
+import android.content.ClipboardManager;
+import android.content.Context;
+import android.content.ClipData;
+
+public class MainActivity extends BridgeActivity {
+
+    private WebView webView;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        // 【删除了沉浸式状态栏配置，使用安卓系统默认状态栏】
+
+        this.webView = this.bridge.getWebView();
+        WebSettings webSettings = this.webView.getSettings();
+        webSettings.setJavaScriptCanOpenWindowsAutomatically(true);
+
+        // --- 电脑端网页自适应与缩放优化 ---
+        webSettings.setUseWideViewPort(true); 
+        webSettings.setLoadWithOverviewMode(true); 
+        webSettings.setSupportZoom(true);
+        webSettings.setBuiltInZoomControls(true);
+        webSettings.setDisplayZoomControls(false); 
+
+        // --- 防频繁掉线与多媒体加载优化 ---
+        webSettings.setDomStorageEnabled(true);
+        webSettings.setDatabaseEnabled(true);
+        webSettings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+
+        // --- 破解网页 JS 防复制机制 ---
+        this.webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                view.loadUrl(url);
+                return true;
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                view.evaluateJavascript(
+                    "javascript:(function() { " +
+                    "var style = document.createElement('style');" +
+                    "style.innerHTML = '* { -webkit-user-select: text !important; user-select: text !important; -webkit-touch-callout: default !important; }';" +
+                    "document.head.appendChild(style);" +
+                    "document.oncontextmenu = null; " +
+                    "window.oncontextmenu = null; " +
+                    "document.onselectstart = null; " +
+                    "})()", null);
+            }
+        });
+
+        // --- 独立弹窗长按事件（解决缩放误触） ---
+        this.webView.setLongClickable(true);
+        this.webView.setOnLongClickListener(new View.OnLongClickListener() {
+            @Override
+            public boolean onLongClick(View v) {
+                WebView.HitTestResult result = ((WebView) v).getHitTestResult();
+                if (result != null) {
+                    int type = result.getType();
+                    if (type == WebView.HitTestResult.SRC_ANCHOR_TYPE || type == WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE) {
+                        final String url = result.getExtra();
+                        if (url != null) {
+                            new AlertDialog.Builder(MainActivity.this)
+                                .setTitle("链接操作")
+                                .setItems(new String[]{"复制链接地址"}, new DialogInterface.OnClickListener() {
+                                    @Override
+                                    public void onClick(DialogInterface dialog, int which) {
+                                        if (which == 0) {
+                                            ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                                            ClipData clip = ClipData.newPlainText("Copied Link", url);
+                                            clipboard.setPrimaryClip(clip);
+                                            Toast.makeText(MainActivity.this, "✅ 链接已复制", Toast.LENGTH_SHORT).show();
+                                        }
+                                    }
+                                }).show();
+                            return true; 
+                        }
+                    } else if (type == WebView.HitTestResult.IMAGE_TYPE) {
+                        final String url = result.getExtra();
+                        if (url != null) {
+                            new AlertDialog.Builder(MainActivity.this)
+                                .setTitle("图片操作")
+                                .setItems(new String[]{"复制图片地址"}, new DialogInterface.OnClickListener() {
+                                    @Override
+                                    public void onClick(DialogInterface dialog, int which) {
+                                        if (which == 0) {
+                                            ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                                            ClipData clip = ClipData.newPlainText("Copied Image", url);
+                                            clipboard.setPrimaryClip(clip);
+                                            Toast.makeText(MainActivity.this, "✅ 图片地址已复制", Toast.LENGTH_SHORT).show();
+                                        }
+                                    }
+                                }).show();
+                            return true;
+                        }
+                    }
+                }
+                return false; 
+            }
+        });
+
+        // --- 接管原生下载功能 ---
+        this.webView.setDownloadListener(new DownloadListener() {
+            @Override
+            public void onDownloadStart(String url, String userAgent, String contentDisposition, String mimeType, long contentLength) {
+                DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
+                String cookies = CookieManager.getInstance().getCookie(url);
+                request.addRequestHeader("cookie", cookies);
+                request.addRequestHeader("User-Agent", userAgent);
+
+                String fileName = URLUtil.guessFileName(url, contentDisposition, mimeType);
+                if (contentDisposition != null) {
+                    try {
+                        Matcher m1 = Pattern.compile("filename\\*\\s*=\\s*UTF-8''([^;]+)", Pattern.CASE_INSENSITIVE).matcher(contentDisposition);
+                        Matcher m2 = Pattern.compile("filename\\s*=\\s*\"?([^\";]+)\"?", Pattern.CASE_INSENSITIVE).matcher(contentDisposition);
+                        if (m1.find()) {
+                            fileName = URLDecoder.decode(m1.group(1), "UTF-8");
+                        } else if (m2.find()) {
+                            fileName = URLDecoder.decode(m2.group(1), "UTF-8");
+                        }
+                    } catch (Exception e) {}
+                }
+
+                fileName = fileName.replaceAll("^\\[.*?\\][\\.\\s_-]*", "");
+                if (fileName.startsWith("download.php")) {
+                    fileName = "PT_Torrent_" + System.currentTimeMillis() + ".torrent";
+                } else if (!fileName.endsWith(".torrent") && mimeType != null && mimeType.contains("torrent")) {
+                    fileName = fileName + ".torrent";
+                }
+
+                request.setDescription("正在下载...");
+                request.setTitle(fileName);
+                request.allowScanningByMediaScanner();
+                request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+                request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
+
+                DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+                dm.enqueue(request);
+                Toast.makeText(getApplicationContext(), "开始下载: " + fileName, Toast.LENGTH_SHORT).show();
+            }
+        });
+    }
+
+    // --- 返回键逻辑修复 ---
+    @Override
+    public void onBackPressed() {
+        if (this.webView.canGoBack()) {
+            this.webView.goBack();
+        } else {
+            super.onBackPressed();
+        }
+    }
+}
+```
 
 
