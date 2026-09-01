@@ -26,7 +26,9 @@ Termux中安装openssh、网页版的vscode
 1.安装工具
 
 在 Termux 里输入：
-
+```
+pkg update && pkg upgrade -y
+```
 ```
 pkg install openssh
 ```
@@ -91,7 +93,10 @@ pm2 start /data/data/com.termux/files/usr/bin/sshd --name "sshd" -- -D
 ```
 7.ssh连接
 ```
-ssh u0_a1443@192.168.0.117 -p 8022
+ssh u0_a1443@192.168.2.117 -p 8022
+```
+```
+ssh -p 8022 root@192.168.2.199
 ```
 有了 SSH： 你可以直接在 Windows 的 PowerShell 或者命令行里敲一句 ssh u0_aXXX@192.168.x.x -p 8022 连进去，敲个 pm2 restart vscode
 
@@ -119,10 +124,18 @@ pm2 save
 
 3.在电脑上见证奇迹
 
+修改配置允许局域网访问：输入 
+```
+nano ~/.config/code-server/config.yaml
+```
+在编辑器中，将 bind-addr: 127.0.0.1:8080 修改为 bind-addr: 0.0.0.0:8080。在这里你也能看到 password: 后面的随机密码（可以修改为你想要的密码）。修改完按 Ctrl+O 回车保存，Ctrl+X 退出。
+
+再次启动并保持后台运行
+
 回到你的 Windows 电脑，不要打开 VS Code 软件，而是打开你的 Chrome 或 Edge 浏览器。
 在网址栏输入你手机的 IP 加上 8080 端口（根据你截图里的 IP）：
 ```
-http://192.168.0.117:8088
+http://192.168.2.117:8088
 ```
 4.安装出错
 
@@ -148,6 +161,9 @@ pm2 start code-server --name vscode --interpreter bash -- --bind-addr 0.0.0.0:80
 pm2 start "code-server --bind-addr 0.0.0.0:8088 --auth none" --name "vscode"
 ```
 ```
+pm2 start code-server --name "vscode" --interpreter bash
+```
+```
 pm2 save
 pm2 list
 ```
@@ -163,3 +179,23 @@ pm2 start "python3 -m http.server 9999 -d /storage/emulated/0/Download/189cas" -
 pm2 save
 pm2 startup
 ```
+### 四、PM2 守护和运行的过程
+1. 加入 PM2 管理并启动
+
+运行命令：pm2 start code-server
+
+终端随后会出现一个绿色表格，看到 code-server 的状态显示为 online，就代表 PM2 已经成功接管了该服务。
+
+2. 保存 PM2 进程列表
+
+运行命令：pm2 save
+
+这一步是为了将 code-server 写入 PM2 的记忆库中，防止 Termux 关闭或手机重启后丢失服务列表。
+
+3. 设置 Termux 启动时自动恢复
+
+运行命令：echo "pm2 resurrect" >> ~/.bashrc
+
+这会将唤醒指令写入 Termux 的初始化配置文件。以后哪怕手机关机重启，只要你在手机上点开一次 Termux App，PM2 就会自动在后台把 VS Code 拉起来。
+
+完成这三步后，你的后台服务就已经稳如泰山了。现在直接在电脑浏览器打开 [http://192.168.2.188:8080](http://192.168.2.188:8080)，输入刚才你在 nano 编辑器里设置的密码，就可以开始敲代码了。

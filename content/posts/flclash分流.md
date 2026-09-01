@@ -28,9 +28,9 @@ tags:
 custom_proxy_group=✔️ 节点选择`select`[]♻️ 自动选择`[]DIRECT`.*
 custom_proxy_group=♻️ 自动选择`url-test`.*`http://www.gstatic.com/generate_204`300,,5
 custom_proxy_group=🔮 专用下载`load-balance`(专用X)`http://www.gstatic.com/generate_204`300
-custom_proxy_group=☀️ 白天电报池`url-test`(TS)`http://www.gstatic.com/generate_204`300,,50
-custom_proxy_group=🌙 晚间电报池`url-test`(美国线路)`http://www.gstatic.com/generate_204`300,,50
-custom_proxy_group=🔯 电报下载`select`[]☀️ 白天电报池`[]🌙 晚间电报池
+custom_proxy_group=白天电报池`url-test`(TS)`http://www.gstatic.com/generate_204`300,,50
+custom_proxy_group=晚间电报池`url-test`(美国线路)`http://www.gstatic.com/generate_204`300,,50
+custom_proxy_group=🔯 电报下载`select`[]白天电报池`[]晚间电报池
 
 ; 1. BT 特征规则 (最高优先级拦截)
 custom_rule=PROCESS-NAME,qbittorrent-nox,🔮 专用下载
@@ -70,11 +70,11 @@ overwrite_original_rules=true
 在新建的终端里，直接全选复制下面这一整段代码，粘贴进去并按下回车键（这会利用 cat 命令直接把纯净的新任务强行覆盖到系统里）：
 ```
 cat << 'EOF' | crontab -
-# 每天晚上 20:00 准时切换到夜班优质线路池
-0 20 * * * curl --noproxy "*" -s -X PUT "http://127.0.0.1:9090/proxies/🔯 电报下载" -H "Content-Type: application/json" -d '{"name": "🌙 晚间电报池"}' > /dev/null
+# 每天晚上 20:00 准时切换到夜班 (目标组已去图标)
+0 20 * * * curl --noproxy "*" -s -X PUT "http://127.0.0.1:9090/proxies/🔯%20电报下载" -H "Content-Type: application/json" -d '{"name": "晚间电报池"}' > /dev/null
 
-# 每天早上 06:00 准时恢复为白天常规测速池
-0 6 * * * curl --noproxy "*" -s -X PUT "http://127.0.0.1:9090/proxies/🔯 电报下载" -H "Content-Type: application/json" -d '{"name": "☀️ 白天电报池"}' > /dev/null
+# 每天早上 06:00 准时恢复为白天 (目标组已去图标)
+0 6 * * * curl --noproxy "*" -s -X PUT "http://127.0.0.1:9090/proxies/🔯%20电报下载" -H "Content-Type: application/json" -d '{"name": "白天电报池"}' > /dev/null
 EOF
 ```
 第三步：验证是否写入成功
@@ -129,3 +129,11 @@ pm2 start "crond -f" --name "crontab-daemon"
 pm2 save
 ```
 注意要删掉.bashr里的定时任务
+
+测试切换
+```
+curl --noproxy "*" -i -X PUT "http://127.0.0.1:9090/proxies/🔯%20电报下载" -H "Content-Type: application/json" -d '{"name": "晚间电报池"}'
+```
+```
+curl --noproxy "*" -s http://127.0.0.1:9090/proxies | python -c "import sys, json; print('内核真实生效组: ' + json.load(sys.stdin)['proxies']['🔯 电报下载']['now'])"
+```

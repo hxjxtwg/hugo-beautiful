@@ -205,6 +205,10 @@ pm2 env 5
 
 ### 三、qbt_delivery.py
 
+```
+pip install httpx
+```
+
 1.网页端bt的相关设置
 
 1.1左边栏里的分类设置与autotg.py一样，也是分类目录映射关系。
@@ -647,7 +651,6 @@ def get_mount_root():
     return "/135/189cas"
 
 async def notify_steward_log(msg, level="INFO"):
-    """安全桥梁：走打更人本地Web中枢上报，规避SQLite数据库锁死"""
     print(f"[{level}] {msg}")
     try:
         async with httpx.AsyncClient(timeout=2.0) as client:
@@ -655,7 +658,6 @@ async def notify_steward_log(msg, level="INFO"):
     except Exception: pass
 
 async def send_push_notification(title, content):
-    """独立的微信/TG消息推送通道，只推送核心成功/失败结果"""
     if PUSHPLUS_TOKEN:
         try:
             url = "http://www.pushplus.plus/send"
@@ -677,11 +679,9 @@ async def send_push_notification(title, content):
             await notify_steward_log(f"⚠️ [TG推送异常] 网络或代理出错: {e}", level="WARNING")
 
 async def trigger_strm_sync(drive, folder_path):
-    """🌟 修正：通知远端 5555 端口中继器去接管 139 盘后续工作"""
     url = f"{RELAY_BASE_URL}/api/trigger_139"
     params = {"path": folder_path}
     try:
-        # 🛡️ 核心修复：增加 proxy=None 和 trust_env=False，绝对防止请求被翻墙软件劫持
         async with httpx.AsyncClient(timeout=10.0, proxy=None, trust_env=False) as client:
             resp = await client.get(url, params=params)
             if resp.status_code == 200:
@@ -692,11 +692,9 @@ async def trigger_strm_sync(drive, folder_path):
         await notify_steward_log(f"⚠️ [139后续触发失败]: {e}", level="WARNING")
 
 async def trigger_189_local_script(folder_path):
-    """🌟 修正：通知远端 5555 端口中继器去接管 189 盘后续工作"""
     url = f"{RELAY_BASE_URL}/force_harvest"
     params = {"path": folder_path}
     try:
-        # 🛡️ 核心修复：增加 proxy=None 和 trust_env=False，绝对防止请求被翻墙软件劫持
         async with httpx.AsyncClient(timeout=10.0, proxy=None, trust_env=False) as client:
             resp = await client.get(url, params=params)
             if resp.status_code == 200:
@@ -705,15 +703,6 @@ async def trigger_189_local_script(folder_path):
                 await notify_steward_log(f"⚠️ [189后续触发异常] HTTP {resp.status_code}", level="WARNING")
     except Exception as e:
         await notify_steward_log(f"⚠️ [189后续触发失败]: {e}", level="WARNING")
-
-# =================================================================
-# 🧠 智能属性提取引擎
-# =================================================================
-def get_hdr_sdr_tag(torrent_name):
-    t = torrent_name.upper()
-    if re.search(r'(DV|DOVI|DOLBY VISION|HDR10\+|HDR10|HDR)', t): return "HDR"
-    if re.search(r'(SDR)', t): return "SDR"
-    return ""
 
 def extract_pure_episode(text, drama_anchor=None):
     if drama_anchor:
@@ -740,9 +729,6 @@ async def fetch_tmdb_year(title):
     except: pass
     return time.strftime("%Y")
 
-# =================================================================
-# 🛡️ 猎犬级 CAS 强力镜像下发引擎
-# =================================================================
 async def bg_fetch_cas_task(cas_target_full, final_cas_path, sub_path, cas_file_name, olist_url, olist_token, disk_name):
     await notify_steward_log(f"🔎 [CAS嗅探启动-{disk_name}] 正在捕获云端特征码: `{cas_file_name}`")
     await asyncio.sleep(15) 
@@ -788,22 +774,33 @@ async def main():
     torrent_name = sys.argv[1]
     save_path = sys.argv[2]
     category = sys.argv[3]
-    custom_tag = sys.argv[4].strip() if len(sys.argv) > 4 else ""
+    raw_tag = sys.argv[4].strip() if len(sys.argv) > 4 else ""
 
     # ========================================================
-    # 🚦 双传暗号拦截与逗号深度清洗机制
+    # 🚦 标签精细拆解：双传指令、剧名覆盖、附加属性(HDR/HQ等)
     # ========================================================
+    
+    # 1. 拦截双传指令
     is_double_upload = False
-    if "双传" in custom_tag:
+    if "双传" in raw_tag:
         is_double_upload = True
-        custom_tag = custom_tag.replace("双传", "")
-        
-    custom_tag = custom_tag.replace(",", " ").replace("，", " ")
-    custom_tag = " ".join(custom_tag.split())
+        raw_tag = raw_tag.replace("双传", "")
+
+    # 2. 拦截并提取强制剧名 (支持 剧名=xxx 或 剧名:xxx)
+    custom_drama_name = ""
+    name_match = re.search(r'剧名[=：:]([^,，\s]+)', raw_tag)
+    if name_match:
+        custom_drama_name = name_match.group(1).strip()
+        # 提取完后，把“剧名=xxx”这段从标签字符串里彻底抹掉
+        raw_tag = raw_tag.replace(name_match.group(0), "")
+
+    # 3. 清理剩下的特征标签 (比如 HDR, HQ 等)，留作文件夹后缀
+    remaining_tags = raw_tag.replace(",", " ").replace("，", " ")
+    remaining_tags = " ".join(remaining_tags.split()).strip()
+    
     # ========================================================
-    # 📌 【把代码粘贴在这里】自动记录最近执行的任务参数
+    # 📌 自动记录最近执行的任务参数
     # ========================================================
-    import json
     history_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "task_history.json")
     try:
         history_data = []
@@ -819,19 +816,25 @@ async def main():
         with open(history_file, "w", encoding="utf-8") as hf:
             json.dump(history_data, hf, ensure_ascii=False, indent=2)
     except: pass
-    # ========================================================
-    # 🎯 提取优化：有中文只用中文，没中文才保留英文
-    # ========================================================
-    cleaned_search = re.sub(r'\[剧集\]|【剧集】|\[更新\]|【更新】|\[高清.*?\]|【高清制作.*?】', '', torrent_name)
-    cn_match = re.search(r'([\u4e00-\u9fa5][\u4e00-\u9fa50-9：·！，—、\s]*)', cleaned_search)
     
-    if cn_match and cn_match.group(1).strip():
-        pure_drama_name = cn_match.group(1).strip()
+    # ========================================================
+    # 🎯 提取优化：标签强行接管剧名 vs 正则瞎猜
+    # ========================================================
+    if custom_drama_name:
+        # 【神级截胡】如果你传了 剧名=xxx，直接无视原名，强制使用！
+        pure_drama_name = custom_drama_name
     else:
-        clean_name = re.sub(r'^\[.*?\]|【.*?】|\(.*?\)', '', torrent_name).strip().lstrip('.')
-        pure_drama_name = clean_name.split('.')[0].strip()
+        # 如果没写 剧名=xxx，依然沿用原有的正则去原名里猜
+        cleaned_search = re.sub(r'\[剧集\]|【剧集】|\[更新\]|【更新】|\[高清.*?\]|【高清制作.*?】', '', torrent_name)
+        cn_match = re.search(r'([\u4e00-\u9fa5][\u4e00-\u9fa50-9：·！，—、\s]*)', cleaned_search)
         
-    pure_drama_name = re.sub(r'第.*?季|S\d+|Season\s*\d+', '', pure_drama_name, flags=re.IGNORECASE).strip()
+        if cn_match and cn_match.group(1).strip():
+            pure_drama_name = cn_match.group(1).strip()
+        else:
+            clean_name = re.sub(r'^\[.*?\]|【.*?】|\(.*?\)', '', torrent_name).strip().lstrip('.')
+            pure_drama_name = clean_name.split('.')[0].strip()
+            
+        pure_drama_name = re.sub(r'第.*?季|S\d+|Season\s*\d+', '', pure_drama_name, flags=re.IGNORECASE).strip()
 
     m_season = re.search(r'(?i)S(\d+)', torrent_name)
     folder_season = int(m_season.group(1)) if m_season else 1
@@ -846,12 +849,21 @@ async def main():
     current_mount = get_mount_root()
     is_movie = "电影" in category or category in ["演唱会", "纪录片"]
 
-    # 2. 剧名文件夹标准化决策
-    clean_base = pure_drama_name.replace(" ", ".") if pure_drama_name else "Unknown.Drama"
+    # ========================================================
+    # 📁 剧名文件夹标准化决策 (完美拼接)
+    # ========================================================
+    if custom_drama_name:
+        # 纯中文名不需要加点替换
+        clean_base = pure_drama_name
+    else:
+        # 拼音原名保留替换空格为点的逻辑
+        clean_base = pure_drama_name.replace(" ", ".") if pure_drama_name else "Unknown.Drama"
+        
     base_folder = f"{clean_base} ({year})" if year else clean_base
     
-    if custom_tag:
-        folder_name = f"{base_folder} {custom_tag}"
+    # 拼装最终文件夹名：如果除了指令和剧名，还有剩下的标签 (比如 HDR)，追加在最后面！
+    if remaining_tags:
+        folder_name = f"{base_folder} {remaining_tags}"
     else:
         folder_name = base_folder
 
@@ -905,7 +917,6 @@ async def main():
         
         if os.path.exists(final_cas_path):
             await notify_steward_log(f"⏭️ [天翼跳过] 侦测到本地已存在镜像 `{cas_file_name}`，执行跳过处理。")
-            # 👇 修改这里：把 local_cas_dir 改成 final_cas_path
             await trigger_189_local_script(final_cas_path) 
             continue
 
@@ -943,7 +954,6 @@ async def main():
                     
                     await bg_fetch_cas_task(cas_target_full, final_cas_path, sub_path, cas_file_name, OLIST_URL, OLIST_TOKEN, "天翼")
                     
-                    # 👇 修改这里：把 local_cas_dir 改成 final_cas_path
                     await trigger_189_local_script(final_cas_path)
                     
                     break 
