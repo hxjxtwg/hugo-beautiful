@@ -140,6 +140,14 @@ cat << 'EOF' > tunnel.sh
 termux-chroot cloudflared tunnel --edge-ip-version 4 --protocol quic --config /data/data/com.termux/files/home/.cloudflared/config.yml run xxsky_tunnel
 EOF
 ```
+或者tunnel.sh内容：
+```
+#!/bin/bash
+#termux-chroot cloudflared tunnel --edge-ip-version 4 --protocol http2 --config /data/data/com.termux/files/home/.cloudflared/config.yml run xxsky_tunnel
+#!/bin/bash
+# 启动 cloudflared，并将错误输出重定向，实时过滤掉包含指定关键字的垃圾日志
+termux-chroot cloudflared tunnel --edge-ip-version 4 --protocol http2 --config /data/data/com.termux/files/home/.cloudflared/config.yml run xxsky_tunnel 2>&1 | grep --line-buffered -E -v "context canceled|i/o timeout|client disconnected|stream closed"
+```
 8.5赋予脚本执行权限
 ```
 chmod +x tunnel.sh
@@ -160,26 +168,52 @@ protocol: http2
 
 ingress:
   - hostname: emby.363689.xyz
-    service: http://192.168.0.199:8097
+    service: http://192.168.2.199:8097
     originRequest:
-      httpHostHeader: "192.168.0.199"
+      httpHostHeader: "192.168.2.199"
   - hostname: oplist.363689.xyz
-    service: http://192.168.0.199:5244
-  - hostname: play.363689.xyz
-    service: http://192.168.0.199:5000
-  - hostname: xxsky.363689.xyz
-    service: http://192.168.0.199:8097
+    service: http://192.168.2.199:5244
     originRequest:
-      httpHostHeader: "192.168.0.199"
+      httpHostHeader: "192.168.2.199"
+  - hostname: play.363689.xyz
+    service: http://192.168.2.199:5000
+    originRequest:
+      httpHostHeader: "192.168.2.199"
+  - hostname: xxsky.363689.xyz
+    service: http://192.168.2.199:8097
+    originRequest:
+      httpHostHeader: "192.168.2.199"
   - hostname: qbt.363689.xyz
-    service: http://192.168.0.199:8080
+    service: http://192.168.2.199:8080
+  - hostname: qat.363689.xyz
+    service: http://192.168.2.177:8080 
   - hostname: cas.363689.xyz
-    service: http://192.168.0.199:5050
+    service: http://192.168.2.199:5050
+    originRequest:
+      httpHostHeader: "192.168.2.199"
   - hostname: ftp.363689.xyz
-    service: http://192.168.0.199:9999
+    service: http://192.168.2.199:9999
+    originRequest:
+      httpHostHeader: "192.168.2.199"
+  - hostname: ssh.363689.xyz
+    service: ssh://192.168.2.199:8022
+  - hostname: qct.363689.xyz
+    service: http://192.168.2.188:8080
   - service: http_status:404
 ```
 本地回环断流被真实IP解决
+
+当时强制添加 httpHostHeader 主要是为了解决本地服务主动切断连接（即你之前遇到的满屏 client disconnected 报错）的安全拦截问题。
+
+具体的原因和底层机制如下：
+
+外网域名的“水土不服”：当你在外网浏览器输入 emby.363689.xyz 时，cloudflared 默认会把这个带有“外网域名”的请求头部（Host Header），原封不动地砸给你内网的 Nginx（8097端口）或其他服务。
+
+本地服务的安全防御：很多现代 Web 服务（比如严格配置了 server_name 的 Nginx，以及自带 DNS 重绑定保护机制的 qBittorrent、Emby）非常敏感。当它们发现收到的请求头部竟然是一个不认识的外网域名，而不是自己熟悉的局域网 IP 时，会出于安全机制直接判定为非法请求或跨站伪造，瞬间强行切断连接。
+
+伪装成“内网自己人”：加上 httpHostHeader: "192.168.2.199" 相当于给穿透进来的外部流量戴上了一个“本地通行证”。cloudflared 会在交接流量的前一秒，强行把请求头里的外网域名抹掉，替换成你指定的局域网 IP。
+
+简单来说，这个设置的作用就是欺骗你的本地 Nginx 和各种后端应用，让它们以为这只是一次普普通通的家庭局域网内部访问，从而一路绿灯放行，彻底消除莫名其妙的断流和拒绝访问报
 
 ### 二、FRP
 ### VPS部署服务端 frps

@@ -100,6 +100,68 @@ ssh -p 8022 root@192.168.2.199
 ```
 有了 SSH： 你可以直接在 Windows 的 PowerShell 或者命令行里敲一句 ssh u0_aXXX@192.168.x.x -p 8022 连进去，敲个 pm2 restart vscode
 
+7.电脑ssh连外网
+
+7.1电脑下载解包工具
+在你要用来远程控制手机的 Windows 电脑上，去官网下载 cloudflared.exe。把它放到一个好找的地方，比如放在 D:\Tools\cloudflared。
+
+7.2组合代理命令连接
+打开电脑的 CMD（命令提示符），把你原本的 SSH 命令和解包工具结合起来。输入以下完整命令：
+```
+ssh -o ProxyCommand="D:\Tools\cloudflared\cloudflared.exe access ssh --hostname ssh.363689.xyz" root@ssh.363689.xyz
+```
+7.3输入密码登入
+敲下回车后，解包工具会在后台自动打通隧道。接着就会像在局域网里一样，弹出密码输入提示，输入你手机 Termux 的密码即可登入。(xxsky1127、8899)
+
+核心变化总结：
+
+不用加端口号了：外网连接时不需要写 -p 8022，因为你在手机 config.yml 里填写的域名 ssh.363689.xyz 已经自动对应了手机内部的 8022 端口。
+
+用户名确认：Termux 默认的用户名通常是 u0_a... 之类的随机字符，如果你在 Termux proot 里强制启用了 root，那就可以直接用 root@ssh.363689.xyz；否则记得把 root 换成你 Termux 的真实用户名。
+
+8.手机端termux连外网
+
+8.1简单配置连ssh
+
+普通 Termux 手机客户端： 只要这台手机通过 
+```
+pkg install cloudflared 
+```
+安装了该工具，直接运行原生命令即可
+
+```
+ssh -o ProxyCommand="cloudflared access ssh --hostname ssh.363689.xyz" root@ssh.363689.xyz
+```
+8.2配置文件连ssh
+
+```
+pkg install cloudflared
+```
+一键创建与编辑方法
+```
+# 1. 创建隐藏的 .ssh 文件夹
+mkdir -p ~/.ssh
+
+# 2. 将配置规则直接写入 config 文件
+cat << 'EOF' > ~/.ssh/config
+Host ssh.363689.xyz
+    ProxyCommand cloudflared access ssh --hostname %h
+EOF
+
+# 3. 赋予严格的权限（SSH 强制要求配置文件必须是私密的，否则会拒绝读取）
+chmod 600 ~/.ssh/config
+```
+安装基础组件
+```
+pkg install openssh cloudflared -y
+```
+最终连接测试
+
+上述步骤做完后，你的配置就彻底固化在这个客户端里了。以后只要你想远程管理服务器，直接敲这句最简单的命令即可：
+```
+ssh root@ssh.363689.xyz
+```
+
 ### 二、部署“网页版 VS Code” (code-server)
 
 既然微软官方的 SSH 插件水土不服，咱们服务器玩家有更高级的玩法：直接在 Termux 里安装一个原生的网页版 VS Code！
