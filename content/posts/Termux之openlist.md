@@ -142,6 +142,11 @@ Successfully create admin user, username: admin, password: XXXXXXXX
 rm openlist-android-arm64.tar.gz
 ```
 
+2.6加入pm2y启动管理
+```
+cd ~/openlist && pm2 start ./openlist --name "openlist" -- server
+```
+
 ### 3.开启 Termux 的 Wake Lock（唤醒锁）
 
 这是最简单也最直接的方法。它会告诉系统：“哪怕锁屏了，也请给我的 CPU 留一口气”。
