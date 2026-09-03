@@ -1367,7 +1367,7 @@ public class MainActivity extends BridgeActivity {
 2.滑到文件最底部的 dependencies { ... } 区域，在里面新起一行，加入这行代码：
 
 ```
-implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
+implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.2.0'
 ```
 3.点击右上角弹出的蓝色大象图标（Sync Now），等进度条跑完
 
@@ -1406,6 +1406,7 @@ import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.ClipData;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout; 
+import android.view.ViewTreeObserver;
 
 public class MainActivity extends BridgeActivity {
 
@@ -1444,6 +1445,20 @@ public class MainActivity extends BridgeActivity {
                 webView.reload();
             }
         });
+
+        // ==========================================================
+        // --- 【终极修复】解决下拉刷新与网页滑动的冲突 ---
+        // ==========================================================
+        this.webView.getViewTreeObserver().addOnScrollChangedListener(new ViewTreeObserver.OnScrollChangedListener() {
+            @Override
+            public void onScrollChanged() {
+                if (swipeRefreshLayout != null) {
+                    // 只有当网页在最顶部（Y轴距离为0）时，才允许触发下拉刷新
+                    swipeRefreshLayout.setEnabled(webView.getScrollY() == 0);
+                }
+            }
+        });
+        // ==========================================================
 
         WebSettings webSettings = this.webView.getSettings();
         webSettings.setJavaScriptCanOpenWindowsAutomatically(true);
@@ -1619,6 +1634,7 @@ import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.ClipData;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout; 
+import android.view.ViewTreeObserver; // 【新】引入视图滚动监听器
 
 public class MainActivity extends BridgeActivity {
 
@@ -1628,8 +1644,6 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
-        // 【此版本未配置沉浸式状态栏，使用原生系统默认状态栏】
 
         this.webView = this.bridge.getWebView();
         
@@ -1652,6 +1666,20 @@ public class MainActivity extends BridgeActivity {
                 webView.reload();
             }
         });
+
+        // ==========================================================
+        // --- 【终极修复】解决下拉刷新与网页滑动的冲突 ---
+        // ==========================================================
+        this.webView.getViewTreeObserver().addOnScrollChangedListener(new ViewTreeObserver.OnScrollChangedListener() {
+            @Override
+            public void onScrollChanged() {
+                if (swipeRefreshLayout != null) {
+                    // 只有当网页在最顶部（Y轴距离为0）时，才允许触发下拉刷新
+                    swipeRefreshLayout.setEnabled(webView.getScrollY() == 0);
+                }
+            }
+        });
+        // ==========================================================
 
         WebSettings webSettings = this.webView.getSettings();
         webSettings.setJavaScriptCanOpenWindowsAutomatically(true);
@@ -1763,7 +1791,7 @@ public class MainActivity extends BridgeActivity {
                         } else if (m2.find()) {
                             fileName = URLDecoder.decode(m2.group(1), "UTF-8");
                         }
-                    } catch (Exception e) {}
+                    } catch (Exception ignored) {} // 【顺手修复了警告：把 e 改成了 ignored】
                 }
 
                 fileName = fileName.replaceAll("^\\[.*?\\][\\.\\s_-]*", "");
