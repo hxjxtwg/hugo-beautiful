@@ -1406,7 +1406,7 @@ import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.ClipData;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout; 
-import android.view.ViewTreeObserver;
+import android.view.ViewTreeObserver; // 【核心】判断滑动位置
 
 public class MainActivity extends BridgeActivity {
 
@@ -1427,6 +1427,7 @@ public class MainActivity extends BridgeActivity {
         this.webView = this.bridge.getWebView();
         
         // --- 下拉刷新容器包裹 ---
+        // (注：如果是封装 Emby，强烈建议把这块 SwipeRefreshLayout 相关的代码全删掉)
         this.swipeRefreshLayout = new SwipeRefreshLayout(this);
         ViewGroup parent = (ViewGroup) this.webView.getParent();
         parent.removeView(this.webView);
@@ -1447,13 +1448,13 @@ public class MainActivity extends BridgeActivity {
         });
 
         // ==========================================================
-        // --- 【终极修复】解决下拉刷新与网页滑动的冲突 ---
+        // --- 【核心修复】解决下拉刷新与网页滑动的冲突 ---
         // ==========================================================
         this.webView.getViewTreeObserver().addOnScrollChangedListener(new ViewTreeObserver.OnScrollChangedListener() {
             @Override
             public void onScrollChanged() {
                 if (swipeRefreshLayout != null) {
-                    // 只有当网页在最顶部（Y轴距离为0）时，才允许触发下拉刷新
+                    // 仅当整个网页真正处于最顶部时，才允许下拉刷新（对 Emby 等内部滚动网页无效）
                     swipeRefreshLayout.setEnabled(webView.getScrollY() == 0);
                 }
             }
@@ -1570,7 +1571,7 @@ public class MainActivity extends BridgeActivity {
                         } else if (m2.find()) {
                             fileName = URLDecoder.decode(m2.group(1), "UTF-8");
                         }
-                    } catch (Exception e) {}
+                    } catch (Exception ignored) {} 
                 }
 
                 fileName = fileName.replaceAll("^\\[.*?\\][\\.\\s_-]*", "");
