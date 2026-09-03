@@ -464,7 +464,7 @@ android:usesCleartextTraffic="true"
 
 再次打开你的导航 App，点击局域网的 Emby、Oplist 等内网 HTTP 链接，就可以完美顺畅地跳转打开了，不会再有任何拦截。
 
-## 附录：
+## 附录一：
 1.longpt网站封装带下载种子功能的MainActivity.java
 
 ```
@@ -1355,4 +1355,446 @@ public class MainActivity extends BridgeActivity {
 }
 ```
 
+## 附录二：
+下拉刷新功能、下载功能、复制功能的MainActivity.java与build.gradle (Module: app)的配置
+
+#### 一、引入安卓系统的“下拉刷新”组件
+
+1.AndroidX 现在的“下拉刷新”是一个独立的模块，我们需要告诉底层引擎去下载它。
+
+在 Android Studio 左侧目录，找到 Gradle Scripts -> build.gradle (Module: app) 并双击打开。
+
+2.滑到文件最底部的 dependencies { ... } 区域，在里面新起一行，加入这行代码：
+
+```
+implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
+```
+3.点击右上角弹出的蓝色大象图标（Sync Now），等进度条跑完
+
+菜单栏（终极兜底）： 如果什么图标都没找到，直接点击最左上角的顶部菜单：File -> Sync Project with Gradle Files。
+
+#### 二、更新 MainActivity.java 终极代码
+
+1.【带沉浸式状态栏】（顶栏透明，适合大部分现代网页）
+网页会全屏顶到状态栏下面，视觉效果最好。
+```
+// 【【【 关键：这是您的 ID ！】】】
+package com.xxsky.nav; 
+
+import android.graphics.Color;
+import android.os.Bundle;
+import android.view.View;
+import android.view.ViewGroup; 
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import com.getcapacitor.BridgeActivity;
+
+import android.app.DownloadManager;
+import android.net.Uri;
+import android.os.Environment;
+import android.webkit.CookieManager;
+import android.webkit.DownloadListener;
+import android.webkit.URLUtil;
+import android.widget.Toast;
+import java.net.URLDecoder;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import android.app.AlertDialog;
+import android.content.DialogInterface;
+import android.content.ClipboardManager;
+import android.content.Context;
+import android.content.ClipData;
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout; 
+
+public class MainActivity extends BridgeActivity {
+
+    private WebView webView;
+    private SwipeRefreshLayout swipeRefreshLayout;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        // --- 【沉浸式状态栏配置】 ---
+        getWindow().getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE |
+                        View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+        );
+        getWindow().setStatusBarColor(Color.TRANSPARENT);
+
+        this.webView = this.bridge.getWebView();
+        
+        // --- 下拉刷新容器包裹 ---
+        this.swipeRefreshLayout = new SwipeRefreshLayout(this);
+        ViewGroup parent = (ViewGroup) this.webView.getParent();
+        parent.removeView(this.webView);
+        
+        this.swipeRefreshLayout.addView(this.webView, new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 
+                ViewGroup.LayoutParams.MATCH_PARENT));
+                
+        parent.addView(this.swipeRefreshLayout, new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 
+                ViewGroup.LayoutParams.MATCH_PARENT));
+
+        this.swipeRefreshLayout.setOnRefreshListener(new SwipeRefreshLayout.OnRefreshListener() {
+            @Override
+            public void onRefresh() {
+                webView.reload();
+            }
+        });
+
+        WebSettings webSettings = this.webView.getSettings();
+        webSettings.setJavaScriptCanOpenWindowsAutomatically(true);
+
+        // --- 电脑端网页自适应与缩放优化 ---
+        webSettings.setUseWideViewPort(true); 
+        webSettings.setLoadWithOverviewMode(true); 
+        webSettings.setSupportZoom(true);
+        webSettings.setBuiltInZoomControls(true);
+        webSettings.setDisplayZoomControls(false); 
+
+        // --- 防频繁掉线与多媒体加载优化 ---
+        webSettings.setDomStorageEnabled(true);
+        webSettings.setDatabaseEnabled(true);
+        webSettings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+
+        // --- 破解网页 JS 防复制机制 + 控制下拉动画 ---
+        this.webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                view.loadUrl(url);
+                return true;
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                if (swipeRefreshLayout != null) {
+                    swipeRefreshLayout.setRefreshing(false); // 停止刷新动画
+                }
+                view.evaluateJavascript(
+                    "javascript:(function() { " +
+                    "var style = document.createElement('style');" +
+                    "style.innerHTML = '* { -webkit-user-select: text !important; user-select: text !important; -webkit-touch-callout: default !important; }';" +
+                    "document.head.appendChild(style);" +
+                    "document.oncontextmenu = null; " +
+                    "window.oncontextmenu = null; " +
+                    "document.onselectstart = null; " +
+                    "})()", null);
+            }
+        });
+
+        // --- 独立弹窗长按事件（解决缩放误触） ---
+        this.webView.setLongClickable(true);
+        this.webView.setOnLongClickListener(new View.OnLongClickListener() {
+            @Override
+            public boolean onLongClick(View v) {
+                WebView.HitTestResult result = ((WebView) v).getHitTestResult();
+                if (result != null) {
+                    int type = result.getType();
+                    if (type == WebView.HitTestResult.SRC_ANCHOR_TYPE || type == WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE) {
+                        final String url = result.getExtra();
+                        if (url != null) {
+                            new AlertDialog.Builder(MainActivity.this)
+                                .setTitle("链接操作")
+                                .setItems(new String[]{"复制链接地址"}, new DialogInterface.OnClickListener() {
+                                    @Override
+                                    public void onClick(DialogInterface dialog, int which) {
+                                        if (which == 0) {
+                                            ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                                            ClipData clip = ClipData.newPlainText("Copied Link", url);
+                                            clipboard.setPrimaryClip(clip);
+                                            Toast.makeText(MainActivity.this, "✅ 链接已复制", Toast.LENGTH_SHORT).show();
+                                        }
+                                    }
+                                }).show();
+                            return true; 
+                        }
+                    } else if (type == WebView.HitTestResult.IMAGE_TYPE) {
+                        final String url = result.getExtra();
+                        if (url != null) {
+                            new AlertDialog.Builder(MainActivity.this)
+                                .setTitle("图片操作")
+                                .setItems(new String[]{"复制图片地址"}, new DialogInterface.OnClickListener() {
+                                    @Override
+                                    public void onClick(DialogInterface dialog, int which) {
+                                        if (which == 0) {
+                                            ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                                            ClipData clip = ClipData.newPlainText("Copied Image", url);
+                                            clipboard.setPrimaryClip(clip);
+                                            Toast.makeText(MainActivity.this, "✅ 图片地址已复制", Toast.LENGTH_SHORT).show();
+                                        }
+                                    }
+                                }).show();
+                            return true;
+                        }
+                    }
+                }
+                return false; 
+            }
+        });
+
+        // --- 接管原生下载功能并正则优化文件名 ---
+        this.webView.setDownloadListener(new DownloadListener() {
+            @Override
+            public void onDownloadStart(String url, String userAgent, String contentDisposition, String mimeType, long contentLength) {
+                DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
+                String cookies = CookieManager.getInstance().getCookie(url);
+                request.addRequestHeader("cookie", cookies);
+                request.addRequestHeader("User-Agent", userAgent);
+
+                String fileName = URLUtil.guessFileName(url, contentDisposition, mimeType);
+                if (contentDisposition != null) {
+                    try {
+                        Matcher m1 = Pattern.compile("filename\\*\\s*=\\s*UTF-8''([^;]+)", Pattern.CASE_INSENSITIVE).matcher(contentDisposition);
+                        Matcher m2 = Pattern.compile("filename\\s*=\\s*\"?([^\";]+)\"?", Pattern.CASE_INSENSITIVE).matcher(contentDisposition);
+                        if (m1.find()) {
+                            fileName = URLDecoder.decode(m1.group(1), "UTF-8");
+                        } else if (m2.find()) {
+                            fileName = URLDecoder.decode(m2.group(1), "UTF-8");
+                        }
+                    } catch (Exception e) {}
+                }
+
+                fileName = fileName.replaceAll("^\\[.*?\\][\\.\\s_-]*", "");
+                if (fileName.startsWith("download.php")) {
+                    fileName = "PT_Torrent_" + System.currentTimeMillis() + ".torrent";
+                } else if (!fileName.endsWith(".torrent") && mimeType != null && mimeType.contains("torrent")) {
+                    fileName = fileName + ".torrent";
+                }
+
+                request.setDescription("正在下载...");
+                request.setTitle(fileName);
+                request.allowScanningByMediaScanner();
+                request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+                request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
+
+                DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+                dm.enqueue(request);
+                Toast.makeText(getApplicationContext(), "开始下载: " + fileName, Toast.LENGTH_SHORT).show();
+            }
+        });
+    }
+
+    // --- 返回键逻辑修复 ---
+    @Override
+    public void onBackPressed() {
+        if (this.webView.canGoBack()) {
+            this.webView.goBack();
+        } else {
+            super.onBackPressed();
+        }
+    }
+}
+```
+2.【不带沉浸式状态栏】（常规标准版）
+保留系统顶部的原生黑色/白色状态栏，不会遮挡网页原本最上面的菜单内容，兼容性最强。
+```
+// 【【【 关键：这是您的 ID ！】】】
+package com.xxsky.nav; 
+
+import android.os.Bundle;
+import android.view.View;
+import android.view.ViewGroup; 
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import com.getcapacitor.BridgeActivity;
+
+import android.app.DownloadManager;
+import android.net.Uri;
+import android.os.Environment;
+import android.webkit.CookieManager;
+import android.webkit.DownloadListener;
+import android.webkit.URLUtil;
+import android.widget.Toast;
+import java.net.URLDecoder;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import android.app.AlertDialog;
+import android.content.DialogInterface;
+import android.content.ClipboardManager;
+import android.content.Context;
+import android.content.ClipData;
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout; 
+
+public class MainActivity extends BridgeActivity {
+
+    private WebView webView;
+    private SwipeRefreshLayout swipeRefreshLayout;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        // 【此版本未配置沉浸式状态栏，使用原生系统默认状态栏】
+
+        this.webView = this.bridge.getWebView();
+        
+        // --- 下拉刷新容器包裹 ---
+        this.swipeRefreshLayout = new SwipeRefreshLayout(this);
+        ViewGroup parent = (ViewGroup) this.webView.getParent();
+        parent.removeView(this.webView);
+        
+        this.swipeRefreshLayout.addView(this.webView, new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 
+                ViewGroup.LayoutParams.MATCH_PARENT));
+                
+        parent.addView(this.swipeRefreshLayout, new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 
+                ViewGroup.LayoutParams.MATCH_PARENT));
+
+        this.swipeRefreshLayout.setOnRefreshListener(new SwipeRefreshLayout.OnRefreshListener() {
+            @Override
+            public void onRefresh() {
+                webView.reload();
+            }
+        });
+
+        WebSettings webSettings = this.webView.getSettings();
+        webSettings.setJavaScriptCanOpenWindowsAutomatically(true);
+
+        // --- 电脑端网页自适应与缩放优化 ---
+        webSettings.setUseWideViewPort(true); 
+        webSettings.setLoadWithOverviewMode(true); 
+        webSettings.setSupportZoom(true);
+        webSettings.setBuiltInZoomControls(true);
+        webSettings.setDisplayZoomControls(false); 
+
+        // --- 防频繁掉线与多媒体加载优化 ---
+        webSettings.setDomStorageEnabled(true);
+        webSettings.setDatabaseEnabled(true);
+        webSettings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+
+        // --- 破解网页 JS 防复制机制 + 控制下拉动画 ---
+        this.webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                view.loadUrl(url);
+                return true;
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                if (swipeRefreshLayout != null) {
+                    swipeRefreshLayout.setRefreshing(false); // 停止刷新动画
+                }
+                view.evaluateJavascript(
+                    "javascript:(function() { " +
+                    "var style = document.createElement('style');" +
+                    "style.innerHTML = '* { -webkit-user-select: text !important; user-select: text !important; -webkit-touch-callout: default !important; }';" +
+                    "document.head.appendChild(style);" +
+                    "document.oncontextmenu = null; " +
+                    "window.oncontextmenu = null; " +
+                    "document.onselectstart = null; " +
+                    "})()", null);
+            }
+        });
+
+        // --- 独立弹窗长按事件（解决缩放误触） ---
+        this.webView.setLongClickable(true);
+        this.webView.setOnLongClickListener(new View.OnLongClickListener() {
+            @Override
+            public boolean onLongClick(View v) {
+                WebView.HitTestResult result = ((WebView) v).getHitTestResult();
+                if (result != null) {
+                    int type = result.getType();
+                    if (type == WebView.HitTestResult.SRC_ANCHOR_TYPE || type == WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE) {
+                        final String url = result.getExtra();
+                        if (url != null) {
+                            new AlertDialog.Builder(MainActivity.this)
+                                .setTitle("链接操作")
+                                .setItems(new String[]{"复制链接地址"}, new DialogInterface.OnClickListener() {
+                                    @Override
+                                    public void onClick(DialogInterface dialog, int which) {
+                                        if (which == 0) {
+                                            ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                                            ClipData clip = ClipData.newPlainText("Copied Link", url);
+                                            clipboard.setPrimaryClip(clip);
+                                            Toast.makeText(MainActivity.this, "✅ 链接已复制", Toast.LENGTH_SHORT).show();
+                                        }
+                                    }
+                                }).show();
+                            return true; 
+                        }
+                    } else if (type == WebView.HitTestResult.IMAGE_TYPE) {
+                        final String url = result.getExtra();
+                        if (url != null) {
+                            new AlertDialog.Builder(MainActivity.this)
+                                .setTitle("图片操作")
+                                .setItems(new String[]{"复制图片地址"}, new DialogInterface.OnClickListener() {
+                                    @Override
+                                    public void onClick(DialogInterface dialog, int which) {
+                                        if (which == 0) {
+                                            ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                                            ClipData clip = ClipData.newPlainText("Copied Image", url);
+                                            clipboard.setPrimaryClip(clip);
+                                            Toast.makeText(MainActivity.this, "✅ 图片地址已复制", Toast.LENGTH_SHORT).show();
+                                        }
+                                    }
+                                }).show();
+                            return true;
+                        }
+                    }
+                }
+                return false; 
+            }
+        });
+
+        // --- 接管原生下载功能并正则优化文件名 ---
+        this.webView.setDownloadListener(new DownloadListener() {
+            @Override
+            public void onDownloadStart(String url, String userAgent, String contentDisposition, String mimeType, long contentLength) {
+                DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
+                String cookies = CookieManager.getInstance().getCookie(url);
+                request.addRequestHeader("cookie", cookies);
+                request.addRequestHeader("User-Agent", userAgent);
+
+                String fileName = URLUtil.guessFileName(url, contentDisposition, mimeType);
+                if (contentDisposition != null) {
+                    try {
+                        Matcher m1 = Pattern.compile("filename\\*\\s*=\\s*UTF-8''([^;]+)", Pattern.CASE_INSENSITIVE).matcher(contentDisposition);
+                        Matcher m2 = Pattern.compile("filename\\s*=\\s*\"?([^\";]+)\"?", Pattern.CASE_INSENSITIVE).matcher(contentDisposition);
+                        if (m1.find()) {
+                            fileName = URLDecoder.decode(m1.group(1), "UTF-8");
+                        } else if (m2.find()) {
+                            fileName = URLDecoder.decode(m2.group(1), "UTF-8");
+                        }
+                    } catch (Exception e) {}
+                }
+
+                fileName = fileName.replaceAll("^\\[.*?\\][\\.\\s_-]*", "");
+                if (fileName.startsWith("download.php")) {
+                    fileName = "PT_Torrent_" + System.currentTimeMillis() + ".torrent";
+                } else if (!fileName.endsWith(".torrent") && mimeType != null && mimeType.contains("torrent")) {
+                    fileName = fileName + ".torrent";
+                }
+
+                request.setDescription("正在下载...");
+                request.setTitle(fileName);
+                request.allowScanningByMediaScanner();
+                request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+                request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
+
+                DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+                dm.enqueue(request);
+                Toast.makeText(getApplicationContext(), "开始下载: " + fileName, Toast.LENGTH_SHORT).show();
+            }
+        });
+    }
+
+    // --- 返回键逻辑修复 ---
+    @Override
+    public void onBackPressed() {
+        if (this.webView.canGoBack()) {
+            this.webView.goBack();
+        } else {
+            super.onBackPressed();
+        }
+    }
+}
+```
 
