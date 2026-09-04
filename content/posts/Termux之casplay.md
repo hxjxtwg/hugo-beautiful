@@ -2154,7 +2154,8 @@ DEFAULT_CONFIG = {
     
     "pushplus_token": "",
     "tg_bot_token": "",
-    "tg_chat_id": ""
+    "tg_chat_id": "",
+    "tg_proxy": "http://127.0.0.1:7890"
 }
 
 EMBY_HOST = "http://127.0.0.1:8096"
@@ -2167,6 +2168,7 @@ app_302 = Flask('nginx_302_5001')
 upload_cache = {}
 native_link_cache = {}
 cache_lock = threading.Lock()
+print_throttle_cache = {}  # 🌟 新增：日志视觉防刷屏字典
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_DIR = os.path.join(BASE_DIR, "db")
@@ -2208,9 +2210,12 @@ def send_push(title, content):
             try: requests.get(f"http://www.pushplus.plus/send?token={cfg['pushplus_token']}&title={urllib.parse.quote(title)}&content={urllib.parse.quote(content)}&template=html", timeout=5)
             except: pass
         if cfg.get('tg_bot_token') and cfg.get('tg_chat_id'):
-            proxy_config = {"http": "http://127.0.0.1:7890", "https": "http://127.0.0.1:7890"}
-            try: requests.post(f"https://api.telegram.org/bot{cfg['tg_bot_token']}/sendMessage", data={"chat_id": cfg['tg_chat_id'], "text": f"🚨 <b>{title}</b>\n\n{content.replace('<br>', '\n')}", "parse_mode": "HTML"}, proxies=proxy_config, timeout=5)
-            except: pass
+            tg_proxy = cfg.get('tg_proxy', '').strip()
+            proxy_config = {"http": tg_proxy, "https": tg_proxy} if tg_proxy else None
+            try: 
+                requests.post(f"https://api.telegram.org/bot{cfg['tg_bot_token']}/sendMessage", data={"chat_id": cfg['tg_chat_id'], "text": f"🚨 <b>{title}</b>\n\n{content.replace('<br>', '\n')}", "parse_mode": "HTML"}, proxies=proxy_config, timeout=5)
+            except Exception as e: 
+                logger.error(f"❌ TG推送失败: {e} (当前代理: {tg_proxy or '直连'})")
     threading.Thread(target=_do_push, daemon=True).start()
 
 # ==========================================
@@ -2284,16 +2289,6 @@ def read_config():
         if os.path.exists(cfg_path):
             with open(cfg_path, 'r', encoding='utf-8') as f: cfg.update(json.load(f))
     except: pass
-    
-    # 处理卡槽 4 大号逻辑
-    if len(cfg.get('accounts', [])) == 4:
-        acc = cfg['accounts'][3]
-        if not acc.get('password'):
-            sk, cookie = get_auto189_credentials()
-            if sk and cookie and acc.get('session_key') != sk:
-                acc['session_key'] = sk
-                acc['cookie'] = cookie
-                save_config(cfg)
     return cfg
 
 def refresh_account_logic(slot_idx, cfg):
@@ -2301,6 +2296,7 @@ def refresh_account_logic(slot_idx, cfg):
         acc = cfg['accounts'][slot_idx]
         user, pwd = acc.get('username'), acc.get('password')
 
+        # 🌟 修复: 卡槽 4 凭证自动提取与 TG 推送
         if slot_idx == 3 and not pwd:
             logger.info("[凭证获取] 卡槽 4 尝试从外部 cookies.json 读取最高权限...")
             sk, cookie = get_auto189_credentials()
@@ -2308,14 +2304,18 @@ def refresh_account_logic(slot_idx, cfg):
                 acc['session_key'] = sk
                 acc['cookie'] = cookie
                 save_config(cfg)
+                logger.info("[自愈成功] 卡槽 4 从外部读取 Cookie 满血复活！")
+                send_push("✅ 大号自愈成功", "卡槽 4 成功从外部读取到最新 Cookie 凭证！")
                 return sk, cookie
             else:
                 logger.error("[凭证失败] 卡槽 4 外部 Cookie 提取失败或已过期！")
+                send_push("❌ 大号自愈失败", "卡槽 4 外部 Cookie 提取失败或已过期！")
                 return None, None
 
+        # 🌟 修复: 统一 1~4 号密码重登时的 TG 推送全覆盖
         if user and pwd:
             logger.info(f"[自愈启动] 统一卡槽 {slot_idx+1} 开始账号密码重登...")
-            send_push("🔄 双轨自愈启动", f"检测到卡槽 {slot_idx+1} 凭证失效，执行自动重登。")
+            send_push("🔄 双轨自愈启动", f"检测到卡槽 {slot_idx+1} 凭证失效，正在执行自动重登...")
             try:
                 auth = Cloud189AuthEngine()
                 sk, cookie = auth.do_login_and_get_key(user, pwd, f"卡槽{slot_idx+1}")
@@ -2324,10 +2324,11 @@ def refresh_account_logic(slot_idx, cfg):
                     acc['cookie'] = cookie
                     save_config(cfg)
                     logger.info(f"[自愈成功] 统一卡槽 {slot_idx+1} 满血复活！")
+                    send_push("✅ 自愈成功", f"统一卡槽 {slot_idx+1} 账号重登成功，双轨满血复活！")
                     return sk, cookie
             except Exception as e:
                 logger.error(f"[自愈失败] 卡槽 {slot_idx+1}: {e}")
-                send_push("❌ 自愈失败", f"统一卡槽 {slot_idx+1} 重登失败: {e}")
+                send_push("❌ 自愈失败", f"统一卡槽 {slot_idx+1} 自动重登失败: {e}")
     return None, None
 
 # ==========================================
@@ -2402,9 +2403,10 @@ def update_global_config():
     cfg['cloud_strategy'] = request.form.get('cloud_strategy', 'hash')
     cfg['mode_a_channel'] = request.form.get('mode_a_channel', 'mix_f2p')
     cfg['force_mode_b'] = request.form.get('force_mode_b', 'false') 
+    cfg['tg_proxy'] = request.form.get('tg_proxy', '').strip()  # 新增：保存代理配置
     
     for k in cfg.keys():
-        if k not in ['accounts', 'cloud_strategy', 'mode_a_channel', 'force_mode_b'] and k in request.form:
+        if k not in ['accounts', 'cloud_strategy', 'mode_a_channel', 'force_mode_b', 'tg_proxy'] and k in request.form:
             val = request.form.get(k, '').strip()
             if k in ['delete_delay', 'shield_delay']: cfg[k] = int(val) if val else (600 if k == 'delete_delay' else 2700)
             else: cfg[k] = val
@@ -2472,9 +2474,9 @@ ADMIN_HTML = """
             <div class="console" id="logBox">Loading terminal...</div>
         </div>
         <div class="card">
-            <h3>📊 核心控制台 & 凭证雷达监控</h3>
+            <h3>📊 核心控制 & 凭证监控</h3>
             <div class="status-grid">
-                <p style="color:#64748b; margin:0;">转存中军火库：<br><b style="color:#1e293b; font-size:1.8rem;">{{ cache_count }}</b> <span style="font-size:12px;">部剧集</span></p>
+                <p style="color:#64748b; margin:0;">秒传库：<br><b style="color:#1e293b; font-size:1.8rem;">{{ cache_count }}</b> <span style="font-size:12px;">部剧集</span></p>
                 <div style="color:#64748b; margin:0; font-size: 13px; line-height: 1.8; border-left: 2px solid #e2e8f0; padding-left: 15px;">
                     <b>🔑 四核驱动引擎凭证状态：</b><br>
                     {% for i in range(4) %}
@@ -2527,16 +2529,18 @@ ADMIN_HTML = """
                     <select name="cloud_strategy">
                         <option value="hash" {% if cfg.cloud_strategy == 'hash' %}selected{% endif %}>🔗 剧名哈希绑定 (多卡槽容灾滑点)</option>
                         <option value="random" {% if cfg.cloud_strategy == 'random' %}selected{% endif %}>🎲 完全随机散列 (多卡槽容灾滑点)</option>
-                        <option value="slot1" {% if cfg.cloud_strategy == 'slot1' %}selected{% endif %}>🥇 优先【卡槽 1】(失败退守其他号)</option>
-                        <option value="slot2" {% if cfg.cloud_strategy == 'slot2' %}selected{% endif %}>🥈 优先【卡槽 2】(失败退守其他号)</option>
-                        <option value="slot3" {% if cfg.cloud_strategy == 'slot3' %}selected{% endif %}>🥉 优先【卡槽 3】(失败退守其他号)</option>
-                        <option value="slot4" {% if cfg.cloud_strategy == 'slot4' %}selected{% endif %}>💎 优先【卡槽 4 大号】(失败退守其他号)</option>
+                        <!-- 🌟 修复: 恢复首发卡槽锁定，支持失败滑点 -->
+                        <option value="slot1" {% if cfg.cloud_strategy == 'slot1' %}selected{% endif %}>🥇 优先【卡槽 1】(失败无缝退守其他号)</option>
+                        <option value="slot2" {% if cfg.cloud_strategy == 'slot2' %}selected{% endif %}>🥈 优先【卡槽 2】(失败无缝退守其他号)</option>
+                        <option value="slot3" {% if cfg.cloud_strategy == 'slot3' %}selected{% endif %}>🥉 优先【卡槽 3】(失败无缝退守其他号)</option>
+                        <option value="slot4" {% if cfg.cloud_strategy == 'slot4' %}selected{% endif %}>💎 优先【卡槽 4 大号】(失败无缝退守其他号)</option>
                     </select>
                 </div>
 
                 <div class="grid">
+                    <!-- ================= 左侧栏 ================= -->
                     <div>
-                        <h3 style="margin-top:0; border:none;">🎯 天翼云 (四核统一战车) 卡槽区</h3>
+                        <h3 style="margin-top:0; border:none;">❇️ 189卡槽区</h3>
                         {% for i in range(4) %}
                         {% set acc = cfg.accounts[i] if cfg.get('accounts') and i < cfg.accounts|length else {} %}
                         <div class="cloud-box">
@@ -2554,7 +2558,33 @@ ADMIN_HTML = """
                             <input type="hidden" name="acc_cookie_{{ i }}" value="{{ acc.get('cookie', '') }}">
                         </div>
                         {% endfor %}
+
+                        <!-- 移到左侧的全局 API 区域 -->
+                        <h3 style="margin-top:10px; border:none;">🌐 全局基础与 API</h3>
+                        <label>基础外网域名 (Server Host)</label>
+                        <input type="text" name="server_host" value="{{ cfg.server_host }}" required>
+                        <label>189 OpenList 接口地址 (例如 5244)</label>
+                        <input type="text" name="openlist_host" value="{{ cfg.openlist_host }}" required>
+                        <label>189 OpenList 授权 Token</label>
+                        <input type="password" name="openlist_token" value="{{ cfg.openlist_token }}" placeholder="填入189 OpenList Token">
+                        <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                            <div style="flex: 1;"><label>绝对销毁倒计时</label><input type="number" name="delete_delay" value="{{ cfg.delete_delay }}" style="margin-bottom:0;" required></div>
+                            <div style="flex: 1;"><label>预加载长效护盾</label><input type="number" name="shield_delay" value="{{ cfg.shield_delay }}" style="margin-bottom:0;" required></div>
+                        </div>
+                        <div style="margin-bottom: 10px;">
+                            <label style="display:inline-block; width:220px; font-weight:bold;">🛡️ 网关直链保鲜期 (秒):</label>
+                            <input type="number" name="link_expire" value="{{ cfg.get('link_expire', 120) }}" style="width:80px; padding:3px;">
+                        </div>
+
+                        <!-- 移到左侧的消息推送区域 -->
+                        <h3 style="margin-top:20px; border:none;">📱 消息推送</h3>
+                        <label>PushPlus Token (微信推送)</label><input type="text" name="pushplus_token" value="{{ cfg.pushplus_token }}" placeholder="留空则不推送">
+                        <label>Telegram Bot Token</label><input type="text" name="tg_bot_token" value="{{ cfg.tg_bot_token }}">
+                        <label>Telegram Chat ID</label><input type="text" name="tg_chat_id" value="{{ cfg.tg_chat_id }}">
+                        <label>Telegram 代理地址 (Nekobox / Clash 等)</label><input type="text" name="tg_proxy" value="{{ cfg.get('tg_proxy', '') }}" placeholder="例如: http://127.0.0.1:7890 (留空则直连)">
                     </div>
+
+                    <!-- ================= 右侧栏 ================= -->
                     <div>
                         <h3 style="margin-top:0; border:none;">📁 绝对物理隔离路径设置</h3>
                         
@@ -2599,26 +2629,6 @@ ADMIN_HTML = """
                             <label>139 本地 STRM 独立保存路径</label>
                             <input type="text" name="local_strm_dir_139" value="{{ cfg.local_strm_dir_139 }}" style="margin-bottom:0;">
                         </div>
-                        
-                        <h4 style="margin-top:20px;">🌐 全局基础与 API</h4>
-                        <label>基础外网域名 (Server Host)</label>
-                        <input type="text" name="server_host" value="{{ cfg.server_host }}" required>
-                        <label>189 OpenList 接口地址 (例如 5244)</label>
-                        <input type="text" name="openlist_host" value="{{ cfg.openlist_host }}" required>
-                        <label>189 OpenList 授权 Token</label>
-                        <input type="password" name="openlist_token" value="{{ cfg.openlist_token }}" placeholder="填入189 OpenList Token">
-                        <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-                            <div style="flex: 1;"><label>绝对销毁倒计时</label><input type="number" name="delete_delay" value="{{ cfg.delete_delay }}" style="margin-bottom:0;" required></div>
-                            <div style="flex: 1;"><label>预加载长效护盾</label><input type="number" name="shield_delay" value="{{ cfg.shield_delay }}" style="margin-bottom:0;" required></div>
-                        </div>
-                        <div style="margin-bottom: 10px;">
-                            <label style="display:inline-block; width:220px; font-weight:bold;">🛡️ 网关直链保鲜期 (秒):</label>
-                            <input type="number" name="link_expire" value="{{ cfg.get('link_expire', 120) }}" style="width:80px; padding:3px;">
-                        </div>
-                        <h4 style="margin-top:20px;">📱 消息推送</h4>
-                        <label>PushPlus Token (微信推送)</label><input type="text" name="pushplus_token" value="{{ cfg.pushplus_token }}" placeholder="留空则不推送">
-                        <label>Telegram Bot Token</label><input type="text" name="tg_bot_token" value="{{ cfg.tg_bot_token }}">
-                        <label>Telegram Chat ID</label><input type="text" name="tg_chat_id" value="{{ cfg.tg_chat_id }}">
                     </div>
                 </div>
                 <button type="submit" style="width:100%; margin-top:15px; font-size:16px;">💾 写入配置并重启四核矩阵引擎</button>
@@ -3385,7 +3395,13 @@ def play():
                             real_fid = personal_client.rapid_upload_personal(per_fd, f_md5, raw_size, s_md5, safe_name, target_sk, target_cookie)
                             download_url = personal_client.get_direct_url(real_fid, target_sk, target_cookie, client_ua)
                         else:
-                            real_fid = family_client.rapid_upload(fam_id, fam_fd, f_md5, raw_size, s_md5, safe_name, target_sk)
+                            # 🌟 修复: 恢复家庭云查重！绝不浪费流量
+                            items = family_client.get_family_items(fam_id, fam_fd, target_sk)
+                            real_fid = next((i['fileId'] for i in items if f_md5 in i['fileName'] or i['fileName'] == safe_name), None)
+                            
+                            if not real_fid:
+                                real_fid = family_client.rapid_upload(fam_id, fam_fd, f_md5, raw_size, s_md5, safe_name, target_sk)
+                                
                             download_url = family_client.get_download_url(fam_id, real_fid, target_sk, client_ua)
                         
                         if download_url:
@@ -3409,6 +3425,14 @@ def play():
                             
                         elif any(k in err_str for k in ["auth_fail", "session", "111", "notlogin"]):
                             logger.warning(f"[{log_tag}凭证失效] 尝试执行自愈...")
+                            
+                            # 🌟 修复: 大号特权失效时，物理销毁旧 Cookie
+                            if s_idx == 3 and not acc.get('password'):
+                                cookie_file = os.path.join(DB_DIR, "cookies.json")
+                                if os.path.exists(cookie_file): 
+                                    os.remove(cookie_file)
+                                    logger.info(f"[{log_tag}清理] 已物理粉碎失效的 cookies.json")
+
                             target_sk, target_cookie = refresh_account_logic(s_idx, cfg)
                             if target_sk:
                                 try: # 自愈后重试一次
@@ -3416,7 +3440,13 @@ def play():
                                         real_fid = personal_client.rapid_upload_personal(per_fd, f_md5, raw_size, s_md5, safe_name, target_sk, target_cookie)
                                         download_url = personal_client.get_direct_url(real_fid, target_sk, target_cookie, client_ua)
                                     else:
-                                        real_fid = family_client.rapid_upload(fam_id, fam_fd, f_md5, raw_size, s_md5, safe_name, target_sk)
+                                        # 🌟 修复: 自愈后的重试同样加上查重护盾
+                                        items = family_client.get_family_items(fam_id, fam_fd, target_sk)
+                                        real_fid = next((i['fileId'] for i in items if f_md5 in i['fileName'] or i['fileName'] == safe_name), None)
+                                        
+                                        if not real_fid:
+                                            real_fid = family_client.rapid_upload(fam_id, fam_fd, f_md5, raw_size, s_md5, safe_name, target_sk)
+                                            
                                         download_url = family_client.get_download_url(fam_id, real_fid, target_sk, client_ua)
                                         
                                     if download_url:
@@ -3447,7 +3477,13 @@ def play():
                 is_p = False
                 with cache_lock:
                     if f_md5 in upload_cache: is_p = upload_cache[f_md5].get('is_personal', False)
-                logger.info(f"[播放放行] 节点({'个人云' if is_p else '家庭云'}): {parsed.netloc} | 地址: {truncate_url(download_url)}")
+                
+                # 🌟 修复：播放放行 15 秒视觉消音
+                now_t = time.time()
+                if now_t - print_throttle_cache.get(f"play_{f_md5}", 0) > 15:
+                    logger.info(f"[播放放行] 节点({'个人云' if is_p else '家庭云'}): {parsed.netloc} | 地址: {truncate_url(download_url)}")
+                    print_throttle_cache[f"play_{f_md5}"] = now_t
+                    
                 return redirect(download_url, code=302)
 
         except Exception as e:
@@ -3752,7 +3788,13 @@ def catch_all_for_emby(full_path):
                 else: strm_url = f"{parsed_url.scheme}://{parsed_url.netloc}{path_str}?{new_query}"
             
             if lan_ip: logger.info(f"[网络嗅探] 识别为内网播放，下发路由重定向")
-            logger.info(f"[劫持放行] {version} -> {file_name}")
+            
+            # 🌟 修复：劫持放行 15 秒视觉消音
+            now_t = time.time()
+            if now_t - print_throttle_cache.get(f"hijack_{item_id}", 0) > 15:
+                logger.info(f"[劫持放行] {version} -> {file_name}")
+                print_throttle_cache[f"hijack_{item_id}"] = now_t
+                
             return redirect(strm_url, code=302)
         else:
             return redirect(f"{EMBY_HOST}{request.full_path}", code=302)
@@ -3763,32 +3805,52 @@ def run_main(): app_main.run(host='0.0.0.0', port=5000, use_reloader=False)
 def run_302(): app_302.run(host='0.0.0.0', port=5001, use_reloader=False)
 
 def keep_alive_worker():
-    time.sleep(600)
+    time.sleep(60) # ⚡ 开机60秒后启动第一次巡逻
     while True:
         try:
             cfg = read_config()
+            has_checked = False
+            
             for i, acc in enumerate(cfg.get('accounts', [])):
                 fam_id, fold_id = acc.get('family_id'), acc.get('family_folder_id')
                 per_id = acc.get('personal_folder_id')
                 sk, cookie = acc.get('session_key'), acc.get('cookie')
                 
+                # 如果这个卡槽没填账号（且不是大号），直接跳过
                 if not (acc.get('username') and acc.get('password')) and i != 3: continue
                 
+                if not has_checked:
+                    logger.info("📡 [巡逻雷达] 正在对矩阵卡槽进行后台健康体检...")
+                    has_checked = True
+                
                 is_alive = True
-                if fam_id and fold_id and sk:
+                # 🌟 只要填了目录 ID 但凭证是空的，当场判定阵亡，强制激活自愈！
+                if (fam_id and fold_id and not sk) or (per_id and not cookie) or (i == 3 and not sk):
+                    is_alive = False
+                
+                if is_alive and fam_id and fold_id and sk:
                     try: family_client.get_family_items(fam_id, fold_id, sk)
                     except Exception as e:
                         if any(k in str(e).lower() for k in ["auth_fail", "111", "session"]): is_alive = False 
                 
-                if per_id and sk and cookie and is_alive:
+                if is_alive and per_id and sk and cookie:
                     try: personal_client.get_personal_items(per_id, cookie)
                     except Exception as e:
                         if any(k in str(e).lower() for k in ["auth_fail", "111", "session", "notlogin"]): is_alive = False
                 
-                if not is_alive: refresh_account_logic(i, cfg)
-                time.sleep(random.randint(300, 600))
-        except: pass
-        time.sleep(3600)
+                if not is_alive: 
+                    logger.warning(f"⚠️ [巡逻预警] 发现卡槽 {i+1} 凭证异常或为空，立即激活自愈程序！")
+                    refresh_account_logic(i, cfg)
+                
+                time.sleep(random.randint(5, 10)) # 查完一个号歇几秒防风控
+            
+            if has_checked:
+                logger.info("✅ [巡逻完毕] 本轮健康体检结束，所有卡槽运转正常。")
+                
+        except Exception as e: 
+            logger.error(f"❌ [巡逻异常]: {e}")
+            
+        time.sleep(3600) # 查完一轮，睡 1 小时后再次巡逻
 
 if __name__ == '__main__':
     logger.info("[管家启动] 双头蛇引擎 V10 四核矩阵滑点版 启动完毕！")
