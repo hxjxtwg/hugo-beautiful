@@ -86,10 +86,11 @@ cat << 'EOF' > ~/.config/mihomo/upsub.sh
 #!/bin/bash
 cd ~/.config/mihomo
 
+echo "1. 正在拉取订阅..."
 curl -s -A "clash.meta" -o temp_sub.yaml "https://sub.hxjx.hidns.co/xu"
 
 if ! grep -q "proxies:" temp_sub.yaml; then
-    echo "❌ 获取配置失败，保留原配置。"
+    echo "❌ 严重错误：未获取到有效配置，已拦截！"
     rm temp_sub.yaml
     exit 1
 fi
@@ -97,20 +98,41 @@ fi
 sed -i '/^external-controller:/d' temp_sub.yaml
 sed -i '/^secret:/d' temp_sub.yaml
 
+echo "2. 写入监听端口与嗅探模块..."
 cat << 'INJECT' > config.yaml
 external-controller: '0.0.0.0:9090'
 secret: 'xxsky1127'
+sniffer:
+  enable: true
+  override-destination: true
+  sniff:
+    HTTP:
+      ports: [80, 8080-8880]
+      override-destination: true
+    TLS:
+      ports: [443, 8443]
 listeners:
   - name: bt-port
     type: mixed
     port: 7892
 INJECT
 
-# 这里是核心：直连规则必须排在 IN-NAME 的上方！
+echo "3. 写入双保险直连规则..."
 cat << 'PTRULES' > pt_rules.txt
+  # --- 第一道防线：嗅探器域名拦截 ---
   - DOMAIN-KEYWORD,tracker,DIRECT
   - DOMAIN-KEYWORD,m-team,DIRECT
-  - DOMAIN-KEYWORD,longbt,DIRECT
+  - DOMAIN-KEYWORD,longpt,DIRECT
+  # 如果你有其他 PT 站，可以继续在下面加 DOMAIN-SUFFIX
+  
+  # --- 第二道防线：端口特征物理拦截 ---
+  # 凡是从 bt-port 进来，且目标端口是 80 或 443 的 Tracker 汇报，无视一切强制直连！
+  - AND,((IN-NAME,bt-port),(DST-PORT,80)),DIRECT
+  - AND,((IN-NAME,bt-port),(DST-PORT,443)),DIRECT
+  - AND,((IN-NAME,bt-port),(DST-PORT,2710)),DIRECT
+  
+  # --- 终极兜底：真正的 P2P 下载 ---
+  # 剩下的几万到几万的随机高端口纯 IP 连接，全部打包塞进代理池！
   - IN-NAME,bt-port,🔮 专用下载
 PTRULES
 
@@ -120,7 +142,7 @@ rm pt_rules.txt
 cat temp_sub.yaml >> config.yaml
 rm temp_sub.yaml
 pm2 restart mihomo-core
-echo "🎉 更新成功，PT 已直连，BT 数据已隔离走代理！"
+echo "🎉 更新成功，Mihomo 底层完美接管 Tracker 直连与数据代理！"
 EOF
 ```
 第二步：赋予脚本执行权限
