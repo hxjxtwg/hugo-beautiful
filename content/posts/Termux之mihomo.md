@@ -170,3 +170,27 @@ ruleset=✔️ 节点选择,[]FINAL
 enable_rule_generator=true
 overwrite_original_rules=true
 ```
+
+### 三、附定时任务
+```
+cat << 'EOF' | crontab -
+# 1. 每天凌晨 05:00 自动从云端拉取最新订阅并重启内核 (避免打扰夜间下载)
+0 5 * * * bash ~/.config/mihomo/upsub.sh > /dev/null 2>&1
+
+# 2. 每天早上 06:00 准时恢复为白天测速池 (带 API 鉴权密码)
+0 6 * * * curl --noproxy "*" -s -X PUT "http://127.0.0.1:9090/proxies/🔯%20电报下载" -H "Authorization: Bearer xxsky1127" -H "Content-Type: application/json" -d '{"name": "白天电报池"}' > /dev/null
+
+# 3. 每天晚上 20:00 准时切换到夜间专线池 (带 API 鉴权密码)
+0 20 * * * curl --noproxy "*" -s -X PUT "http://127.0.0.1:9090/proxies/🔯%20电报下载" -H "Authorization: Bearer xxsky1127" -H "Content-Type: application/json" -d '{"name": "晚间电报池"}' > /dev/null
+EOF
+```
+```
+执行完毕后，你可以输入 crontab -l 检查一下。如果终端输出了这三行任务，就说明系统已经完美接管了。
+
+至此，这两台设备已经彻底化身为免维护的智能网络中枢：
+
+* 7890 端口负责家里的普通手机、电脑，全自动分流且支持手动接管。
+
+* 7892 端口负责死磕 qBittorrent 专属流量，物理隔离保护 Cloudflare 节点。
+
+它们会在每天你熟睡时自己更新配置，并在早晚准点切换最高效的 Telegram 线路。你只需把它们插在充电器上，以后再也不用管了。
