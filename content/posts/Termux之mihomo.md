@@ -86,32 +86,40 @@ cat << 'EOF' > ~/.config/mihomo/upsub.sh
 #!/bin/bash
 cd ~/.config/mihomo
 
-echo "⬇️ 1. 开始从云端拉取最新订阅..."
-curl -s -A "Clash/1.0" -o temp_sub.yaml "https://sub.hxjx.hidns.co/xu"
+echo "1. 正在拉取订阅 (强制伪装为 clash.meta 内核)..."
+curl -s -A "clash.meta" -o temp_sub.yaml "https://sub.hxjx.hidns.co/xu"
 
-echo "🧹 2. 清理可能引起冲突的冗余参数..."
+echo "2. 校验文件格式..."
+# 安全防线：如果下载的文件里没有 "proxies:" 字段，说明拿到的是 Base64 乱码
+if ! grep -q "proxies:" temp_sub.yaml; then
+    echo "❌ 严重错误：服务器返回了 Base64 或乱码，未能获取 YAML 配置！"
+    echo "动作已拦截，旧配置文件安全保留。"
+    rm temp_sub.yaml
+    exit 1
+fi
+
+echo "3. 删除云端旧参数..."
 sed -i '/^external-controller:/d' temp_sub.yaml
 sed -i '/^secret:/d' temp_sub.yaml
 
-echo "💉 3. 正在注入本地安全鉴权与 BT 专属端口..."
+echo "4. 写入本地独立端口与安全密码..."
 cat << 'INJECT' > config.yaml
-# --- 本地强制注入模块 ---
 external-controller: '0.0.0.0:9090'
 secret: 'xxsky1127'
 listeners:
   - name: bt-port
     type: mixed
     port: 7892
-# ------------------------
 INJECT
 
-# 将下载好的纯净节点与规则追加到本地模块下方
+echo "5. 强制置顶 BT 端口拦截规则..."
+sed -i '/^rules:/a \  - IN-NAME,bt-port,🔮 专用下载' temp_sub.yaml
+
+echo "6. 组装并重启内核..."
 cat temp_sub.yaml >> config.yaml
 rm temp_sub.yaml
-
-echo "🔄 4. 配置组装完毕，正在重启 PM2 内核..."
 pm2 restart mihomo-core
-echo "🎉 订阅更新成功，新节点已生效！"
+echo "🎉 更新成功，BT 物理隔离已生效！"
 EOF
 ```
 第二步：赋予脚本执行权限
