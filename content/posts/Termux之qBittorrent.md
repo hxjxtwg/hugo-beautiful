@@ -1759,13 +1759,13 @@ if choice.isdigit() and 1 <= int(choice) <= len(tasks):
         selected["tag"]
     ]
     print(f"🚀 正在自动重推: {selected['torrent']}")
-    subprocess.run(cmd)
+    subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 else:
     print("已取消。")
 ```
 执行：
 ```
-cd 189py&python redo.py
+cd 189py && python redo.py
 ```
 
 

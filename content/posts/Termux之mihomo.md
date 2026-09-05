@@ -80,7 +80,7 @@ listeners:
 
 请按照以下步骤，在内核目录创建一个智能更新脚本：
 第一步：一键生成更新脚本
-在终端直接复制并运行以下整段代码（必须先把 你的复杂密码 换成你真实设置的密码）。这会在内核目录下生成一个名为 update_sub.sh 的脚本文件。
+在终端直接复制并运行以下整段代码（必须先把 你的复杂密码 换成你真实设置的密码）。这会在内核目录下生成一个名为 upsub.sh 的脚本文件。
 ```
 cat << 'EOF' > ~/.config/mihomo/upsub.sh
 #!/bin/bash
@@ -205,17 +205,21 @@ overwrite_original_rules=true
 ### 三、附定时任务
 ```
 cat << 'EOF' | crontab -
-# 1. 每天凌晨 05:00 自动从云端拉取最新订阅并重启内核 (避免打扰夜间下载)
-0 5 * * * bash ~/.config/mihomo/upsub.sh > /dev/null 2>&1
+# 1. 每天凌晨 05:30 自动从云端拉取最新订阅并重启内核 (避免打扰夜间下载)
+30 5 * * * bash ~/.config/mihomo/upsub.sh > /dev/null 2>&1
 
-# 2. 每天早上 06:00 准时恢复为白天测速池 (带 API 鉴权密码)
-0 6 * * * curl --noproxy "*" -s -X PUT "http://127.0.0.1:9090/proxies/🔯%20电报下载" -H "Authorization: Bearer xxsky1127" -H "Content-Type: application/json" -d '{"name": "白天电报池"}' > /dev/null
+# 2. 每天早上 06:00 准时恢复为白天测速池，并强制切断旧连接
+0 6 * * * curl --noproxy "*" -s -X PUT "http://127.0.0.1:9090/proxies/🔯%20电报下载" -H "Authorization: Bearer xxsky1127" -H "Content-Type: application/json" -d '{"name": "白天电报池"}' > /dev/null && curl --noproxy "*" -s -X DELETE "http://127.0.0.1:9090/connections" -H "Authorization: Bearer xxsky1127" > /dev/null
 
-# 3. 每天晚上 20:00 准时切换到夜间专线池 (带 API 鉴权密码)
-0 20 * * * curl --noproxy "*" -s -X PUT "http://127.0.0.1:9090/proxies/🔯%20电报下载" -H "Authorization: Bearer xxsky1127" -H "Content-Type: application/json" -d '{"name": "晚间电报池"}' > /dev/null
+# 3. 每天晚上 20:00 准时切换到夜间专线池，并强制切断旧连接
+0 20 * * * curl --noproxy "*" -s -X PUT "http://127.0.0.1:9090/proxies/🔯%20电报下载" -H "Authorization: Bearer xxsky1127" -H "Content-Type: application/json" -d '{"name": "晚间电报池"}' > /dev/null && curl --noproxy "*" -s -X DELETE "http://127.0.0.1:9090/connections" -H "Authorization: Bearer xxsky1127" > /dev/null
 EOF
 ```
-```
+
+在 Linux 的 crontab 定时任务中，时间格式是 分钟 小时 日 月 星期。
+
+你要把 5:00 改成 5:30，只需要把第一行的时间设置从 0 5 * * * 改成 30 5 * * * 即可。
+
 执行完毕后，你可以输入 crontab -l 检查一下。如果终端输出了这三行任务，就说明系统已经完美接管了。
 
 至此，这两台设备已经彻底化身为免维护的智能网络中枢：

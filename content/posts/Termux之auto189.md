@@ -693,6 +693,7 @@ class Cloud189:
         self.session = requests.session()
         self.session.headers = {
             'User-Agent': "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            'Connection': "close",  # 🌟 强制短连接！用完即毁，彻底干掉天翼云的并发风控！
             "Accept": "application/json;charset=UTF-8",
         }
 
@@ -831,29 +832,43 @@ def auto_relogin(client_obj, force=False):
     global last_login_time
     current_time = time.time()
     
-    # 🌟 只有在非强制唤醒时，才受 30 分钟冷却锁限制
+    # 只有在非强制唤醒时，才受 30 分钟冷却锁限制
     if not force and (current_time - last_login_time < 1800):
         logger.warning("⏳ [系统] 检测到接口报错，防风控冷却锁生效，跳过登录！")
         return False
         
     logger.info("🔄 [系统] 触发保活机制：正在彻底重洗内存与协议握手...")
-    try:
-        # 💥 核心修复：彻底粉碎内存中残留的旧 Session 幽灵！
-        client_obj.session = requests.session()
-        client_obj.session.headers = {
-            'User-Agent': "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json;charset=UTF-8",
-        }
-        if os.path.exists(COOKIES_FILE):
-            os.remove(COOKIES_FILE)
+    
+    # 🛡️ 核心修复：阶梯式避险重连策略
+    max_attempts = 4
+    sleep_times = [60, 300, 900, 3600] # 依次休眠: 1分钟, 5分钟, 15分钟, 1小时
+    
+    for attempt in range(max_attempts):
+        try:
+            # 彻底粉碎内存中残留的旧 Session 幽灵！
+            client_obj.session = requests.session()
+            client_obj.session.headers = {
+                'User-Agent': "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                'Connection': "close",
+                "Accept": "application/json;charset=UTF-8",
+            }
+            if os.path.exists(COOKIES_FILE):
+                os.remove(COOKIES_FILE)
 
-        client_obj.login(ENV_189_CLIENT_ID, ENV_189_CLIENT_SECRET)
-        last_login_time = time.time()
-        logger.info("✅ [系统] 彻底洗牌重新登录成功！安全冷却锁已重置。")
-        return True
-    except Exception as e:
-        logger.error(f"❌ [系统] 重新登录失败: {e}")
-        return False
+            client_obj.login(ENV_189_CLIENT_ID, ENV_189_CLIENT_SECRET)
+            last_login_time = time.time()
+            logger.info("✅ [系统] 彻底洗牌重新登录成功！安全冷却锁已重置。")
+            return True
+        except Exception as e:
+            wait_sec = sleep_times[attempt]
+            logger.error(f"❌ [系统] 重新登录失败 (第 {attempt+1}/{max_attempts} 次): {e}")
+            if attempt < max_attempts - 1:
+                logger.warning(f"⏳ 触发阶梯避险：强制休眠 {wait_sec} 秒后重试...")
+                time.sleep(wait_sec)
+            else:
+                logger.error("🚨 阶梯重试全部失败！放弃本次重连，等待下一次系统唤醒。")
+                return False
+    return False
 
 # ==========================================
 # 🌟 139 专属独立全自动流水线 (挂载在 5255 端口)
@@ -1994,6 +2009,7 @@ def main_control_loop(client_obj):
     offset = 0
     notifier = TelegramNotifier(TG_BOT_TOKEN, TG_ADMIN_USER_ID)
     wizard_states = {} # 🧠 新增：记忆向导状态的“大脑”
+    last_cookie_check_time = 0 # 🌟 用于防断网无限刷屏的记录
 
     logger.info("🚀 [系统] 引擎核心组件自检完毕，执行初次跃迁扫描...")
     check_subscriptions(client_obj, is_first_run=True)
@@ -2023,7 +2039,8 @@ def main_control_loop(client_obj):
         schedule.every(wait_min).minutes.do(scheduled_task).tag('patrol')
 
     scheduled_task()
-    schedule.every(6).hours.do(auto_relogin, client_obj)
+    # 🌟 修复传参：显式传入 force=True，确保 6 小时必定无视冷却重拿一次 Key
+    schedule.every(6).hours.do(auto_relogin, client_obj, force=True)
 
     # ==========================================
     # 🌟 新增：跨月防断层，每日 23:30 强制保底收割
@@ -2047,6 +2064,19 @@ def main_control_loop(client_obj):
 
     while True:
         schedule.run_pending()
+
+        # ==========================================
+        # 🌟 核心探针：秒级嗅探，一旦发现文件被另一个脚本拿走，立刻强行重登补 Key！
+        # ==========================================
+        if not os.path.exists(COOKIES_FILE):
+            now = time.time()
+            # 如果因为网络烂刚失败过，给 5 分钟冷却，防止把接口秒刷死
+            if now - last_cookie_check_time > 300: 
+                logger.warning("🚨 [探针] 发现 cookies.json 已被其它脚本删除！立刻触发强制取钥重登...")
+                last_cookie_check_time = now
+                if auto_relogin(client_obj, force=True):
+                    notifier.send_message("✅ 察觉到外部调用需求，已成功重新获取并刷新 189 账号 Key！")
+
         try:
             url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/getUpdates?offset={offset}&timeout=10"
             res = requests.get(url, timeout=15, proxies=LOCAL_PROXIES).json()
@@ -2985,7 +3015,7 @@ def main_control_loop(client_obj):
                             notifier.send_message(f"🩺 体检报告：\n{msg_str}")
                         
                         # ====== 🚀 终极抢救：全自动分块重建 (防 Termux 崩溃版) ======
-                        elif text == "全库重建" or text.startswith("/reall"):
+                        elif text.startswith("全库重建") or text.startswith("/reall"):
                             notifier.send_message("🚨 收到全库重建指令！为防 Termux 内存爆炸，引擎已启动【切片下发模式】...")
                             try:
                                 r_log = requests.post(f"{API_5244_URL}/api/auth/login", json={"username": OLIST_USER, "password": OLIST_PASS}, timeout=5).json()
