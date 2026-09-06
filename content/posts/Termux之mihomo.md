@@ -202,10 +202,10 @@ cat << 'EOF' | crontab -
 30 5 * * * bash ~/.config/mihomo/upsub.sh > /dev/null 2>&1
 
 # 2. 每天早上 06:00 准时恢复为白天测速池，并强制切断旧连接
-0 6 * * * curl --noproxy "*" -s -X PUT "http://127.0.0.1:9090/proxies/🔯\%20电报下载" -H "Authorization: Bearer xxsky1127" -H "Content-Type: application/json" -d '{"name": "白天电报池"}' > /dev/null && curl --noproxy "*" -s -X DELETE "http://127.0.0.1:9090/connections" -H "Authorization: Bearer xxsky1127" > /dev/null
+0 6 * * * curl --noproxy "*" -s -X PUT "http://127.0.0.1:9090/proxies/🔯\%20电报选择" -H "Authorization: Bearer xxsky1127" -H "Content-Type: application/json" -d '{"name": "白天电报池"}' > /dev/null && curl --noproxy "*" -s -X DELETE "http://127.0.0.1:9090/connections" -H "Authorization: Bearer xxsky1127" > /dev/null
 
 # 3. 每天晚上 20:00 准时切换到夜间专线池，并强制切断旧连接
-0 20 * * * curl --noproxy "*" -s -X PUT "http://127.0.0.1:9090/proxies/🔯\%20电报下载" -H "Authorization: Bearer xxsky1127" -H "Content-Type: application/json" -d '{"name": "晚间电报池"}' > /dev/null && curl --noproxy "*" -s -X DELETE "http://127.0.0.1:9090/connections" -H "Authorization: Bearer xxsky1127" > /dev/null
+0 20 * * * curl --noproxy "*" -s -X PUT "http://127.0.0.1:9090/proxies/🔯\%20电报选择" -H "Authorization: Bearer xxsky1127" -H "Content-Type: application/json" -d '{"name": "晚间电报池"}' > /dev/null && curl --noproxy "*" -s -X DELETE "http://127.0.0.1:9090/connections" -H "Authorization: Bearer xxsky1127" > /dev/null
 EOF
 ```
 
