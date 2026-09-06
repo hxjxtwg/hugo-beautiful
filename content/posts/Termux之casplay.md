@@ -2265,18 +2265,45 @@ class Cloud189AuthEngine:
             else: raise Exception("接口未返回 sessionKey")
         else: raise Exception(result['msg'])
 
+# 🌟 全局缓存：记录文件最后修改时间和凭证
+cookie_cache = {"sk": "", "cookie_str": "", "mtime": 0}
+
 def get_auto189_credentials():
+    global cookie_cache
     cookie_file = os.path.join(DB_DIR, "cookies.json")
-    if not os.path.exists(cookie_file): return "", ""
+    if not os.path.exists(cookie_file): 
+        return "", ""
+    
+    # 核心恢复：检查文件最后修改时间
+    current_mtime = os.path.getmtime(cookie_file)
+    
+    # 如果文件没被别的脚本修改过，直接返回内存里的 Key，绝不去骚扰天翼云！
+    if cookie_cache["mtime"] == current_mtime and cookie_cache["sk"]:
+        return cookie_cache["sk"], cookie_cache["cookie_str"]
+        
     session = requests.Session()
     try:
         with open(cookie_file, 'r', encoding='utf-8') as f:
             cookie_dict = json.load(f)
             session.cookies.update(cookie_dict)
+            
         sk = get_session_key_via_api(session, "外部同步大号") or ""
-        cookie_str = "; ".join([f"{k}={v}" for k, v in cookie_dict.items()])
-        return sk, cookie_str
-    except: return "", ""
+        
+        if sk:
+            cookie_str = "; ".join([f"{k}={v}" for k, v in cookie_dict.items()])
+            # 存入记忆缓存
+            cookie_cache["sk"] = sk
+            cookie_cache["cookie_str"] = cookie_str
+            cookie_cache["mtime"] = current_mtime
+            return sk, cookie_str
+        else:
+            # 只有当天翼云明确拒绝了这个新文件，且提取不到 Key 时，才销毁它逼迫外部重新生成
+            if os.path.exists(cookie_file): os.remove(cookie_file)
+            logger.warning("❌ [外部凭证] 新 Cookie 无效已被天翼云拒绝，已粉碎文件等待外部脚本重建！")
+            return "", ""
+    except Exception as e: 
+        logger.error(f"❌ [外部凭证] 读取异常: {e}")
+        return "", ""
 
 def save_config(cfg):
     cfg_path = get_db_path()
@@ -3425,13 +3452,6 @@ def play():
                             
                         elif any(k in err_str for k in ["auth_fail", "session", "111", "notlogin"]):
                             logger.warning(f"[{log_tag}凭证失效] 尝试执行自愈...")
-                            
-                            # 🌟 修复: 大号特权失效时，物理销毁旧 Cookie
-                            if s_idx == 3 and not acc.get('password'):
-                                cookie_file = os.path.join(DB_DIR, "cookies.json")
-                                if os.path.exists(cookie_file): 
-                                    os.remove(cookie_file)
-                                    logger.info(f"[{log_tag}清理] 已物理粉碎失效的 cookies.json")
 
                             target_sk, target_cookie = refresh_account_logic(s_idx, cfg)
                             if target_sk:

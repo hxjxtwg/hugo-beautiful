@@ -117,22 +117,15 @@ listeners:
     port: 7892
 INJECT
 
-echo "3. 写入双保险直连规则..."
+echo "3. 物理注入 Mihomo 专属高级规则 (避开云端转换破坏)..."
 cat << 'PTRULES' > pt_rules.txt
-  # --- 第一道防线：嗅探器域名拦截 ---
   - DOMAIN-KEYWORD,tracker,DIRECT
   - DOMAIN-KEYWORD,m-team,DIRECT
   - DOMAIN-KEYWORD,longpt,DIRECT
-  # 如果你有其他 PT 站，可以继续在下面加 DOMAIN-SUFFIX
-  
-  # --- 第二道防线：端口特征物理拦截 ---
-  # 凡是从 bt-port 进来，且目标端口是 80 或 443 的 Tracker 汇报，无视一切强制直连！
+  - DOMAIN-KEYWORD,baozi,DIRECT
   - AND,((IN-NAME,bt-port),(DST-PORT,80)),DIRECT
   - AND,((IN-NAME,bt-port),(DST-PORT,443)),DIRECT
   - AND,((IN-NAME,bt-port),(DST-PORT,2710)),DIRECT
-  
-  # --- 终极兜底：真正的 P2P 下载 ---
-  # 剩下的几万到几万的随机高端口纯 IP 连接，全部打包塞进代理池！
   - IN-NAME,bt-port,🔮 专用下载
 PTRULES
 
@@ -142,7 +135,7 @@ rm pt_rules.txt
 cat temp_sub.yaml >> config.yaml
 rm temp_sub.yaml
 pm2 restart mihomo-core
-echo "🎉 更新成功，Mihomo 底层完美接管 Tracker 直连与数据代理！"
+echo "🎉 更新成功，Mihomo 底层完美接管！"
 EOF
 ```
 第二步：赋予脚本执行权限
@@ -173,29 +166,29 @@ pm2 logs mihomo-core
 
 ```
 [custom]
+; --- 1. 策略组定义 ---
 custom_proxy_group=✔️ 节点选择`select`[]♻️ 自动选择`[]DIRECT`.*
 custom_proxy_group=♻️ 自动选择`url-test`.*`http://www.gstatic.com/generate_204`300,,5
-custom_proxy_group=🔮 专用下载`url-test`(专用X)`http://www.gstatic.com/generate_204`900,,50
+
+; 【修正：补齐反引号】
+custom_proxy_group=⚡ 专用自动`url-test`(专用X)`http://www.gstatic.com/generate_204`1800,,50
+custom_proxy_group=🔮 专用选择`select`[]⚡ 专用自动`(专用X)
+
 custom_proxy_group=白天电报池`url-test`(TS)`http://www.gstatic.com/generate_204`300,,50
 custom_proxy_group=晚间电报池`url-test`(美国线路)`http://www.gstatic.com/generate_204`300,,50
 custom_proxy_group=🔯 电报下载`select`[]白天电报池`[]晚间电报池
 
-; 1. 物理端口强控规则 (只要是从 7892 端口进来的流量，强制走 BT 专用下载组)
-custom_rule=IN-PORT,7892,🔮 专用下载
-
-; 2. 专属与直连规则
+; --- 2. 常规直连与分流规则 ---
 ruleset=🔯 电报下载,https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/Telegram.list
 ruleset=DIRECT,https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/LocalAreaNetwork.list
 ruleset=DIRECT,https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/ChinaDomain.list
 ruleset=DIRECT,https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/ChinaCompanyIp.list
 
-; 3. 常规应用分流 (目标全部改为 ✔️ 节点选择)
 ruleset=✔️ 节点选择,https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/YouTube.list
 ruleset=✔️ 节点选择,https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/Google.list
 ruleset=✔️ 节点选择,https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/ProxyMedia.list
 ruleset=✔️ 节点选择,https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/ProxyLite.list
 
-; 4. 常规兜底 (所有未命中规则的剩余流量，走 ✔️ 节点选择)
 ruleset=✔️ 节点选择,[]FINAL
 
 enable_rule_generator=true
@@ -209,10 +202,10 @@ cat << 'EOF' | crontab -
 30 5 * * * bash ~/.config/mihomo/upsub.sh > /dev/null 2>&1
 
 # 2. 每天早上 06:00 准时恢复为白天测速池，并强制切断旧连接
-0 6 * * * curl --noproxy "*" -s -X PUT "http://127.0.0.1:9090/proxies/🔯%20电报下载" -H "Authorization: Bearer xxsky1127" -H "Content-Type: application/json" -d '{"name": "白天电报池"}' > /dev/null && curl --noproxy "*" -s -X DELETE "http://127.0.0.1:9090/connections" -H "Authorization: Bearer xxsky1127" > /dev/null
+0 6 * * * curl --noproxy "*" -s -X PUT "http://127.0.0.1:9090/proxies/🔯\%20电报下载" -H "Authorization: Bearer xxsky1127" -H "Content-Type: application/json" -d '{"name": "白天电报池"}' > /dev/null && curl --noproxy "*" -s -X DELETE "http://127.0.0.1:9090/connections" -H "Authorization: Bearer xxsky1127" > /dev/null
 
 # 3. 每天晚上 20:00 准时切换到夜间专线池，并强制切断旧连接
-0 20 * * * curl --noproxy "*" -s -X PUT "http://127.0.0.1:9090/proxies/🔯%20电报下载" -H "Authorization: Bearer xxsky1127" -H "Content-Type: application/json" -d '{"name": "晚间电报池"}' > /dev/null && curl --noproxy "*" -s -X DELETE "http://127.0.0.1:9090/connections" -H "Authorization: Bearer xxsky1127" > /dev/null
+0 20 * * * curl --noproxy "*" -s -X PUT "http://127.0.0.1:9090/proxies/🔯\%20电报下载" -H "Authorization: Bearer xxsky1127" -H "Content-Type: application/json" -d '{"name": "晚间电报池"}' > /dev/null && curl --noproxy "*" -s -X DELETE "http://127.0.0.1:9090/connections" -H "Authorization: Bearer xxsky1127" > /dev/null
 EOF
 ```
 
@@ -229,3 +222,8 @@ EOF
 * 7892 端口负责死磕 qBittorrent 专属流量，物理隔离保护 Cloudflare 节点。
 
 它们会在每天你熟睡时自己更新配置，并在早晚准点切换最高效的 Telegram 线路。你只需把它们插在充电器上，以后再也不用管了。
+
+查看当前id=4的进程环境代理
+```
+pm2 env 4 | grep -i proxy
+```
