@@ -126,7 +126,7 @@ cat << 'PTRULES' > pt_rules.txt
   - AND,((IN-NAME,bt-port),(DST-PORT,80)),DIRECT
   - AND,((IN-NAME,bt-port),(DST-PORT,443)),DIRECT
   - AND,((IN-NAME,bt-port),(DST-PORT,2710)),DIRECT
-  - IN-NAME,bt-port,🔮 专用下载
+  - IN-NAME,bt-port,🔮 专用选择
 PTRULES
 
 sed -i '/^rules:/r pt_rules.txt' temp_sub.yaml
@@ -176,10 +176,10 @@ custom_proxy_group=🔮 专用选择`select`[]⚡ 专用自动`(专用X)
 
 custom_proxy_group=白天电报池`url-test`(TS)`http://www.gstatic.com/generate_204`300,,50
 custom_proxy_group=晚间电报池`url-test`(美国线路)`http://www.gstatic.com/generate_204`300,,50
-custom_proxy_group=🔯 电报下载`select`[]白天电报池`[]晚间电报池
+custom_proxy_group=🔯 电报选择`select`[]白天电报池`[]晚间电报池
 
 ; --- 2. 常规直连与分流规则 ---
-ruleset=🔯 电报下载,https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/Telegram.list
+ruleset=🔯 电报选择,https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/Telegram.list
 ruleset=DIRECT,https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/LocalAreaNetwork.list
 ruleset=DIRECT,https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/ChinaDomain.list
 ruleset=DIRECT,https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/ChinaCompanyIp.list
