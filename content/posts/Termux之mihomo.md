@@ -174,9 +174,14 @@ custom_proxy_group=♻️ 自动选择`url-test`.*`http://www.gstatic.com/genera
 custom_proxy_group=⚡ 专用自动`url-test`(专用X)`http://www.gstatic.com/generate_204`1800,,50
 custom_proxy_group=🔮 专用选择`select`[]⚡ 专用自动`(专用X)
 
-custom_proxy_group=白天电报池`url-test`(TS)`http://www.gstatic.com/generate_204`300,,50
-custom_proxy_group=晚间电报池`url-test`(美国线路)`http://www.gstatic.com/generate_204`300,,50
-custom_proxy_group=🔯 电报选择`select`[]白天电报池`[]晚间电报池
+custom_proxy_group=白天电报池`url-test`(TS)`http://www.gstatic.com/generate_204`900,,50
+custom_proxy_group=晚间电报池`url-test`(美国线路)`http://www.gstatic.com/generate_204`900,,50
+
+; 【新增子组】这个组纯粹是给 crontab 当作自动“拨动开关”用的
+custom_proxy_group=⏰ 定时切换池`select`[]白天电报池`[]晚间电报池
+
+; 【修改父组】顶层真正接管 TG 流量的组。它包含“定时开关”以及所有的“具体节点 (.*)”
+custom_proxy_group=🔯 电报选择`select`[]⏰ 定时切换池`.*
 
 ; --- 2. 常规直连与分流规则 ---
 ruleset=🔯 电报选择,https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/Telegram.list
@@ -198,14 +203,14 @@ overwrite_original_rules=true
 ### 三、附定时任务
 ```
 cat << 'EOF' | crontab -
-# 1. 每天凌晨 05:30 自动从云端拉取最新订阅并重启内核 (避免打扰夜间下载)
+# 1. 每天凌晨 05:30 拉取云端统一下发订阅并重启内核
 30 5 * * * bash ~/.config/mihomo/upsub.sh > /dev/null 2>&1
 
-# 2. 每天早上 06:00 准时恢复为白天测速池，并强制切断旧连接
-0 6 * * * curl --noproxy "*" -s -X PUT "http://127.0.0.1:9090/proxies/🔯\%20电报选择" -H "Authorization: Bearer xxsky1127" -H "Content-Type: application/json" -d '{"name": "白天电报池"}' > /dev/null && curl --noproxy "*" -s -X DELETE "http://127.0.0.1:9090/connections" -H "Authorization: Bearer xxsky1127" > /dev/null
+# 2. 每天早上 06:00 准时将【子组】恢复为白天池，并强制断开旧连接
+0 6 * * * curl --noproxy "*" -s -X PUT "http://127.0.0.1:9090/proxies/⏰\%20定时切换池" -H "Authorization: Bearer xxsky1127" -H "Content-Type: application/json" -d '{"name": "白天电报池"}' > /dev/null && curl --noproxy "*" -s -X DELETE "http://127.0.0.1:9090/connections" -H "Authorization: Bearer xxsky1127" > /dev/null
 
-# 3. 每天晚上 20:00 准时切换到夜间专线池，并强制切断旧连接
-0 20 * * * curl --noproxy "*" -s -X PUT "http://127.0.0.1:9090/proxies/🔯\%20电报选择" -H "Authorization: Bearer xxsky1127" -H "Content-Type: application/json" -d '{"name": "晚间电报池"}' > /dev/null && curl --noproxy "*" -s -X DELETE "http://127.0.0.1:9090/connections" -H "Authorization: Bearer xxsky1127" > /dev/null
+# 3. 每天晚上 20:00 准时将【子组】切换到夜间池，并强制断开旧连接
+0 20 * * * curl --noproxy "*" -s -X PUT "http://127.0.0.1:9090/proxies/⏰\%20定时切换池" -H "Authorization: Bearer xxsky1127" -H "Content-Type: application/json" -d '{"name": "晚间电报池"}' > /dev/null && curl --noproxy "*" -s -X DELETE "http://127.0.0.1:9090/connections" -H "Authorization: Bearer xxsky1127" > /dev/null
 EOF
 ```
 

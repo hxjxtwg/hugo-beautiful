@@ -3421,13 +3421,16 @@ def play():
                         if c_type == 'personal':
                             real_fid = personal_client.rapid_upload_personal(per_fd, f_md5, raw_size, s_md5, safe_name, target_sk, target_cookie)
                             download_url = personal_client.get_direct_url(real_fid, target_sk, target_cookie, client_ua)
+                            logger.info(f"[{log_tag}秒传就绪] {safe_name} ({human_size})")
                         else:
-                            # 🌟 修复: 恢复家庭云查重！绝不浪费流量
                             items = family_client.get_family_items(fam_id, fam_fd, target_sk)
                             real_fid = next((i['fileId'] for i in items if f_md5 in i['fileName'] or i['fileName'] == safe_name), None)
                             
                             if not real_fid:
                                 real_fid = family_client.rapid_upload(fam_id, fam_fd, f_md5, raw_size, s_md5, safe_name, target_sk)
+                                logger.info(f"[{log_tag}秒传成功] {safe_name} ({human_size})")
+                            else:
+                                logger.info(f"[{log_tag}秒传命中] {safe_name} ({human_size})")
                                 
                             download_url = family_client.get_download_url(fam_id, real_fid, target_sk, client_ua)
                         
@@ -3459,13 +3462,16 @@ def play():
                                     if c_type == 'personal':
                                         real_fid = personal_client.rapid_upload_personal(per_fd, f_md5, raw_size, s_md5, safe_name, target_sk, target_cookie)
                                         download_url = personal_client.get_direct_url(real_fid, target_sk, target_cookie, client_ua)
+                                        logger.info(f"[{log_tag}秒传就绪] {safe_name} ({human_size})")
                                     else:
-                                        # 🌟 修复: 自愈后的重试同样加上查重护盾
                                         items = family_client.get_family_items(fam_id, fam_fd, target_sk)
                                         real_fid = next((i['fileId'] for i in items if f_md5 in i['fileName'] or i['fileName'] == safe_name), None)
                                         
                                         if not real_fid:
                                             real_fid = family_client.rapid_upload(fam_id, fam_fd, f_md5, raw_size, s_md5, safe_name, target_sk)
+                                            logger.info(f"[{log_tag}秒传成功] {safe_name} ({human_size})")
+                                        else:
+                                            logger.info(f"[{log_tag}秒传命中] {safe_name} ({human_size})")
                                             
                                         download_url = family_client.get_download_url(fam_id, real_fid, target_sk, client_ua)
                                         

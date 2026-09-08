@@ -1460,8 +1460,15 @@ def process_cas_via_olist_api(specific_dir=None):
 
     # --- 循环结束，分别保存核销好的双账本 ---
     if harvest_ledger_changed:
+        # 🌟 强行割肉：超过 2000 条，只保留最后（最新）的 2000 条
+        if len(harvest_ledger) > 2000:
+            harvest_ledger = dict(list(harvest_ledger.items())[-2000:])
         save_json(harvest_ledger_file, harvest_ledger)
+        
     if strm_ledger_changed:
+        # 🌟 强行割肉：万一有没被核销的死记录死磕在里面，超过 1000 条强行清理
+        if len(strm_ledger) > 1000:
+            strm_ledger = dict(list(strm_ledger.items())[-1000:])
         save_json(strm_ledger_file, strm_ledger)
 
     if updated_paths:
@@ -1916,10 +1923,18 @@ def scan_local_dropbox(specific_dir=None):
             if local_season_num is not None:
                 season_num = local_season_num
             else:
-                s_match_file = re.search(r'(?i)S0*(\d+)', filename)
+                # 🌟 强化正则：字母 S 前面绝不能是其它字母，彻底避开 DTS5.1 或 Atmos5.1 的致命误杀
+                s_match_file = re.search(r'(?i)(?:^|[^a-z])s0*(\d+)', filename)
                 season_num = int(s_match_file.group(1)) if s_match_file else 1
+
+            # 🌟 完美修复：
+            # 1. 电视剧、动漫、短剧：天生带 Season 属性，哪怕是第一季也默认建 Season 1
+            if b_large in ["电视剧", "动漫", "短剧"]:
+                virtual_cloud_path = f"{virtual_cloud_path}/Season {season_num}"
                 
-            if b_large in ["电视剧", "动漫", "短剧"] or season_num > 1:
+            # 2. 纪录片、综艺：平时不建，但只要正则真扫到了 S2、S3，就允许建 Season X
+            # 3. 电影、演唱会：绝对的单体文件，无论如何都不许建 Season 文件夹！
+            elif season_num > 1 and b_large not in ["电影", "演唱会"]:
                 virtual_cloud_path = f"{virtual_cloud_path}/Season {season_num}"
 
             # ==========================================
@@ -1966,6 +1981,9 @@ def scan_local_dropbox(specific_dir=None):
                     ledger_file = os.path.join(DB_DIR, "strm_ledger.json")
                     ledger = load_json(ledger_file)
                     ledger[final_name] = True
+                    # 🌟 写入时也上个保险，防止极端情况超载
+                    if len(ledger) > 1000:
+                        ledger = dict(list(ledger.items())[-1000:])
                     save_json(ledger_file, ledger)
                 else:
                     logger.error(f"❌ [投递箱] API 拒绝: {res.text}")
