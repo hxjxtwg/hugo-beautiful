@@ -643,8 +643,11 @@ import time
 import json
 import asyncio
 import shutil
+import random
+import string
 from urllib.parse import quote
 import httpx
+import fcntl
 
 # =================================================================
 # ⚙️ 核心网关与路径映射配置
@@ -813,7 +816,7 @@ async def main():
     raw_tag = sys.argv[4].strip() if len(sys.argv) > 4 else ""
 
     # ========================================================
-    # 🚦 标签精细拆解：双传指令、剧名覆盖、附加属性(HDR/HQ等)
+    # 🚦 标签精细拆解：双传指令、洗码开关、剧名覆盖、附加属性
     # ========================================================
     
     # 1. 拦截双传指令
@@ -822,15 +825,27 @@ async def main():
         is_double_upload = True
         raw_tag = raw_tag.replace("双传", "")
 
-    # 2. 拦截并提取强制剧名 (支持 剧名=xxx 或 剧名:xxx)
+    # 1.5 拦截洗码指令 (💡 新增: 洗码开关逻辑)
+    is_wash_file = False
+    if "洗码" in raw_tag:
+        is_wash_file = True
+        raw_tag = raw_tag.replace("洗码", "")
+
+    # 2. 拦截并提取强制剧名
     custom_drama_name = ""
-    name_match = re.search(r'剧名[=：:]([^,，\s]+)', raw_tag)
+    name_match = re.search(r'(?:剧名|片名|名)[=：:]([^,，\s]+)', raw_tag)
     if name_match:
         custom_drama_name = name_match.group(1).strip()
-        # 提取完后，把“剧名=xxx”这段从标签字符串里彻底抹掉
         raw_tag = raw_tag.replace(name_match.group(0), "")
 
-    # 3. 清理剩下的特征标签 (比如 HDR, HQ 等)，留作文件夹后缀
+    # 💡 [新增] 2.5 拦截并提取强制年份 (支持 年份=2024)
+    custom_year = ""
+    year_match_tag = re.search(r'(?:年份|年)[=：:](19\d{2}|20\d{2})', raw_tag)
+    if year_match_tag:
+        custom_year = year_match_tag.group(1).strip()
+        raw_tag = raw_tag.replace(year_match_tag.group(0), "")
+
+    # 3. 清理剩下的特征标签，留作文件夹后缀
     remaining_tags = raw_tag.replace(",", " ").replace("，", " ")
     remaining_tags = " ".join(remaining_tags.split()).strip()
     
@@ -857,10 +872,8 @@ async def main():
     # 🎯 提取优化：标签强行接管剧名 vs 正则瞎猜
     # ========================================================
     if custom_drama_name:
-        # 【神级截胡】如果你传了 剧名=xxx，直接无视原名，强制使用！
         pure_drama_name = custom_drama_name
     else:
-        # 如果没写 剧名=xxx，依然沿用原有的正则去原名里猜
         cleaned_search = re.sub(r'\[剧集\]|【剧集】|\[更新\]|【更新】|\[高清.*?\]|【高清制作.*?】', '', torrent_name)
         cn_match = re.search(r'([\u4e00-\u9fa5][\u4e00-\u9fa50-9：·！，—、\s]*)', cleaned_search)
         
@@ -875,24 +888,28 @@ async def main():
     m_season = re.search(r'(?i)S(\d+)', torrent_name)
     folder_season = int(m_season.group(1)) if m_season else 1
     
-    year = ""
-    year_match = re.search(r'\b(19\d{2}|20\d{2})\b', torrent_name)
-    if year_match:
-        year = year_match.group(1)
+    # ========================================================
+    # 🎯 年份提取：强制标签 > 正则提取 > TMDB 瞎猜
+    # ========================================================
+    if custom_year:
+        # 【神级截胡】如果你在标签写了 年份=2024，直接无视其他所有规则！
+        year = custom_year
     else:
-        year = await fetch_tmdb_year(pure_drama_name)
+        year_match = re.search(r'\b(19\d{2}|20\d{2})\b', torrent_name)
+        if year_match:
+            year = year_match.group(1)
+        else:
+            year = await fetch_tmdb_year(pure_drama_name)
         
     current_mount = get_mount_root()
-    is_movie = "电影" in category or category in ["演唱会", "纪录片"]
+    is_movie = "电影" in category or category in ["演唱会", "纪录片", "综艺"]
 
     # ========================================================
     # 📁 剧名文件夹标准化决策 (完美拼接)
     # ========================================================
     if custom_drama_name:
-        # 纯中文名不需要加点替换
         clean_base = pure_drama_name
     else:
-        # 拼音原名保留替换空格为点的逻辑
         clean_base = pure_drama_name.replace(" ", ".") if pure_drama_name else "Unknown.Drama"
         
     base_folder = f"{clean_base} ({year})" if year else clean_base
@@ -902,6 +919,23 @@ async def main():
         folder_name = f"{base_folder} {remaining_tags}"
     else:
         folder_name = base_folder
+
+    # ========================================================
+    # 🛡️ 进程防冲突锁 (修复安卓存储不支持锁的致命Bug)
+    # ========================================================
+    # 💡 必须将锁放在 Termux 内部原生 ext4 目录，绝对不能放 /storage 下！
+    TERMUX_LOCK_DIR = "/data/data/com.termux/files/home/.pt_locks"
+    os.makedirs(TERMUX_LOCK_DIR, exist_ok=True)
+    
+    lock_file_path = os.path.join(TERMUX_LOCK_DIR, f".lock_{folder_name}.lock")
+    lock_fd = open(lock_file_path, 'w')
+
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (BlockingIOError, IOError, OSError):
+        await notify_steward_log(f"⏳ [系统排队] 检测到 `{folder_name}` 前一批视频还在上传中，新触发任务进入静默等候...")
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        await notify_steward_log(f"🟢 [排队放行] `{folder_name}` 前序任务已交接完毕，新任务正式接管！")
 
     # 3. 扫描捕获视频实体文件
     video_tasks = []
@@ -956,13 +990,21 @@ async def main():
             await trigger_189_local_script(final_cas_path) 
             continue
 
-        await notify_steward_log(f"🚚 [主盘流转] 正在原样运送: `{actual_video_name}` ➔ 天翼云端 (5244)")
+        # 💡 [新增：189 洗码引擎]
+        if is_wash_file:
+            junk_data = ''.join(random.choices(string.ascii_letters + string.digits, k=16)).encode('utf-8')
+            target_total_bytes = total_bytes + len(junk_data)
+            await notify_steward_log(f"🕵️ [洗码触发] 正在对 `{actual_video_name}` 注入随机特征码，伪装发往天翼云端...")
+        else:
+            junk_data = b''
+            target_total_bytes = total_bytes
+            await notify_steward_log(f"🚚 [主盘流转] 正在原样运送: `{actual_video_name}` ➔ 天翼云端 (5244)")
         
         put_url = f"{OLIST_URL}/api/fs/put"
         headers = {
             "Authorization": OLIST_TOKEN,
             "File-Path": quote(target_full),
-            "Content-Length": str(total_bytes),
+            "Content-Length": str(target_total_bytes), # ⚠️ 动态发送伪造体积
             "Content-Type": "application/octet-stream"
         }
 
@@ -975,7 +1017,11 @@ async def main():
                     async def file_iter():
                         while True:
                             chunk = f_in.read(2 * 1024 * 1024)
-                            if not chunk: break
+                            if not chunk: 
+                                # 💡 如果开启洗码，读完真实文件后强行追加乱码尾巴
+                                if is_wash_file:
+                                    yield junk_data
+                                break
                             yield chunk
 
                     async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=None, write=None, pool=None)) as client:
@@ -1055,12 +1101,21 @@ async def main():
 
                     # 2. 不在列表中则提交上传任务
                     if not already_queued:
-                        await notify_steward_log(f"🚚 [139战术] 正在提交 `{video_name}` 到云端上传队列...")
+                        # 💡 [新增：139 洗码引擎]
+                        if is_wash_file:
+                            junk_data_139 = ''.join(random.choices(string.ascii_letters + string.digits, k=16)).encode('utf-8')
+                            target_total_bytes_139 = total_bytes + len(junk_data_139)
+                            await notify_steward_log(f"🕵️ [洗码触发] 正在对 `{video_name}` 注入随机特征码，伪装提交139云端队列...")
+                        else:
+                            junk_data_139 = b''
+                            target_total_bytes_139 = total_bytes
+                            await notify_steward_log(f"🚚 [139战术] 正在提交 `{video_name}` 到云端上传队列...")
+
                         put_url = f"{OLIST_139_URL}/api/fs/put"
                         headers = {
                             "Authorization": OLIST_139_TOKEN, 
                             "File-Path": quote(m_target_full), 
-                            "Content-Length": str(total_bytes), 
+                            "Content-Length": str(target_total_bytes_139), # ⚠️ 动态发送伪造体积
                             "Content-Type": "application/octet-stream",
                             "As-Task": "true" 
                         }
@@ -1070,7 +1125,11 @@ async def main():
                                 chunk_size = 1024 * 1024
                                 while True:
                                     chunk = f_upload.read(chunk_size)
-                                    if not chunk: break
+                                    if not chunk: 
+                                        # 💡 追加干扰码突变 MD5
+                                        if is_wash_file:
+                                            yield junk_data_139
+                                        break
                                     yield chunk
                             
                             async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=None, write=None, pool=None), trust_env=False) as h:
@@ -1147,6 +1206,11 @@ async def main():
                     
                     await trigger_strm_sync("139", m_target_dir)
                     await notify_steward_log(f"✅ [139战术完毕] `{video_name}` 特征码拉取成功！")
+                    
+                    # 💡 [新增：139 上传成功完美 TG 推送]
+                    success_msg_139 = f"<b>{video_name}</b><br>成功传至移动 139 备盘云端！"
+                    asyncio.create_task(send_push_notification("✅ 139备盘入库成功", success_msg_139))
+                    
                     return True
                     
                 except Exception as e:
@@ -1155,7 +1219,10 @@ async def main():
                     await notify_steward_log(f"⚠️ [139上传重试] `{video_name}` 报错: {str(e)[:100]}, 等待 {delay}s ({retry_count}/5)", level="WARNING")
                     
                     if retry_count >= 5:
-                        await notify_steward_log(f"❌ [139彻底挂起] `{video_name}` 失败达到 5 次，当前视频上传终止！", level="ERROR")
+                        # 💡 [新增：139 上传彻底失败 TG 推送，镜像189逻辑]
+                        err_msg_139 = f"<b>{video_name}</b><br>139备盘经过 5 次重试依旧崩溃！"
+                        await notify_steward_log(f"❌ [139彻底挂起] {err_msg_139}", level="ERROR")
+                        asyncio.create_task(send_push_notification("🚨 139备盘入库彻底失败", err_msg_139))
                         return False
                         
                     await asyncio.sleep(delay)

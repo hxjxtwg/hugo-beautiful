@@ -1183,28 +1183,48 @@ def process_139_pipeline():
             logger.error(f"❌ [139加工] 唤醒 Emby 刷新异常: {e}")
 
 # ==========================================
-# 🌟 独立新增的 CAS 收割模块 (终极暴力认亲 + 整季合并极速批次处理版)
+# 🌟 独立新增的 CAS 收割模块 (终极暴力认亲 + 缓存阵列极速批次版)
 # ==========================================
 def process_cas_via_olist_api(specific_dir=None):
+    import sqlite3 
+    
     s = load_json(SETTINGS_FILE)
     WATCH_DIRS = s.get("watch_dirs", ["/family/177_cas", "/local_cas"])
     
-    # 🌟 如果有外部指定的精准目录，雷达就只扫这一个！
     if specific_dir:
         WATCH_DIRS = [specific_dir]
     NO_DELETE_DIRS = s.get("no_delete_dirs", [])
     
-    # 🌟 新增：把个人云目录自动硬塞进巡逻大军里，去重防止扫两遍
     WATCH_DIRS = list(set(WATCH_DIRS + NO_DELETE_DIRS))
     processed_names = []
     if not WATCH_DIRS: return processed_names 
 
-    # --- 1. 载入【收割专属账本】(防个人云二次复制) ---
-    harvest_ledger_file = os.path.join(DB_DIR, "harvest_ledger.json")
-    harvest_ledger = load_json(harvest_ledger_file)
-    harvest_ledger_changed = False
+    # --- SQLite3 毫秒级本地高速引擎 ---
+    db_path = os.path.join(DB_DIR, "harvest_ledger.db")
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute('CREATE TABLE IF NOT EXISTS ledger (filename TEXT PRIMARY KEY)')
+    
+    history_file = os.path.join(DB_DIR, "harvest_ledger.json")
+    if os.path.exists(history_file):
+        try:
+            old_data = load_json(history_file)
+            if old_data:
+                for k in old_data.keys():
+                    cursor.execute('INSERT OR IGNORE INTO ledger (filename) VALUES (?)', (k,))
+                conn.commit()
+            os.remove(history_file)
+            logger.info("♻️ [系统] 旧版臃肿 JSON 账本已成功升级为 SQLite 高速数据库！")
+        except: pass
 
-    # --- 2. 载入【STRM静默账本】(防 5000 端口二次强刷) ---
+    def check_in_ledger(name):
+        cursor.execute('SELECT 1 FROM ledger WHERE filename = ?', (name,))
+        return cursor.fetchone() is not None
+
+    def add_to_ledger(name):
+        cursor.execute('INSERT OR IGNORE INTO ledger (filename) VALUES (?)', (name,))
+        conn.commit()
+
     strm_ledger_file = os.path.join(DB_DIR, "strm_ledger.json")
     strm_ledger = load_json(strm_ledger_file)
     strm_ledger_changed = False
@@ -1221,6 +1241,26 @@ def process_cas_via_olist_api(specific_dir=None):
     except Exception as e:
         logger.error(f"❌ [登录] OList 接口异常: {e}")
         return processed_names
+
+    # ==========================================
+    # 🚀 核心救命补丁：OpenList 目录请求物理缓存池
+    # 将几万次 HTTP 请求瞬间降维到 10 次以内！
+    # ==========================================
+    olist_dir_cache = {}
+    def get_olist_dir_cached(path_val):
+        if path_val in olist_dir_cache:
+            return olist_dir_cache[path_val]
+        try:
+            r = requests.post(f"{API_5244_URL}/api/fs/list", json={"path": path_val, "password": "", "page": 1, "per_page": 2000, "refresh": True}, headers=headers, timeout=15)
+            if r.json().get("code") == 200:
+                content = (r.json().get("data") or {}).get("content", [])
+                olist_dir_cache[path_val] = content
+                r.close()
+                return content
+            r.close()
+        except: pass
+        olist_dir_cache[path_val] = []
+        return []
 
     def scan_olist_dir(path):
         files = []
@@ -1239,9 +1279,8 @@ def process_cas_via_olist_api(specific_dir=None):
                     files.extend(scan_olist_dir(item_path))
                 else:
                     if item["name"].lower().endswith(".cas"):
-                        # 【核心拦截】：如果文件已在收割账本，直接跳过扫描
-                        if item["name"] in harvest_ledger:
-                            logger.debug(f"⏭️ [跳过] 已记录于收割账本: {item['name']}")
+                        if check_in_ledger(item["name"]):
+                            pass # 静默跳过已记录的文件
                         else:
                             files.append({"name": item["name"], "dir": path, "full_path": item_path})
         except Exception as e:
@@ -1255,6 +1294,7 @@ def process_cas_via_olist_api(specific_dir=None):
 
     if not cas_files: 
         logger.info("ℹ️ [收割] 暂无需要处理的 CAS 文件")
+        conn.close()
         return processed_names
 
     subs = load_json(SUBS_FILE)
@@ -1332,22 +1372,24 @@ def process_cas_via_olist_api(specific_dir=None):
                     search_roots = [get_openlist_path(f"{DIR_CAS_ROOT}/动漫/0-动漫"), get_openlist_path(f"{DIR_CAS_ROOT}/电视剧/0-电视剧")]
                 
                 for root_path in search_roots:
-                    r = requests.post(f"{API_5244_URL}/api/fs/list", json={"path": root_path, "password": "", "page": 1, "per_page": 1000, "refresh": True}, headers=headers, timeout=20)
-                    if r.json().get("code") == 200:
-                        ym_nodes = [item["name"] for item in (r.json().get("data") or {}).get("content", []) if item["is_dir"] and re.match(r'^\d{4,6}$', item["name"])]
-                        ym_nodes.sort(reverse=True)
-                        all_months_matches = []
-                        for ym in ym_nodes:
-                            ym_path = f"{root_path}/{ym}"
-                            r2 = requests.post(f"{API_5244_URL}/api/fs/list", json={"path": ym_path, "password": "", "page": 1, "per_page": 1000, "refresh": True}, headers=headers, timeout=20)
-                            if r2.json().get("code") == 200:
-                                for item in (r2.json().get("data") or {}).get("content", []):
-                                    if item["is_dir"] and search_key == get_match_key(item["name"]):
-                                        all_months_matches.append({"ym": ym, "name": item["name"]})
-                        if all_months_matches:
-                            all_months_matches.sort(key=lambda x: (0 if x["name"].lower() == show_folder_name.lower() else 1, len(x["name"]), -int(x["ym"])))
-                            best_share = all_months_matches[0]
-                            best_match_path = f"{DIR_CAS_ROOT}/{b_large}/{b_sub}/{best_share['ym']}/{best_share['name']}".replace("//", "/")
+                    # 🌟 彻底消灭网络请求风暴：直接从刚才建好的缓存池读取！
+                    ym_items = get_olist_dir_cached(root_path)
+                    ym_nodes = [item["name"] for item in ym_items if item["is_dir"] and re.match(r'^\d{4,6}$', item["name"])]
+                    ym_nodes.sort(reverse=True)
+                    
+                    all_months_matches = []
+                    for ym in ym_nodes:
+                        ym_path = f"{root_path}/{ym}"
+                        # 🌟 再次使用高速缓存
+                        show_items = get_olist_dir_cached(ym_path)
+                        for item in show_items:
+                            if item["is_dir"] and search_key == get_match_key(item["name"]):
+                                all_months_matches.append({"ym": ym, "name": item["name"]})
+                                
+                    if all_months_matches:
+                        all_months_matches.sort(key=lambda x: (0 if x["name"].lower() == show_folder_name.lower() else 1, len(x["name"]), -int(x["ym"])))
+                        best_share = all_months_matches[0]
+                        best_match_path = f"{DIR_CAS_ROOT}/{b_large}/{b_sub}/{best_share['ym']}/{best_share['name']}".replace("//", "/")
                     if best_match_path: break
             except: pass
 
@@ -1370,13 +1412,9 @@ def process_cas_via_olist_api(specific_dir=None):
         elif true_season_num > 1 or (len(parts) > 1 and "season" in parts[-1].lower()):
             if not re.search(r'(?i)/Season\s*\d+$', target_cloud_path): target_cloud_path = f"{target_cloud_path}/Season {true_season_num}"
 
-        # ==========================================
-        # 🌟 核心保护：个人云原盘直通，绝不洗名
-        # ==========================================
         is_no_delete = any(nd in raw_dir for nd in NO_DELETE_DIRS)
         if is_no_delete:
-            final_name = filename  # 个人云：原封不动，保护多版本特征
-            logger.debug(f"🛡️ [保护] 识别到个人云专属文件，已跳过洗名: {filename}")
+            final_name = filename 
         else:
             final_name = generate_smart_name(filename, target_cloud_path) or filename
             
@@ -1393,7 +1431,6 @@ def process_cas_via_olist_api(specific_dir=None):
             logger.info(f"📁 [基建] 新建目录: {final_target_dir} ...")
             time.sleep(1.5)
 
-        # 【核心分支】：判断免删除目录
         is_no_delete = any(nd in raw_dir for nd in NO_DELETE_DIRS)
         api_endpoint = "copy" if is_no_delete else "move"
         action_name = "复制" if is_no_delete else "移动"
@@ -1419,57 +1456,49 @@ def process_cas_via_olist_api(specific_dir=None):
             logger.info(f"✅ [{action_name}] 批量成功!")
             processed_names.extend(names_to_move)
 
-            # 🌟 修复：严密隔离的双轨通知机制
             if is_no_delete:
-                for name in names_to_move: harvest_ledger[name] = True
-                harvest_ledger_changed = True
-                logger.info(f"🛑 [个人云] 纯备份完成，绝不投递管家制造垃圾 STRM")
+                for name in names_to_move: add_to_ledger(name)
             else:
                 need_sync = False
                 for name in names_to_move:
                     if name in strm_ledger:
-                        logger.info(f"🤫 [静默防重] 本地已有 STRM，拦截管家二次强刷: {name}")
                         del strm_ledger[name]
                         strm_ledger_changed = True
                     else:
                         need_sync = True
-                        
                 if need_sync:
                     updated_paths.add(base_notify_path)
                 
         else:
-            logger.error(f"❌ [{action_name}] 批量失败: {mov_res.get('message')}")
-            # 单件降级处理，同样继承全部逻辑并隔离
+            if "exists" not in str(mov_res.get('message', '')).lower():
+                logger.error(f"❌ [{action_name}] 批量失败: {mov_res.get('message')}")
+                
             for name in names_to_move:
                 single_res = requests.post(f"{API_5244_URL}/api/fs/{api_endpoint}", json={"src_dir": raw_dir, "dst_dir": final_target_dir, "names": [name]}, headers=headers).json()
-                if single_res.get("code") == 200:
-                    logger.info(f"✅ [{action_name}] 单件成功: {name}")
+                
+                is_exists = single_res.get("code") != 200 and "exists" in str(single_res.get("message", "")).lower()
+                
+                if single_res.get("code") == 200 or is_exists:
+                    if is_exists:
+                        logger.debug(f"⏭️ [{action_name}] 目标已存在，已静默修复 db 数据库记忆: {name}")
+                    else:
+                        logger.info(f"✅ [{action_name}] 单件成功: {name}")
+                        
                     processed_names.append(name)
                     
                     if is_no_delete:
-                        harvest_ledger[name] = True
-                        harvest_ledger_changed = True
-                        logger.info(f"🛑 [个人云单件] 纯备份完成，跳过 STRM 投递: {name}")
+                        add_to_ledger(name)
                     else:
                         if name in strm_ledger:
-                            logger.info(f"🤫 [静默防重单件] 拦截管家二次强刷: {name}")
                             del strm_ledger[name]
                             strm_ledger_changed = True
                         else:
-                            updated_paths.add(base_notify_path)
+                            if not is_exists: updated_paths.add(base_notify_path)
 
-    # --- 循环结束，分别保存核销好的双账本 ---
-    if harvest_ledger_changed:
-        # 🌟 强行割肉：超过 2000 条，只保留最后（最新）的 2000 条
-        if len(harvest_ledger) > 2000:
-            harvest_ledger = dict(list(harvest_ledger.items())[-2000:])
-        save_json(harvest_ledger_file, harvest_ledger)
-        
     if strm_ledger_changed:
-        # 🌟 强行割肉：万一有没被核销的死记录死磕在里面，超过 1000 条强行清理
-        if len(strm_ledger) > 1000:
-            strm_ledger = dict(list(strm_ledger.items())[-1000:])
         save_json(strm_ledger_file, strm_ledger)
+        
+    conn.close() 
 
     if updated_paths:
         logger.info("⏳ [引擎] 物理归档结束，等待管家同步...")
@@ -1489,40 +1518,32 @@ def process_cas_via_olist_api(specific_dir=None):
                 else: media_root = p
             if media_root: target_media_roots.add(media_root)
         
-        # 从设置里读取你想要的模式，默认是老版的 "cas"
         strm_mode = s.get("189_strm_mode", "cas") 
-        
-        # 👇 新增：准备去重篮子
         strm_dirs_to_refresh = set()
         
         for media_root in target_media_roots:
             olist_p = get_openlist_path(media_root)
             try:
-                # 1. 派发造物指令给 5000 管家
                 requests.get(f"{API_5000_URL}/api/sync", params={"path": olist_p, "mode": strm_mode}, timeout=3).close()
                 logger.info(f"🔄 [管家] 触发云端目录同步: {media_root} (模式: {strm_mode})")
                 
-                # 2. 算路：将云端路径转换为本地 STRM 物理路径并装入篮子
                 local_strm_dir = s.get("local_strm_dir", DEFAULT_LOCAL_STRM)
-                # 巧妙利用 split 切掉云端根目录前缀，得出相对子目录
                 strm_sub_dir = media_root.split(DIR_CAS_ROOT)[-1].strip("/")
                 target_local_strm_path = os.path.join(local_strm_dir, strm_sub_dir).replace("\\", "/")
                 strm_dirs_to_refresh.add(target_local_strm_path)
-                
             except Exception as e:
-                logger.debug(f"⚠️ 通知目录强刷闪断: {e}")
+                pass
                 
-        # 👇 新增：异步延迟，统一精准刷新 Emby
         if strm_dirs_to_refresh:
             bash_path = s.get("bash_path", DEFAULT_BASH_PATH)
             refresh_sh = s.get("refresh_sh_path", DEFAULT_REFRESH_SH)
             
             def delayed_harvest_refresh(dirs):
-                time.sleep(10.0) # 给管家 10 秒钟将整剧 STRM 写盘
+                time.sleep(10.0)
                 for d in dirs:
                     subprocess.Popen([bash_path, refresh_sh, d], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
                     logger.info(f"⚡ [收割聚合刷新] 已精确唤醒 Emby 局部更新: {d}")
-                    time.sleep(1.0) # 错峰保护
+                    time.sleep(1.0)
                     
             threading.Thread(target=delayed_harvest_refresh, args=(strm_dirs_to_refresh,)).start()
                 
@@ -1792,6 +1813,7 @@ def check_subscriptions(client_obj, force_target_id=None, is_first_run=False, ig
 # 📦 本地投递箱极速雷达 (全新独立模块，不干扰云端收割)
 # ==========================================
 def scan_local_dropbox(specific_dir=None):
+    import sqlite3
     s = load_json(SETTINGS_FILE)
     # 🌟 坚决使用变量，绝不写死路径！
     dropbox_dir = s.get("local_dropbox_dir", DEFAULT_LOCAL_DROPBOX)
@@ -1800,16 +1822,42 @@ def scan_local_dropbox(specific_dir=None):
     
     scan_target = specific_dir if specific_dir else dropbox_dir
 
-    history_file = os.path.join(DB_DIR, "monitor_history.json")
-    monitor_history = load_json(history_file)
-    changed = False
-    updated_dirs = set()
+    # ==========================================
+    # 🌟 零内存负担：接入 SQLite3 高速硬盘数据库
+    # ==========================================
+    db_path = os.path.join(DB_DIR, "monitor_history.db")
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS history (
+            file_path TEXT PRIMARY KEY,
+            process_time TEXT,
+            file_size INTEGER,
+            mtime REAL,
+            target_strm_dir TEXT,
+            strm_name TEXT,
+            status TEXT
+        )
+    ''')
 
-    # 🌟 100% 恢复你原汁原味的清理逻辑，一行不差！
-    keys_to_delete = [path for path in monitor_history.keys() if not os.path.exists(path)]
-    for k in keys_to_delete:
-        del monitor_history[k]
-        changed = True
+    # 🌟 自动洗牌：把旧的炸弹 JSON 悄悄迁移到数据库，然后物理销毁
+    history_file = os.path.join(DB_DIR, "monitor_history.json")
+    if os.path.exists(history_file):
+        try:
+            old_history = load_json(history_file)
+            if old_history:
+                for k, v in old_history.items():
+                    cursor.execute('''
+                        INSERT OR IGNORE INTO history 
+                        (file_path, process_time, file_size, mtime, target_strm_dir, strm_name, status)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ''', (k, v.get("process_time"), v.get("file_size"), v.get("mtime"), v.get("target_strm_dir"), v.get("strm_name"), v.get("status")))
+                conn.commit()
+            os.remove(history_file)
+            logger.info("♻️ [系统] 投递箱臃肿的 JSON 记忆库已成功升级为 SQLite 高速数据库！")
+        except: pass
+
+    updated_dirs = set()
 
     # ==========================================
     # 🌟 核心防空包穿透雷达 (后台安全运行，最多等 15 秒)
@@ -1845,7 +1893,7 @@ def scan_local_dropbox(specific_dir=None):
 
     if not cas_files:
         logger.warning(f"⚠️ [投递失败] 扫描完毕，没发现任何 .cas 文件！(传输太慢或路径有误): {scan_target}")
-        if changed: save_json(history_file, monitor_history)
+        conn.close()
         return
 
     # 🧠 开始智能算命
@@ -1856,13 +1904,14 @@ def scan_local_dropbox(specific_dir=None):
             mtime = file_stat.st_mtime
             filename = file_path.split("/")[-1]
 
-            # 🛡️ 恢复严苛防重 + 🌟 新增：终极物理自动探针！
-            if file_path in monitor_history:
-                record = monitor_history[file_path]
-                if record.get('mtime') == mtime and record.get('file_size') == size:
+            # 🛡️ 恢复严苛防重 + 🌟 数据库毫秒级比对！
+            cursor.execute("SELECT mtime, file_size, target_strm_dir, strm_name FROM history WHERE file_path = ?", (file_path,))
+            record = cursor.fetchone()
+            
+            if record:
+                db_mtime, db_size, strm_dir, strm_name = record
+                if db_mtime == mtime and db_size == size:
                     # 🌟 真正的自动化：亲自去硬盘查岗！
-                    strm_dir = record.get('target_strm_dir', '')
-                    strm_name = record.get('strm_name', '')
                     if strm_dir and strm_name:
                         strm_full_path = os.path.join(strm_dir, strm_name)
                         # 如果你没删，文件还在，就正常防重复跳过
@@ -1928,12 +1977,8 @@ def scan_local_dropbox(specific_dir=None):
                 season_num = int(s_match_file.group(1)) if s_match_file else 1
 
             # 🌟 完美修复：
-            # 1. 电视剧、动漫、短剧：天生带 Season 属性，哪怕是第一季也默认建 Season 1
             if b_large in ["电视剧", "动漫", "短剧"]:
                 virtual_cloud_path = f"{virtual_cloud_path}/Season {season_num}"
-                
-            # 2. 纪录片、综艺：平时不建，但只要正则真扫到了 S2、S3，就允许建 Season X
-            # 3. 电影、演唱会：绝对的单体文件，无论如何都不许建 Season 文件夹！
             elif season_num > 1 and b_large not in ["电影", "演唱会"]:
                 virtual_cloud_path = f"{virtual_cloud_path}/Season {season_num}"
 
@@ -1967,15 +2012,14 @@ def scan_local_dropbox(specific_dir=None):
                     except:
                         final_mtime = mtime
                         
-                    monitor_history[file_path] = {
-                        "process_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "file_size": size,
-                        "mtime": final_mtime, # 记录真正的最终同步时间
-                        "target_strm_dir": target_local_dir,
-                        "strm_name": strm_name,
-                        "status": "success"
-                    }
-                    changed = True
+                    # 🌟 覆盖写入 SQLite 数据库，毫秒级落地
+                    cursor.execute('''
+                        INSERT OR REPLACE INTO history 
+                        (file_path, process_time, file_size, mtime, target_strm_dir, strm_name, status)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ''', (file_path, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), size, final_mtime, target_local_dir, strm_name, "success"))
+                    conn.commit()
+
                     updated_dirs.add(target_local_dir) 
                     
                     ledger_file = os.path.join(DB_DIR, "strm_ledger.json")
@@ -1993,8 +2037,7 @@ def scan_local_dropbox(specific_dir=None):
         except Exception as e:
             logger.error(f"❌ [投递箱] 解析异常: {file_path} - {e}")
 
-    if changed:
-        save_json(history_file, monitor_history)
+    conn.close() # 断开数据库连接，释放资源
 
     if updated_dirs:
         logger.info(f"🎬 投递箱批量生成完毕，开始聚合局部刷新 (共 {len(updated_dirs)} 个目录)")
