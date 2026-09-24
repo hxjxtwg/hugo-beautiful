@@ -937,17 +937,54 @@ async def main():
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
         await notify_steward_log(f"🟢 [排队放行] `{folder_name}` 前序任务已交接完毕，新任务正式接管！")
 
-    # 3. 扫描捕获视频实体文件
+    # 3. 扫描捕获视频实体文件和外挂字幕
     video_tasks = []
+    subtitle_tasks = [] # 💡 新增：字幕捕获队列
+    
     if os.path.isdir(save_path):
         for root, dirs, files in os.walk(save_path):
             for f in files:
-                if f.lower().endswith(('.mp4', '.mkv', '.ts', '.flv')):
+                ext = f.lower()
+                if ext.endswith(('.mp4', '.mkv', '.ts', '.flv')):
                     video_tasks.append((os.path.join(root, f), f))
+                elif ext.endswith(('.srt', '.ass', '.ssa', '.sup', '.vtt')): # 💡 捕获主流字幕格式
+                    subtitle_tasks.append((os.path.join(root, f), f))
         video_tasks.sort(key=lambda x: x[1])
     else:
         if save_path.lower().endswith(('.mp4', '.mkv', '.ts', '.flv')):
             video_tasks.append((save_path, os.path.basename(save_path)))
+
+    # ========================================================
+    # 📝 阶段零：前置直通外挂字幕 (直接存入本地 CAS 目录，不上云)
+    # ========================================================
+    if subtitle_tasks:
+        await notify_steward_log(f"📝 [字幕直通] 发现 {len(subtitle_tasks)} 个外挂字幕，正在直接提取至本地归档目录...")
+        for sub_path, sub_name in subtitle_tasks:
+            sub_name_clean = sub_name.replace("'", "")
+            
+            # 推算它应该进哪个目录 (复用前面的剧名季数逻辑)
+            ep_num = extract_pure_episode(sub_name_clean, drama_anchor=pure_drama_name)
+            if ep_num is None:
+                ep_num = extract_pure_episode(torrent_name, drama_anchor=pure_drama_name)
+                
+            if is_movie:
+                target_dir = f"{current_mount}/{category}/{folder_name}"
+            else:
+                target_dir = f"{current_mount}/{category}/{folder_name}/Season {folder_season}"
+                
+            # 1. 拷入 189cas 的对应本地目录
+            sub_path_189 = target_dir.replace(current_mount, "", 1)
+            local_cas_dir_189 = f"{STAGING_BASE_DIR}{sub_path_189}".replace("//", "/")
+            os.makedirs(local_cas_dir_189, exist_ok=True)
+            shutil.copy2(sub_path, os.path.join(local_cas_dir_189, sub_name_clean))
+            
+            # 2. 如果是双传，也拷入 139cas 的对应本地目录
+            if is_double_upload:
+                m_target_dir = f"{MOBILE_MOUNT_ROOT}/{category}/{folder_name}" if is_movie else f"{MOBILE_MOUNT_ROOT}/{category}/{folder_name}/Season {folder_season}"
+                m_sub_path = m_target_dir.replace(MOBILE_MOUNT_ROOT, "", 1).lstrip("/")
+                m_local_cas_dir_139 = f"{MOBILE_STAGING_BASE_DIR}/{m_sub_path}".replace("//", "/")
+                os.makedirs(m_local_cas_dir_139, exist_ok=True)
+                shutil.copy2(sub_path, os.path.join(m_local_cas_dir_139, sub_name_clean))
 
     if not video_tasks:
         await notify_steward_log(f"⚠️ [交接终止] 未在路径 `{save_path}` 下发现任何有效视频文件。")
@@ -1194,6 +1231,10 @@ async def main():
                     # 4. 下载特征码并通知管家
                     os.makedirs(m_local_cas_dir, exist_ok=True)
                     
+                    # 💡 [修复] 将 TG 推送提前！传完瞬间立刻推送，绝不被拉取特征码卡脖子
+                    success_msg_139 = f"<b>{video_name}</b><br>成功传至移动 139 备盘云端！"
+                    asyncio.create_task(send_push_notification("✅ 139备盘入库成功", success_msg_139))
+                    
                     await bg_fetch_cas_task(
                         cas_target_full=poll_fs_path, 
                         final_cas_path=m_final_cas_path, 
@@ -1206,10 +1247,6 @@ async def main():
                     
                     await trigger_strm_sync("139", m_target_dir)
                     await notify_steward_log(f"✅ [139战术完毕] `{video_name}` 特征码拉取成功！")
-                    
-                    # 💡 [新增：139 上传成功完美 TG 推送]
-                    success_msg_139 = f"<b>{video_name}</b><br>成功传至移动 139 备盘云端！"
-                    asyncio.create_task(send_push_notification("✅ 139备盘入库成功", success_msg_139))
                     
                     return True
                     

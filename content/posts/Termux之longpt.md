@@ -95,6 +95,10 @@ import requests
 from bs4 import BeautifulSoup
 import urllib.parse
 import re
+import os
+import json
+import threading
+import time
 
 app = Flask(__name__)
 
@@ -105,10 +109,157 @@ HEADERS = {
 }
 
 OFFICIAL_URL = "https://longpt.org/torrents.php"
-THIRD_PARTY_URL = "https://longpt.org/torrents.php?incldead=1&spstate=0&inclbookmarked=0&search=&search_area=0&search_mode=0&author="
 INDEX_URL = "https://longpt.org/index.php"
 SIGNIN_URL = "https://longpt.org/attendance.php"
+HISTORY_FILE = "longpt_history.json"
 # =================================================
+
+# --- 核心引擎：深度抓取详情页海报、体积与所有促销标签 ---
+def fetch_details_info(tid):
+    try:
+        r = requests.get(f"https://longpt.org/details.php?id={tid}", headers=HEADERS, timeout=10)
+        soup = BeautifulSoup(r.text, 'html.parser')
+
+        img_src = ""
+        descr_div = soup.find('div', id='kdescr')
+        if descr_div:
+            img = descr_div.find('img')
+            if img: img_src = img.get('data-src') or img.get('src') or ""
+        if not img_src:
+            for img in soup.find_all('img'):
+                src = img.get('data-src') or img.get('src') or ""
+                src_lower = src.lower()
+                if src and not any(x in src_lower for x in ['category', 'smilies', 'icon', 'logo', 'avatar', 'rating', 'button', 'rule']):
+                    img_src = src
+                    break
+        if img_src and not img_src.startswith('http'):
+            img_src = "https://longpt.org/" + img_src
+
+        size = "未知"
+        size_match = re.search(r'大小.*?([\d\.]+\s*[KMGTP]B)', r.text, re.IGNORECASE)
+        if size_match: size = size_match.group(1)
+
+        extra_tags = []
+        for img in soup.find_all('img'):
+            alt = str(img.get('alt') or img.get('title') or '').strip()
+            if alt.upper() in ['FREE', '免费']:
+                if 'Free' not in extra_tags: extra_tags.append('Free')
+            elif any(x in alt for x in ['50%', '2X', '30%', '热门']):
+                if alt not in extra_tags: extra_tags.append(alt)
+        
+        page_text = soup.get_text(separator=' ')
+        time_match = re.search(r'剩余时间[:：\s]*([\d]+天[\d]+[时分秒]+|[\d]+[天时分秒]+)', page_text)
+        if time_match: extra_tags.append(f"剩余时间: {time_match.group(1)}")
+            
+        h1 = soup.find('h1')
+        if h1 and 'Free' not in extra_tags:
+            if '免费' in h1.get_text() or 'Free' in h1.get_text():
+                extra_tags.append('Free')
+        
+        return img_src, size, extra_tags
+    except Exception as e:
+        return "", "未知", []
+
+# --- 守护进程：后台静默刷新 30 条最近发布 ---
+def background_monitor():
+    while True:
+        try:
+            resp = requests.get(INDEX_URL, headers=HEADERS, timeout=10)
+            if "登录" not in resp.text or "index.php" in resp.url:
+                soup = BeautifulSoup(resp.text, 'html.parser')
+                current_fetched = []
+                
+                for title_a in soup.find_all('a', href=lambda h: h and h.startswith('details.php?id=')):
+                    tid = re.search(r'id=(\d+)', title_a['href']).group(1)
+                    title = title_a.get('title') or title_a.get_text(strip=True)
+                    if not title and title_a.find('img'): title = title_a.find('img').get('alt') or title_a.find('img').get('title')
+                    if not title: continue
+                    
+                    link = "https://longpt.org/" + title_a['href']
+                    container = title_a.find_parent('tr') or title_a.find_parent('div')
+                    img_src, subtitle, seeders, leechers, size = "", "", "-", "-", "加载中..."
+                    
+                    if container:
+                        if container.name == 'tr':
+                            tds = container.find_all('td')
+                            if len(tds) >= 3:
+                                seeders, leechers = tds[-2].get_text(strip=True), tds[-1].get_text(strip=True)
+
+                        for img in container.find_all('img'):
+                            src = img.get('data-src') or img.get('src') or ""
+                            if src and 'category' not in src.lower() and 'cat' not in src.lower():
+                                img_src = src if src.startswith('http') else "https://longpt.org/" + src
+                                break
+                        for icon in container.find_all('img'):
+                            alt = icon.get('alt') or icon.get('title')
+                            if alt and icon.get('src', '') != img_src: icon.replace_with(soup.new_tag("span", string=f" [{alt}] "))
+                        subtitle = container.get_text(separator=' | ', strip=True).replace(title, '').strip(' | ')
+                        if seeders != "-" and subtitle.endswith(leechers): subtitle = subtitle.rsplit('|', 2)[0].strip(' | ')
+                        
+                        subtitle = re.sub(r'\[?(?:剩余时间)[:：]*\]?[\s\|]*([\d]+天[\d]+[时分秒]+|[\d]+[天时分秒]+)', r'[剩余时间: \1]', subtitle)
+                        subtitle = subtitle.replace('[ | ]', '').replace('[ | | ]', '')
+                            
+                        tags, clean_sub = [], subtitle
+                        for m in re.finditer(r'\[(.*?)\]', subtitle):
+                            tag = m.group(1).strip(' |')
+                            # 精准打击：只抓热门、折扣和时间做成徽章
+                            if any(x in tag.upper() for x in ['热门', 'FREE', '免费', '%', '2X', '剩余']):
+                                if len(tag) <= 18: tags.append(tag)
+                                clean_sub = clean_sub.replace(m.group(0), '')
+                            elif tag not in ['Sticky', 'poster', '置顶']:
+                                # 其他参数（如国语、4K）脱去方括号，还给副标题
+                                clean_sub = clean_sub.replace(m.group(0), tag)
+                            else:
+                                clean_sub = clean_sub.replace(m.group(0), '')
+                        
+                        clean_sub = re.sub(r'热门|免费', '', clean_sub)
+                        subtitle = re.sub(r'\|(?:\s*\|)+', '|', clean_sub).strip(' |')
+
+                    if not img_src: img_src = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='100' height='140'><rect width='100%' height='100%' fill='%23e6e6e6'/><text x='50%' y='50%' fill='%23999' font-size='12' font-family='sans-serif' text-anchor='middle' dominant-baseline='middle'>加载海报</text></svg>"
+
+                    current_fetched.append({
+                        'id': tid, 'title': title, 'link': link, 'subtitle': subtitle, 'img': img_src,
+                        'seeders': seeders, 'leechers': leechers, 'size': size, 'tags': tags
+                    })
+
+                history_data = []
+                if os.path.exists(HISTORY_FILE):
+                    try:
+                        with open(HISTORY_FILE, 'r', encoding='utf-8') as f: history_data = json.load(f)
+                    except: pass
+                    
+                history_dict = {str(item['id']): item for item in history_data}
+                
+                for item in current_fetched:
+                    tid_str = str(item['id'])
+                    if tid_str not in history_dict or 'data:image/svg+xml' in history_dict[tid_str]['img'] or history_dict[tid_str].get('size') in ['未知', '加载中...']:
+                        det_img, det_size, det_tags = fetch_details_info(item['id'])
+                        if det_img: item['img'] = det_img
+                        if det_size and det_size != "未知": item['size'] = det_size
+                        if det_tags:
+                            new_tags = item.get('tags', [])
+                            for t in det_tags:
+                                if t not in new_tags: new_tags.append(t)
+                            item['tags'] = new_tags
+
+                    if tid_str in history_dict:
+                        cached = history_dict[tid_str]
+                        if 'data:image/svg+xml' not in cached['img']: item['img'] = cached['img']
+                        if cached.get('size') not in ['未知', '加载中...']: item['size'] = cached['size']
+                        merged_tags = item.get('tags', [])
+                        for t in cached.get('tags', []):
+                            if t not in merged_tags: merged_tags.append(t)
+                        item['tags'] = merged_tags
+                        
+                    history_dict[tid_str] = item
+
+                merged = list(history_dict.values())
+                merged.sort(key=lambda x: int(x['id']), reverse=True)
+                with open(HISTORY_FILE, 'w', encoding='utf-8') as f: json.dump(merged[:30], f, ensure_ascii=False, indent=2)
+        except Exception as e: pass
+        time.sleep(1200)
+
+threading.Thread(target=background_monitor, daemon=True).start()
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -118,158 +269,262 @@ HTML_TEMPLATE = """
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
     <title>LongPT 手机端</title>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background-color: #f2f2f6; margin: 0; padding: 0; color: #333; padding-top: 55px; }
+        :root { --bg-color: #f7f7f7; --card-bg: #ffffff; --text-main: #333333; --text-sub: #888888; --border-color: #eeeeee; --topbar-bg: #ffffff; --icon-bg: #f0f0f5; }
+        [data-theme="dark"] { --bg-color: #121212; --card-bg: #1e1e1e; --text-main: #eeeeee; --text-sub: #aaaaaa; --border-color: #333333; --topbar-bg: #1e1e1e; --icon-bg: #333333; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background-color: var(--bg-color); color: var(--text-main); margin: 0; padding: 0; padding-top: 55px; transition: background-color 0.3s; }
         
-        .nav-bar { position: fixed; top: 0; left: 0; right: 0; height: 45px; background: #fff; display: flex; box-shadow: 0 1px 3px rgba(0,0,0,0.1); z-index: 100; }
-        .nav-item { flex: 1; text-align: center; line-height: 45px; font-size: 13px; font-weight: bold; color: #666; text-decoration: none; position: relative; }
-        .nav-item.active { color: #007aff; }
-        .nav-item.active::after { content: ''; position: absolute; bottom: 0; left: 15%; right: 15%; height: 3px; background: #007aff; border-radius: 3px 3px 0 0; }
+        .top-bar { position: fixed; top: 0; left: 0; right: 0; height: 50px; background: var(--topbar-bg); display: flex; align-items: center; justify-content: space-between; padding: 0 15px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); z-index: 100; transition: background 0.3s; }
         
+        /* 修改点1：更精细轻盈的菜单图标 */
+        .menu-btn { width: 22px; height: 16px; position: relative; cursor: pointer; display: flex; flex-direction: column; justify-content: space-between; padding: 0; }
+        .menu-btn span { display: block; height: 2px; width: 100%; background: var(--text-main); border-radius: 2px; transition: all 0.3s ease; }
+        .menu-btn.open span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
+        .menu-btn.open span:nth-child(2) { opacity: 0; }
+        .menu-btn.open span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+
+        .logo { font-weight: 800; font-size: 20px; color: var(--text-main); letter-spacing: 1px; }
+        .top-placeholder { width: 22px; }
+
+        .sidebar { position: fixed; top: 0; left: -260px; bottom: 0; width: 260px; background: var(--card-bg); z-index: 1001; transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1); box-shadow: 2px 0 10px rgba(0,0,0,0.1); padding-top: 60px; display: flex; flex-direction: column; }
+        .sidebar.open { left: 0; }
+        .menu-item { padding: 16px 24px; font-size: 16px; font-weight: 500; color: var(--text-main); text-decoration: none; display: block; border-bottom: 1px solid var(--border-color); }
+        .menu-item.active { color: #007aff; border-left: 4px solid #007aff; padding-left: 20px; background: rgba(0,122,255,0.05); }
+        
+        .theme-toggle-icon { margin: auto auto 30px 24px; width: 40px; height: 40px; border-radius: 20px; background: var(--icon-bg); display: flex; align-items: center; justify-content: center; font-size: 20px; cursor: pointer; user-select: none; transition: transform 0.2s; }
+        .theme-toggle-icon:active { transform: scale(0.9); }
+        
+        .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 1000; opacity: 0; pointer-events: none; transition: opacity 0.3s; }
+        .overlay.open { opacity: 1; pointer-events: auto; }
+
         .container { padding: 10px; }
-        .card { background: #fff; border-radius: 10px; padding: 10px; margin-bottom: 12px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
-        .content { display: flex; gap: 10px; }
-        .poster-wrapper { flex-shrink: 0; width: 85px; }
-        .poster { width: 100%; height: 120px; object-fit: cover; border-radius: 6px; background-color: #e0e0e0; }
-        .info { flex-grow: 1; display: flex; flex-direction: column; justify-content: space-between; overflow: hidden; }
-        .text-wrap { margin-bottom: 5px; }
-        .title { font-size: 14px; font-weight: bold; margin-bottom: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.3; }
-        .subtitle { font-size: 11px; color: #666; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+        .search-container { display: flex; gap: 8px; margin-bottom: 15px; padding: 0 5px; }
+        .search-input { flex: 1; padding: 12px; border: 1px solid var(--border-color); border-radius: 6px; outline: none; font-size: 14px; background: var(--card-bg); color: var(--text-main); }
+        .search-btn { background: #2563eb; color: #fff; border: none; padding: 0 18px; border-radius: 6px; font-weight: bold; font-size: 14px; }
+        .list-item { display: flex; gap: 12px; padding: 15px 5px; border-bottom: 1px solid var(--border-color); }
+        .poster-wrapper { position: relative; flex-shrink: 0; width: 100px; height: 140px; }
+        .poster { width: 100%; height: 100%; object-fit: cover; border-radius: 8px; background-color: #e0e0e0; transition: opacity 0.5s ease-in-out; }
+        .tag-free { position: absolute; top: 0; left: 0; background: #22c55e; color: #fff; font-size: 10px; font-weight: bold; padding: 2px 6px; border-radius: 8px 0 8px 0; z-index: 10; }
+        .info { flex-grow: 1; display: flex; flex-direction: column; overflow: hidden; justify-content: space-between; padding-bottom: 2px; }
+        .title { font-size: 15px; font-weight: bold; margin-bottom: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.3; }
+        .subtitle { font-size: 12px; color: var(--text-sub); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-bottom: 8px; }
+        .stats-row { font-size: 12px; color: var(--text-sub); display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+        .stat-item { display: flex; align-items: center; gap: 2px; }
+        .seed-icon { color: #22c55e; font-size: 10px; }
+        .leech-icon { color: #ef4444; font-size: 10px; }
         
-        .torrent-stats { display: flex; gap: 12px; font-size: 12px; font-weight: 600; margin-bottom: 8px; background: #f8f9fa; padding: 4px 8px; border-radius: 4px; }
-        .stat-seed { color: #34c759; }
-        .stat-leech { color: #ff3b30; }
-        .stat-size { color: #007aff; margin-left: auto; }
-
-        .actions { display: flex; gap: 8px; margin-top: auto; }
-        .btn { flex: 1; text-align: center; padding: 6px 0; border-radius: 4px; text-decoration: none; font-size: 12px; font-weight: 500; cursor: pointer; border: none; }
-        .btn-detail { background: #f0f0f5; color: #333; }
-        .btn-download { background: #007aff; color: #fff; }
+        /* 修改点3：防止标签换行挤压下载按钮 */
+        .bottom-actions { display: flex; justify-content: space-between; align-items: flex-end; margin-top: auto; gap: 10px; }
+        .tags-list { display: flex; gap: 4px; flex-wrap: wrap; flex: 1; }
+        .badge { background: #8b5cf6; color: #fff; font-size: 10px; padding: 2px 6px; border-radius: 4px; }
+        .badge-discount { background: #ef4444; color: #fff; font-size: 10px; padding: 2px 6px; border-radius: 4px; }
         
-        .btn-signin { background: #34c759; color: #fff; width: 100%; padding: 12px; font-size: 16px; border-radius: 8px; font-weight: bold; margin-top: 20px; transition: opacity 0.2s; }
-        .btn-signin:active { opacity: 0.7; }
-
-        .account-header { text-align: center; padding: 20px 0 10px; }
-        .avatar { width: 70px; height: 70px; background: #007aff; color: #fff; border-radius: 35px; line-height: 70px; font-size: 24px; margin: 0 auto 10px; }
+        .download-btn { background: #2563eb; color: #fff; border: none; padding: 4px 12px; border-radius: 4px; font-size: 11px; font-weight: bold; text-decoration: none; flex-shrink: 0; white-space: nowrap; margin-bottom: 2px; }
+        .download-btn:active { opacity: 0.8; }
+        
+        .account-box { background: var(--card-bg); border-radius: 12px; padding: 20px; text-align: center; border: 1px solid var(--border-color); }
+        .avatar { width: 70px; height: 70px; background: #2563eb; color: #fff; border-radius: 35px; line-height: 70px; font-size: 24px; margin: 0 auto 10px; }
         .account-name { font-size: 18px; font-weight: bold; }
-        .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 15px; }
-        .stat-box { background: #f9f9f9; padding: 12px; border-radius: 8px; text-align: center; }
-        .stat-val { font-size: 16px; font-weight: bold; color: #007aff; margin-bottom: 4px; }
-        .stat-lbl { font-size: 11px; color: #666; }
-
-        /* 新增：搜索框样式 */
-        .search-container { display: flex; gap: 8px; margin-bottom: 15px; }
-        .search-input { flex: 1; padding: 10px 12px; border: 1px solid #ddd; border-radius: 6px; outline: none; font-size: 14px; background: #fff; }
-        .search-btn { background: #007aff; color: #fff; border: none; padding: 0 15px; border-radius: 6px; font-weight: bold; cursor: pointer; }
-
-        @media (prefers-color-scheme: dark) {
-            body { background-color: #121212; color: #e0e0e0; }
-            .nav-bar { background: #1e1e1e; border-bottom: 1px solid #333; }
-            .nav-item { color: #999; }
-            .nav-item.active { color: #4facfe; }
-            .nav-item.active::after { background: #4facfe; }
-            .card, .stat-box { background: #1e1e1e; box-shadow: 0 2px 5px rgba(0,0,0,0.3); }
-            .subtitle, .stat-lbl { color: #999; }
-            .torrent-stats { background: #2c2c2e; }
-            .btn-detail { background: #333; color: #ccc; }
-            .poster { background-color: #333; }
-            .btn-signin { background: #30d158; }
-            .search-input { background: #1e1e1e; color: #eee; border: 1px solid #444; }
-        }
+        .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 20px; }
+        .stat-val { font-size: 18px; font-weight: bold; color: #2563eb; margin-bottom: 4px; }
+        .stat-lbl { font-size: 12px; color: var(--text-sub); }
+        .btn-signin { background: #22c55e; color: #fff; width: 100%; padding: 12px; font-size: 16px; border-radius: 8px; font-weight: bold; margin-top: 25px; border: none; cursor: pointer; }
     </style>
 </head>
 <body>
-    <div class="nav-bar">
-        <a href="/?tab=official" class="nav-item {% if tab == 'official' %}active{% endif %}">官方发布</a>
-        <a href="/?tab=third" class="nav-item {% if tab == 'third' %}active{% endif %}">最近更新</a>
-        <a href="/?tab=search" class="nav-item {% if tab == 'search' %}active{% endif %}">全站搜索</a>
-        <a href="/?tab=account" class="nav-item {% if tab == 'account' %}active{% endif %}">我的帐号</a>
+    <script>
+        function setTheme(theme) {
+            const html = document.documentElement;
+            if (theme === 'dark') { html.setAttribute('data-theme', 'dark'); }
+            else if (theme === 'light') { html.removeAttribute('data-theme'); }
+            else { 
+                if (window.matchMedia('(prefers-color-scheme: dark)').matches) html.setAttribute('data-theme', 'dark');
+                else html.removeAttribute('data-theme');
+            }
+        }
+        let currentTheme = localStorage.getItem('longpt_theme') || 'auto';
+        setTheme(currentTheme);
+        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+            if (localStorage.getItem('longpt_theme') === 'auto') setTheme('auto');
+        });
+    </script>
+
+    <div class="top-bar">
+        <div class="menu-btn" id="menuBtn" onclick="toggleMenu()">
+            <span></span><span></span><span></span>
+        </div>
+        <div class="logo">LongPT</div>
+        <div class="top-placeholder"></div>
+    </div>
+
+    <div class="overlay" id="overlay" onclick="toggleMenu()"></div>
+    <div class="sidebar" id="sidebar">
+        <a href="/?tab=official" class="menu-item {% if tab == 'official' %}active{% endif %}">官方发布</a>
+        <a href="/?tab=recent" class="menu-item {% if tab == 'recent' %}active{% endif %}">最近发布</a>
+        <a href="/?tab=search" class="menu-item {% if tab == 'search' %}active{% endif %}">全站搜索</a>
+        <a href="/?tab=account" class="menu-item {% if tab == 'account' %}active{% endif %}">我的帐号</a>
+        
+        <div class="theme-toggle-icon" id="themeIcon" onclick="cycleTheme()">🔄</div>
     </div>
 
     <div class="container">
-        <!-- 搜索框区域 -->
         {% if tab == 'search' %}
         <form class="search-container" action="/" method="GET">
             <input type="hidden" name="tab" value="search">
-            <input type="text" name="q" class="search-input" placeholder="输入你想找的种子..." value="{{ query }}">
-            <button type="submit" class="search-btn">🔍 搜索</button>
+            <input type="text" name="q" class="search-input" placeholder="输入关键词搜索..." value="{{ query }}">
+            <button type="submit" class="search-btn">搜索</button>
         </form>
         {% endif %}
 
-        {% if error %}
-            <div style="text-align:center; color:#ff4d4f; margin-top:30px; font-weight:bold;">{{ error }}</div>
-        {% endif %}
+        {% if error %}<div style="text-align:center; color:#ef4444; margin-top:30px; font-weight:bold;">{{ error }}</div>{% endif %}
 
         {% if tab == 'account' and user_info %}
-        <div class="card">
-            <div class="account-header">
-                <div class="avatar">{{ user_info.username[:1] | upper }}</div>
-                <div class="account-name">{{ user_info.username }}</div>
-            </div>
+        <div class="account-box">
+            <div class="avatar">{{ user_info.username[:1] | upper }}</div>
+            <div class="account-name">{{ user_info.username }}</div>
             <div class="stat-grid">
-                <div class="stat-box"><div class="stat-val">{{ user_info.bonus }}</div><div class="stat-lbl">魔力值</div></div>
-                <div class="stat-box"><div class="stat-val">{{ user_info.ratio }}</div><div class="stat-lbl">分享率</div></div>
-                <div class="stat-box"><div class="stat-val">{{ user_info.upload }}</div><div class="stat-lbl">总上传</div></div>
-                <div class="stat-box"><div class="stat-val">{{ user_info.download }}</div><div class="stat-lbl">总下载</div></div>
+                <div><div class="stat-val">{{ user_info.bonus }}</div><div class="stat-lbl">魔力值</div></div>
+                <div><div class="stat-val">{{ user_info.ratio }}</div><div class="stat-lbl">分享率</div></div>
+                <div><div class="stat-val">{{ user_info.upload }}</div><div class="stat-lbl">总上传</div></div>
+                <div><div class="stat-val">{{ user_info.download }}</div><div class="stat-lbl">总下载</div></div>
             </div>
-            <button id="signinBtn" class="btn btn-signin" onclick="doSignIn()">✅ 手动签到</button>
+            <button id="signinBtn" class="btn-signin" onclick="doSignIn()">✅ 手动签到</button>
         </div>
-        
         <script>
             function doSignIn() {
                 const btn = document.getElementById('signinBtn');
-                btn.innerText = '签到中...';
-                btn.disabled = true;
-                
-                fetch('/api/signin')
-                    .then(response => response.json())
-                    .then(data => {
-                        alert(data.msg);
-                        btn.innerText = '✅ 手动签到';
-                        btn.disabled = false;
-                    })
-                    .catch(err => {
-                        alert('请求失败，请检查网络');
-                        btn.innerText = '✅ 手动签到';
-                        btn.disabled = false;
-                    });
+                btn.innerText = '签到中...'; btn.disabled = true;
+                fetch('/api/signin').then(r => r.json()).then(data => {
+                    alert(data.msg); btn.innerText = '✅ 手动签到'; btn.disabled = false;
+                }).catch(e => { alert('请求失败'); btn.innerText = '✅ 手动签到'; btn.disabled = false; });
             }
         </script>
         
         {% elif tab != 'account' %}
             {% for item in torrents %}
-            <div class="card">
-                <div class="content">
-                    <div class="poster-wrapper">
-                        <img class="poster" src="{{ item.img }}" referrerpolicy="no-referrer" alt="海报">
+            <div class="list-item" id="item-{{ item.id }}">
+                <div class="poster-wrapper">
+                    {% set needs_lazy = ('data:image/svg+xml' in item.img) or (item.size == '未知') or (item.size == '加载中...') %}
+                    <img class="poster {% if needs_lazy %}lazy-load{% endif %}" 
+                         src="{{ item.img }}" 
+                         {% if needs_lazy %}data-tid="{{ item.id }}"{% endif %}
+                         referrerpolicy="no-referrer" alt="海报" onclick="window.open('{{ item.link }}', '_blank')">
+                    {% if 'Free' in item.tags or '免费' in item.tags %}
+                        <div class="tag-free">FREE</div>
+                    {% endif %}
+                </div>
+                <div class="info">
+                    <div class="title" onclick="window.open('{{ item.link }}', '_blank')">{{ item.title }}</div>
+                    <div class="subtitle">{{ item.subtitle }}</div>
+                    
+                    <div class="stats-row">
+                        <span class="stat-item" id="size-{{ item.id }}">📄 {{ item.size }}</span>
+                        <span class="stat-item"><span class="seed-icon">▲</span> {{ item.seeders }}</span>
+                        <span class="stat-item"><span class="leech-icon">▼</span> {{ item.leechers }}</span>
                     </div>
-                    <div class="info">
-                        <div class="text-wrap">
-                            <div class="title">{{ item.title }}</div>
-                            <div class="subtitle">{{ item.subtitle }}</div>
-                        </div>
-                        
-                        <div class="torrent-stats">
-                            <span><span class="stat-seed">⬆️ 做种</span> {{ item.seeders }}</span>
-                            <span><span class="stat-leech">⬇️ 下载</span> {{ item.leechers }}</span>
-                            {% if item.size %}
-                                <span class="stat-size">📦 {{ item.size }}</span>
-                            {% endif %}
-                        </div>
 
-                        <div class="actions">
-                            <a href="{{ item.link }}" target="_blank" class="btn btn-detail">查看详情</a>
-                            <a href="/download/{{ item.id }}" class="btn btn-download">📥 下载种子</a>
+                    <div class="bottom-actions">
+                        <div class="tags-list">
+                            {% for tag in item.tags %}
+                                {% if tag not in ['Free', '免费'] %}
+                                    {% if '%' in tag or '2X' in tag or '剩余' in tag %}
+                                        <span class="badge-discount">{{ tag }}</span>
+                                    {% else %}
+                                        <span class="badge">{{ tag }}</span>
+                                    {% endif %}
+                                {% endif %}
+                            {% endfor %}
                         </div>
+                        <a href="/download/{{ item.id }}" class="download-btn">下载</a>
                     </div>
                 </div>
             </div>
             {% endfor %}
             
             {% if tab == 'search' and not torrents and query %}
-                <div style="text-align:center; color:#999; margin-top:30px;">没有找到与 "{{ query }}" 相关的种子哦</div>
+                <div style="text-align:center; color:var(--text-sub); margin-top:30px;">找到 0 个结果</div>
+            {% elif tab == 'search' and torrents %}
+                <div style="text-align:center; color:var(--text-sub); margin: 20px 0; font-size:12px;">已展示当前页全部结果</div>
+            {% elif tab == 'recent' %}
+                <div style="text-align:center; color:var(--text-sub); margin: 20px 0; font-size:12px;">后台静默监控中：已累积缓存最高 30 条历史记录</div>
             {% endif %}
         {% endif %}
     </div>
+
+    <script>
+        const sidebar = document.getElementById('sidebar');
+        const overlay = document.getElementById('overlay');
+        const menuBtn = document.getElementById('menuBtn');
+        const themeIcon = document.getElementById('themeIcon');
+
+        function toggleMenu() { 
+            sidebar.classList.toggle('open'); 
+            overlay.classList.toggle('open'); 
+            menuBtn.classList.toggle('open');
+        }
+
+        const icons = { 'auto': '🔄', 'dark': '🌙', 'light': '☀️' };
+        themeIcon.innerText = icons[currentTheme];
+
+        function cycleTheme() {
+            if (currentTheme === 'auto') currentTheme = 'dark';
+            else if (currentTheme === 'dark') currentTheme = 'light';
+            else currentTheme = 'auto';
+            localStorage.setItem('longpt_theme', currentTheme);
+            setTheme(currentTheme);
+            themeIcon.innerText = icons[currentTheme];
+        }
+
+        document.addEventListener("DOMContentLoaded", function() {
+            const lazyItems = document.querySelectorAll('.lazy-load');
+            lazyItems.forEach(img => {
+                const tid = img.getAttribute('data-tid');
+                if (tid) {
+                    fetch('/api/extra/' + tid)
+                        .then(r => r.json())
+                        .then(data => {
+                            if (data.img) {
+                                img.src = data.img;
+                                img.classList.remove('lazy-load');
+                            }
+                            if (data.size && data.size !== '未知' && data.size !== '加载中...') {
+                                const sizeSpan = document.getElementById('size-' + tid);
+                                if (sizeSpan) sizeSpan.innerHTML = '📄 ' + data.size;
+                            }
+                            
+                            if (data.tags && data.tags.length > 0) {
+                                const itemDiv = document.getElementById('item-' + tid);
+                                if (itemDiv) {
+                                    const tagsList = itemDiv.querySelector('.tags-list');
+                                    const posterWrapper = itemDiv.querySelector('.poster-wrapper');
+                                    const existingTags = Array.from(tagsList.querySelectorAll('span')).map(s => s.innerText);
+                                    let hasFree = !!posterWrapper.querySelector('.tag-free');
+                                    
+                                    data.tags.forEach(tag => {
+                                        if (tag === 'Free' || tag === '免费') {
+                                            if (!hasFree) {
+                                                posterWrapper.insertAdjacentHTML('beforeend', '<div class="tag-free">FREE</div>');
+                                                hasFree = true;
+                                            }
+                                        } else {
+                                            const isMatch = existingTags.some(t => t.includes(tag) || tag.includes(t));
+                                            if (!isMatch) {
+                                                if (tag.includes('%') || tag.includes('2X') || tag.includes('剩余')) {
+                                                    tagsList.insertAdjacentHTML('beforeend', `<span class="badge-discount">${tag}</span>`);
+                                                } else {
+                                                    tagsList.insertAdjacentHTML('beforeend', `<span class="badge">${tag}</span>`);
+                                                }
+                                                existingTags.push(tag);
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+                        })
+                        .catch(e => console.error('懒加载失败:', e));
+                }
+            });
+        });
+    </script>
 </body>
 </html>
 """
@@ -306,18 +561,13 @@ def index():
                     'download': down_match.group(1) if down_match else "0 GB"
                 }
 
-        # 官方列表与搜索共用同一套抓取逻辑（排版完全一致）
         elif tab in ['official', 'search']:
-            if tab == 'search' and not query:
-                # 仅处于搜索页但没关键字时，不发请求，直接展示空白页
-                pass
+            if tab == 'search' and not query: pass
             else:
-                # 若为搜索状态，将关键字拼入参数发起全站搜索
                 if tab == 'search':
                     safe_query = urllib.parse.quote(query)
                     target_url = f"https://longpt.org/torrents.php?incldead=1&spstate=0&inclbookmarked=0&search={safe_query}&search_area=0&search_mode=0"
-                else:
-                    target_url = OFFICIAL_URL
+                else: target_url = OFFICIAL_URL
                     
                 resp = requests.get(target_url, headers=HEADERS, timeout=10)
                 if "登录" in resp.text and "torrents.php" not in resp.url:
@@ -339,9 +589,7 @@ def index():
                         link = "https://longpt.org/" + title_a['href']
                         
                         try:
-                            size = tds[-5].get_text(strip=True)
-                            seeders = tds[-4].get_text(strip=True)
-                            leechers = tds[-3].get_text(strip=True)
+                            size, seeders, leechers = tds[-5].get_text(strip=True), tds[-4].get_text(strip=True), tds[-3].get_text(strip=True)
                         except:
                             size, seeders, leechers = "未知", "-", "-"
 
@@ -360,42 +608,57 @@ def index():
                                 if alt and icon.get('src', '') != img_src:
                                     icon.replace_with(soup.new_tag("span", string=f" [{alt}] "))
                             subtitle = td.get_text(separator=' | ', strip=True).replace(title, '').strip(' | ')
-                            subtitle = subtitle.replace('[ | ]', '').replace('[ | | ]', '')
-                            subtitle = re.sub(r'\[(Sticky|poster|置顶)\]', '', subtitle, flags=re.IGNORECASE)
-                            subtitle = re.sub(r'\[[\s\|]*\]|热门|剩余时间.*?(?:\||$)', '', subtitle)
-                            subtitle = re.sub(r'\|(?:\s*\|)+', '|', subtitle).strip(' | ')
+                            
+                        subtitle = re.sub(r'\[?(?:剩余时间)[:：]*\]?[\s\|]*([\d]+天[\d]+[时分秒]+|[\d]+[天时分秒]+)', r'[剩余时间: \1]', subtitle)
+                        subtitle = subtitle.replace('[ | ]', '').replace('[ | | ]', '')
+                            
+                        tags, clean_sub = [], subtitle
+                        for m in re.finditer(r'\[(.*?)\]', subtitle):
+                            tag = m.group(1).strip(' |')
+                            # 修改点2：精确提取徽章，普通文本脱去中括号还给副标题
+                            if any(x in tag.upper() for x in ['热门', 'FREE', '免费', '%', '2X', '剩余']):
+                                if len(tag) <= 18: tags.append(tag)
+                                clean_sub = clean_sub.replace(m.group(0), '')
+                            elif tag not in ['Sticky', 'poster', '置顶']:
+                                clean_sub = clean_sub.replace(m.group(0), tag)
+                            else:
+                                clean_sub = clean_sub.replace(m.group(0), '')
+                        
+                        clean_sub = re.sub(r'热门|免费', '', clean_sub)
+                        subtitle = re.sub(r'\|(?:\s*\|)+', '|', clean_sub).strip(' |')
                             
                         torrents.append({
                             'id': tid, 'title': title, 'link': link, 'subtitle': subtitle, 'img': img_src,
-                            'seeders': seeders, 'leechers': leechers, 'size': size
+                            'seeders': seeders, 'leechers': leechers, 'size': size, 'tags': tags
                         })
 
-        elif tab == 'third':
+        elif tab == 'recent':
+            if os.path.exists(HISTORY_FILE):
+                try:
+                    with open(HISTORY_FILE, 'r', encoding='utf-8') as f: torrents = json.load(f)
+                except: pass
+
             resp = requests.get(INDEX_URL, headers=HEADERS, timeout=10)
             if "登录" in resp.text and "index.php" not in resp.url:
                 error_msg = "⚠️ Cookie 已失效！"
             elif resp.status_code == 200:
                 soup = BeautifulSoup(resp.text, 'html.parser')
+                current_fetched = []
                 for title_a in soup.find_all('a', href=lambda h: h and h.startswith('details.php?id=')):
                     tid = re.search(r'id=(\d+)', title_a['href']).group(1)
                     title = title_a.get('title') or title_a.get_text(strip=True)
-                    if not title and title_a.find('img'):
-                        title = title_a.find('img').get('alt') or title_a.find('img').get('title')
+                    if not title and title_a.find('img'): title = title_a.find('img').get('alt') or title_a.find('img').get('title')
                     if not title or tid in seen_ids: continue
                     seen_ids.add(tid)
                     
                     link = "https://longpt.org/" + title_a['href']
                     container = title_a.find_parent('tr') or title_a.find_parent('div')
-                    
-                    img_src, subtitle = "", ""
-                    seeders, leechers, size = "-", "-", ""
+                    img_src, subtitle, seeders, leechers, size = "", "", "-", "-", "加载中..."
 
                     if container:
                         if container.name == 'tr':
                             tds = container.find_all('td')
-                            if len(tds) >= 3:
-                                seeders = tds[-2].get_text(strip=True)
-                                leechers = tds[-1].get_text(strip=True)
+                            if len(tds) >= 3: seeders, leechers = tds[-2].get_text(strip=True), tds[-1].get_text(strip=True)
 
                         for img in container.find_all('img'):
                             src = img.get('data-src') or img.get('src') or ""
@@ -404,60 +667,102 @@ def index():
                                 break
                         for icon in container.find_all('img'):
                             alt = icon.get('alt') or icon.get('title')
-                            if alt and icon.get('src', '') != img_src:
-                                icon.replace_with(soup.new_tag("span", string=f" [{alt}] "))
+                            if alt and icon.get('src', '') != img_src: icon.replace_with(soup.new_tag("span", string=f" [{alt}] "))
                         subtitle = container.get_text(separator=' | ', strip=True).replace(title, '').strip(' | ')
+                        if seeders != "-" and subtitle.endswith(leechers): subtitle = subtitle.rsplit('|', 2)[0].strip(' | ')
+                        
+                        subtitle = re.sub(r'\[?(?:剩余时间)[:：]*\]?[\s\|]*([\d]+天[\d]+[时分秒]+|[\d]+[天时分秒]+)', r'[剩余时间: \1]', subtitle)
                         subtitle = subtitle.replace('[ | ]', '').replace('[ | | ]', '')
-                        subtitle = re.sub(r'\[(Sticky|poster|置顶)\]', '', subtitle, flags=re.IGNORECASE)
-                        subtitle = re.sub(r'\[[\s\|]*\]|热门|剩余时间.*?(?:\||$)', '', subtitle)
-                        subtitle = re.sub(r'\|(?:\s*\|)+', '|', subtitle).strip(' | ')
+                            
+                        tags, clean_sub = [], subtitle
+                        for m in re.finditer(r'\[(.*?)\]', subtitle):
+                            tag = m.group(1).strip(' |')
+                            if any(x in tag.upper() for x in ['热门', 'FREE', '免费', '%', '2X', '剩余']):
+                                if len(tag) <= 18: tags.append(tag)
+                                clean_sub = clean_sub.replace(m.group(0), '')
+                            elif tag not in ['Sticky', 'poster', '置顶']:
+                                clean_sub = clean_sub.replace(m.group(0), tag)
+                            else:
+                                clean_sub = clean_sub.replace(m.group(0), '')
+                        
+                        time_match = re.search(r'(剩余时间[^\s\|]+)', clean_sub)
+                        if time_match:
+                            tags.append(time_match.group(1).strip(' |'))
+                            clean_sub = clean_sub.replace(time_match.group(0), '')
+                            
+                        clean_sub = re.sub(r'热门|免费', '', clean_sub)
+                        subtitle = re.sub(r'\|(?:\s*\|)+', '|', clean_sub).strip(' |')
 
-                        if seeders != "-" and subtitle.endswith(leechers):
-                            subtitle = subtitle.rsplit('|', 2)[0].strip(' | ')
+                    if not img_src: img_src = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='100' height='140'><rect width='100%' height='100%' fill='%23e6e6e6'/><text x='50%' y='50%' fill='%23999' font-size='12' font-family='sans-serif' text-anchor='middle' dominant-baseline='middle'>加载海报</text></svg>"
 
-                    if not img_src:
-                        img_src = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='85' height='120'><rect width='100%' height='100%' fill='%23e6e6e6'/><text x='50%' y='50%' fill='%23999' font-size='12' font-family='sans-serif' text-anchor='middle' dominant-baseline='middle'>暂无海报</text></svg>"
-
-                    torrents.append({
+                    current_fetched.append({
                         'id': tid, 'title': title, 'link': link, 'subtitle': subtitle, 'img': img_src,
-                        'seeders': seeders, 'leechers': leechers, 'size': size
+                        'seeders': seeders, 'leechers': leechers, 'size': size, 'tags': tags
                     })
+
+                history_dict = {str(item['id']): item for item in torrents}
+                for item in current_fetched:
+                    tid_str = str(item['id'])
+                    if tid_str in history_dict:
+                        cached = history_dict[tid_str]
+                        if 'data:image/svg+xml' not in cached['img']: item['img'] = cached['img']
+                        if cached['size'] not in ['未知', '加载中...']: item['size'] = cached['size']
+                        merged_tags = item.get('tags', [])
+                        for t in cached.get('tags', []):
+                            if t not in merged_tags: merged_tags.append(t)
+                        item['tags'] = merged_tags
+                    history_dict[tid_str] = item
+
+                merged = list(history_dict.values())
+                merged.sort(key=lambda x: int(x['id']), reverse=True)
+                torrents = merged[:30]
 
     except Exception as e:
         error_msg = f"服务器内部请求错误: {e}"
         
     return render_template_string(HTML_TEMPLATE, tab=tab, query=query, torrents=torrents, user_info=user_info, error=error_msg)
 
+@app.route('/api/extra/<int:tid>')
+def api_extra(tid):
+    img_src, size, extra_tags = fetch_details_info(tid)
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE, 'r', encoding='utf-8') as f: history = json.load(f)
+            updated = False
+            for item in history:
+                if str(item['id']) == str(tid):
+                    if img_src: item['img'] = img_src
+                    if size and size != "未知": item['size'] = size
+                    if extra_tags:
+                        new_tags = item.get('tags', [])
+                        for t in extra_tags:
+                            if t not in new_tags: new_tags.append(t)
+                        item['tags'] = new_tags
+                    updated = True
+                    break
+            if updated:
+                with open(HISTORY_FILE, 'w', encoding='utf-8') as f: json.dump(history, f, ensure_ascii=False, indent=2)
+        except: pass
+    return jsonify({"img": img_src, "size": size, "tags": extra_tags})
+
 @app.route('/api/signin')
 def api_signin():
     try:
         r = requests.get(SIGNIN_URL, headers=HEADERS, timeout=10)
-        if "签到成功" in r.text or "这是您的第" in r.text or "已连续签到" in r.text:
-            return jsonify({"msg": "🎉 签到成功！"})
-        elif "已经" in r.text or "退下" in r.text:
-            return jsonify({"msg": "☕ 今天已经签到过了，明天再来吧。"})
-        elif "登录" in r.text:
-            return jsonify({"msg": "⚠️ 签到失败：Cookie 已失效，请更新！"})
-        else:
-            return jsonify({"msg": "🤔 状态未知，可能已签到，请留意积分变化。"})
-    except Exception as e:
-        return jsonify({"msg": f"❌ 网络请求出错: {str(e)}"})
+        if "签到成功" in r.text or "这是您的第" in r.text or "已连续签到" in r.text: return jsonify({"msg": "🎉 签到成功！"})
+        elif "已经" in r.text or "退下" in r.text: return jsonify({"msg": "☕ 今天已经签到过了，明天再来吧。"})
+        elif "登录" in r.text: return jsonify({"msg": "⚠️ 签到失败：Cookie 已失效，请更新！"})
+        else: return jsonify({"msg": "🤔 状态未知，可能已签到，请留意积分变化。"})
+    except Exception as e: return jsonify({"msg": f"❌ 网络请求出错: {str(e)}"})
 
 @app.route('/download/<int:tid>')
 def download_torrent(tid):
-    dl_url = f"https://longpt.org/download.php?id={tid}"
     try:
-        r = requests.get(dl_url, headers=HEADERS, timeout=10)
+        r = requests.get(f"https://longpt.org/download.php?id={tid}", headers=HEADERS, timeout=10)
         if "application/x-bittorrent" in r.headers.get('Content-Type', '') or "octet-stream" in r.headers.get('Content-Type', ''):
-            return Response(
-                r.content,
-                mimetype="application/x-bittorrent",
-                headers={"Content-Disposition": f"attachment;filename=LongPT_{tid}.torrent"}
-            )
-        else:
-            return "下载失败，Cookie 可能失效或无权下载该种子。"
-    except Exception as e:
-        return f"请求下载出错: {str(e)}"
+            return Response(r.content, mimetype="application/x-bittorrent", headers={"Content-Disposition": f"attachment;filename=LongPT_{tid}.torrent"})
+        else: return "下载失败，Cookie 可能失效或无权下载该种子。"
+    except Exception as e: return f"请求下载出错: {str(e)}"
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5051)
