@@ -1237,7 +1237,7 @@ def process_cas_via_olist_api(specific_dir=None):
 
     # --- SQLite3 毫秒级本地高速引擎 ---
     db_path = os.path.join(DB_DIR, "harvest_ledger.db")
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=60.0)
     cursor = conn.cursor()
     cursor.execute('CREATE TABLE IF NOT EXISTS ledger (filename TEXT PRIMARY KEY)')
     
@@ -1361,43 +1361,37 @@ def process_cas_via_olist_api(specific_dir=None):
             
         temp_ep_num = int(re.search(r'(?i)E(?:P)?\s*(\d+)', filename).group(1)) if re.search(r'(?i)E(?:P)?\s*(\d+)', filename) else 1
         
-        search_key = get_match_key(show_folder_name)
+        # 💥 核心修复：彻底废除强行合并版本的 get_match_key，改用精准原名匹配
         target_cloud_path = None
         is_tv_show = False
-        
-        ignore_words = {get_match_key(DIR_CAS_ROOT), get_match_key(DIR_VIDEO_ROOT), "season", "s"}
-        for cat_key, (large_cat, sub_cat) in CAT_ROUTER.items():
-            ignore_words.add(get_match_key(cat_key))
-            ignore_words.add(get_match_key(large_cat))
-            if sub_cat: ignore_words.add(get_match_key(sub_cat))
-
         best_match_path = None
+
+        # 1. 优先尝试精确匹配历史库 (HARVEST_SUBS_FILE)
         try:
             h_data = load_json(HARVEST_SUBS_FILE)
-            if search_key in h_data: best_match_path = h_data[search_key]
+            if show_folder_name in h_data: 
+                best_match_path = h_data[show_folder_name]
         except Exception: pass
 
+        # 2. 从当前订阅池精确查找同名目录
         if not best_match_path:
-            db_possible_matches = []
             for sid, info_dict in subs.items():
                 if isinstance(info_dict, dict):
                     db_path = info_dict.get("path", "")
                     if DIR_CAS_ROOT not in db_path: continue 
                     db_folders = db_path.split('/')
                     for idx, f_name in enumerate(db_folders):
-                        pure_f = get_match_key(f_name)
-                        if not pure_f or len(pure_f) < 2 or re.match(r'^\d{4,6}$', pure_f) or pure_f in ignore_words: continue
-                        if search_key == pure_f: 
-                            db_possible_matches.append("/".join(db_folders[:idx+1]))
+                        if show_folder_name.lower() == f_name.lower(): 
+                            best_match_path = "/".join(db_folders[:idx+1])
                             break
-            if db_possible_matches:
-                db_possible_matches.sort(key=lambda p: (0 if p.split('/')[-1].lower() == show_folder_name.lower() else 1, len(p.split('/')[-1])))
-                best_match_path = db_possible_matches[0]
+                if best_match_path: break
 
+        # 3. 穿透云端 API 精确查找同名历史目录
         if not best_match_path:
             try:
                 search_roots = []
-                if category_key:
+                b_large, b_sub = "电视剧", "0-电视剧"
+                if category_key and category_key in CAT_ROUTER:
                     b_large, b_sub = CAT_ROUTER[category_key]
                     search_roots.append(get_openlist_path(f"{DIR_CAS_ROOT}/{b_large}/{b_sub}".strip("/").replace("//", "/")))
                 else:
@@ -1408,18 +1402,16 @@ def process_cas_via_olist_api(specific_dir=None):
                     ym_nodes = [item["name"] for item in ym_items if item["is_dir"] and re.match(r'^\d{4,6}$', item["name"])]
                     ym_nodes.sort(reverse=True)
                     
-                    all_months_matches = []
                     for ym in ym_nodes:
                         ym_path = f"{root_path}/{ym}"
                         show_items = get_olist_dir_cached(ym_path)
                         for item in show_items:
-                            if item["is_dir"] and search_key == get_match_key(item["name"]):
-                                all_months_matches.append({"ym": ym, "name": item["name"]})
-                                
-                    if all_months_matches:
-                        all_months_matches.sort(key=lambda x: (0 if x["name"].lower() == show_folder_name.lower() else 1, len(x["name"]), -int(x["ym"])))
-                        best_share = all_months_matches[0]
-                        best_match_path = f"{DIR_CAS_ROOT}/{b_large}/{b_sub}/{best_share['ym']}/{best_share['name']}".replace("//", "/")
+                            # 💥 只有名字完全一致（连标签也一模一样），才归入旧文件夹！否则建新库！
+                            if item["is_dir"] and item["name"].lower() == show_folder_name.lower():
+                                root_clean = root_path.replace(get_openlist_path(DIR_CAS_ROOT), "").strip("/")
+                                best_match_path = f"{DIR_CAS_ROOT}/{root_clean}/{ym}/{item['name']}".replace("//", "/")
+                                break
+                        if best_match_path: break
                     if best_match_path: break
             except: pass
 
@@ -1837,7 +1829,7 @@ def scan_local_dropbox(specific_dir=None):
     scan_target = specific_dir if specific_dir else dropbox_dir
 
     db_path = os.path.join(DB_DIR, "monitor_history.db")
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=60.0)
     cursor = conn.cursor()
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS history (
@@ -2308,48 +2300,6 @@ def main_control_loop(client_obj):
                             reload_globals()
                             notifier.send_message(f"✅ 配置修改成功并已热拔插生效！\n⚙️ {key} = {val}")
                             continue
-
-                        elif text.startswith("加库") or text.startswith("/hsub"):
-                            try:
-                                if text.startswith("加库"):
-                                    clean_text = text[2:].strip()
-                                else:
-                                    clean_text = text[5:].strip()
-                                    
-                                parts = clean_text.split()
-                                if len(parts) < 2:
-                                    notifier.send_message("格式错误！\n常规：加库 剧名(年份) 分类\n指定老月：加库 剧名 分类 202604")
-                                    continue
-                                
-                                if parts[-1].startswith("/"):
-                                    cloud_path = parts[-1].strip()
-                                    show_name = " ".join(parts[:-1]).strip()
-                                elif re.match(r'^\d{6}$', parts[-1]):
-                                    target_ym = parts[-1].strip()
-                                    category_key = parts[-2].strip()
-                                    show_name = " ".join(parts[:-2]).strip()
-                                    b_large, b_sub = CAT_ROUTER.get(category_key, ("未分类", "0-未分类"))
-                                    cloud_path = f"{DIR_CAS_ROOT}/{b_large}/{b_sub}/{target_ym}/{show_name}".replace("//", "/")
-                                else:
-                                    target_ym = datetime.now().strftime("%Y%m")
-                                    category_key = parts[-1].strip()
-                                    show_name = " ".join(parts[:-1]).strip()
-                                    b_large, b_sub = CAT_ROUTER.get(category_key, ("未分类", "0-未分类"))
-                                    cloud_path = f"{DIR_CAS_ROOT}/{b_large}/{b_sub}/{target_ym}/{show_name}".replace("//", "/")
-
-                                search_key = get_match_key(show_name)
-
-                                if not search_key:
-                                    notifier.send_message("❌ 剧名无法提取有效特征词，建档失败！")
-                                    continue
-                                    
-                                h_data = load_json(HARVEST_SUBS_FILE)
-                                h_data[search_key] = cloud_path
-                                save_json(HARVEST_SUBS_FILE, h_data)
-                                notifier.send_message(f"✅ 收割记录建档成功！\n📺 剧名：{show_name}\n🔍 特征词：{search_key}\n📂 目标路径：{cloud_path}")
-                            except Exception as e:
-                                notifier.send_message(f"🚨 代码崩溃抓包：\n<code>{str(e)}</code>")
-                            continue 
                         
                         elif text.startswith("设置模式") or text.startswith("/mode") and not text.startswith("/mode139"):
                             mode_input = text.replace("设置模式", "").replace("/mode", "").strip().upper()
@@ -2389,11 +2339,52 @@ def main_control_loop(client_obj):
                             notifier.send_message(f"✅ 设置成功！\n\n当前 139 专属流水线已切换为模式: {mode_input} ({real_mode})\n🎯 以后生成的 strm 内部将采用该模式的链接，并统一放入 139 单一媒体库中！")
                             continue
 
+                        elif text.startswith("加库") or text.startswith("/hsub"):
+                            try:
+                                if text.startswith("加库"):
+                                    clean_text = text[2:].strip()
+                                else:
+                                    clean_text = text[5:].strip()
+                                    
+                                parts = clean_text.split()
+                                if len(parts) < 2:
+                                    notifier.send_message("格式错误！\n常规：加库 剧名(年份) 标签 分类\n(例：加库 师兄啊师兄 4K版 动漫)\n指定老月：加库 剧名 分类 202604")
+                                    continue
+                                
+                                if parts[-1].startswith("/"):
+                                    cloud_path = parts[-1].strip()
+                                    show_name = " ".join(parts[:-1]).strip()
+                                elif re.match(r'^\d{6}$', parts[-1]):
+                                    target_ym = parts[-1].strip()
+                                    category_key = parts[-2].strip()
+                                    show_name = " ".join(parts[:-2]).strip()
+                                    b_large, b_sub = CAT_ROUTER.get(category_key, ("未分类", "0-未分类"))
+                                    cloud_path = f"{DIR_CAS_ROOT}/{b_large}/{b_sub}/{target_ym}/{show_name}".replace("//", "/")
+                                else:
+                                    target_ym = datetime.now().strftime("%Y%m")
+                                    category_key = parts[-1].strip()
+                                    show_name = " ".join(parts[:-1]).strip()
+                                    b_large, b_sub = CAT_ROUTER.get(category_key, ("未分类", "0-未分类"))
+                                    cloud_path = f"{DIR_CAS_ROOT}/{b_large}/{b_sub}/{target_ym}/{show_name}".replace("//", "/")
+
+                                # 💥 废除 get_match_key，直接使用完整的 show_name 做绝对唯一键！
+                                if not show_name:
+                                    notifier.send_message("❌ 剧名提取失败！")
+                                    continue
+                                    
+                                h_data = load_json(HARVEST_SUBS_FILE)
+                                h_data[show_name] = cloud_path
+                                save_json(HARVEST_SUBS_FILE, h_data)
+                                notifier.send_message(f"✅ 收割记录建档成功！(已支持多版本分离)\n📺 精确剧名：{show_name}\n📂 目标路径：{cloud_path}")
+                            except Exception as e:
+                                notifier.send_message(f"🚨 代码崩溃抓包：\n<code>{str(e)}</code>")
+                            continue 
+                        
                         elif text.startswith("删库") or text.startswith("/dsub"):
                             try:
                                 kw = text[2:].strip() if text.startswith("删库") else text[5:].strip()
                                 if not kw:
-                                    notifier.send_message("格式错误！\n示例：删库 师兄啊师兄")
+                                    notifier.send_message("格式错误！\n示例：删库 师兄啊师兄 4K版")
                                     continue
                                     
                                 h_file = globals().get('HARVEST_SUBS_FILE', os.path.join(DB_DIR, "harvest_subs.json"))
@@ -2403,33 +2394,23 @@ def main_control_loop(client_obj):
                                     notifier.send_message("📭 收割记录库为空，没什么可删的。")
                                     continue
 
-                                try:
-                                    search_key = get_match_key(kw)
-                                except NameError:
-                                    c = re.sub(r'[（\(\[\{]?\d{4}[）\)\]\}]?', '', kw)
-                                    c = re.sub(r'(?i)\b(4k|1080p|2160p|web-dl|sdr|hdr)\b', '', c)
-                                    c = re.sub(r'(完结|连载中|全\d+集|打包|修正)', '', c)
-                                    search_key = re.sub(r'[^\w\u4e00-\u9fa5]', '', c).lower()
-
                                 deleted_items = []
+                                keys_to_delete = []
                                 
-                                if search_key and search_key in h_data:
-                                    deleted_items.append((search_key, h_data[search_key]))
-                                    del h_data[search_key]
-                                else:
-                                    keys_to_delete = []
-                                    for k, v in h_data.items():
-                                        if kw.lower() in k or kw.lower() in v.lower():
-                                            keys_to_delete.append(k)
-                                    for k in keys_to_delete:
-                                        deleted_items.append((k, h_data[k]))
-                                        del h_data[k]
-                                        
+                                # 💥 彻底废除 get_match_key，使用简单的子串包含来删库
+                                for k, v in h_data.items():
+                                    if kw.lower() in k.lower() or kw.lower() in v.lower():
+                                        keys_to_delete.append(k)
+                                
+                                for k in keys_to_delete:
+                                    deleted_items.append((k, h_data[k]))
+                                    del h_data[k]
+                                    
                                 if deleted_items:
                                     save_json(h_file, h_data)
                                     msg = "✅ 已成功从收割库中删除以下记录：\n"
                                     for k, p in deleted_items:
-                                        msg += f" └ {k}"
+                                        msg += f" └ 🏷️ {k}\n"
                                     notifier.send_message(msg)
                                 else:
                                     notifier.send_message(f"❌ 没找到与“{kw}”相关的收割记录。")
@@ -3847,7 +3828,7 @@ def sync_139_to_smart_strm(target_dir, force_rebuild=False, is_webhook=False):
         local_139_strm_dir = s.get("local_139_strm_dir", DEFAULT_139_LOCAL_STRM)
         
         db_path = os.path.join(os.path.dirname(SETTINGS_FILE), "139_monitor_history.db")
-        conn = sqlite3.connect(db_path)
+        conn = sqlite3.connect(db_path, timeout=60.0)
         cursor = conn.cursor()
         cursor.execute('''CREATE TABLE IF NOT EXISTS history (file_path TEXT PRIMARY KEY, mtime REAL, file_size INTEGER)''')
         

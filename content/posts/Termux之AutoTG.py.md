@@ -174,9 +174,12 @@ app = Client(
 # 🚦 全局大盘与锁
 GLOBAL_ROUTE_CACHE = {"folder_name": "", "category": "", "folder_season": 1, "file_season": 1, "year": "", "version": "", "expire_time": 0, "manual_ep": None, "enable_139": False, "enable_xm": False}
 GLOBAL_ACTIVE_LOCKS = set() 
+GLOBAL_MEDIA_GROUPS = {}  # 🔥 新增：用于跟踪相册合并发送的无字天书
 GLOBAL_CANCEL_TASKS = set() 
 GLOBAL_TRACKED_GIDS = set()  
 ORPHAN_PROMPTED_GIDS = set() 
+GLOBAL_PAUSE_EVENT = asyncio.Event()  # 🔥 新增：全局暂停指令锁
+GLOBAL_PAUSE_EVENT.set()              # 🔥 新增：默认状态为绿灯通行
 
 # 🔥 核心更新：完全独立的双轨锁 (互不阻塞)
 GLOBAL_TRANSFER_LOCK = asyncio.Semaphore(1)   # TG 下载专属锁
@@ -345,9 +348,19 @@ def extract_pure_episode(search_text, drama_anchor=None):
     if m_trail and not (1900 < int(m_trail.group(1)) < 2100): return int(m_trail.group(1))
     return None
 
-def extract_movie_part(search_text):
-    m = re.search(r'(?i)(?:cd|part|pt)[\s_.-]*(\d{1,2})(?!\d)', search_text)
-    if m: return f"cd{m.group(1)}" 
+def extract_split_part(search_text):
+    # 严格加上 \b 边界，防止乱匹配
+    m1 = re.search(r'(?i)\b(?:cd|part|pt|部分)[\s_.-]*(\d{1,2})\b', search_text)
+    if m1: return f"pt{m1.group(1)}"
+    
+    m2 = re.search(r'第\s*(\d{1,2})\s*部分', search_text)
+    if m2: return f"pt{m2.group(1)}"
+    
+    m_cn = re.search(r'[(（【\[]\s*(上|中|下)\s*[)）】\]]|(上|中|下)(?:篇|部|卷)', search_text)
+    if m_cn:
+        val = m_cn.group(1) or m_cn.group(2)
+        return {"上": "pt1", "中": "pt2", "下": "pt3"}.get(val, "")
+        
     return ""
 
 def extract_media_tags(search_text):
@@ -570,6 +583,7 @@ async def magnet_upload_task(local_path, target_dir_189, cat, folder_name, folde
                                 sent = 0
                                 chunk_size = 1024 * 1024
                                 while True:
+                                    await GLOBAL_PAUSE_EVENT.wait()  # 🔥 拦截 189 上传
                                     chunk = f_upload.read(chunk_size)
                                     if not chunk: break
                                     sent += len(chunk)
@@ -681,6 +695,7 @@ async def magnet_upload_task(local_path, target_dir_189, cat, folder_name, folde
                                     sent = 0
                                     chunk_size = 1024 * 1024
                                     while True:
+                                        await GLOBAL_PAUSE_EVENT.wait()  # 🔥 拦截 139 上传
                                         chunk = f_upload.read(chunk_size)
                                         if not chunk: break
                                         sent += len(chunk)
@@ -790,7 +805,7 @@ async def magnet_upload_task(local_path, target_dir_189, cat, folder_name, folde
                             os.makedirs(local_cas_dir_139, exist_ok=True)
                             final_cas_path_139 = os.path.join(local_cas_dir_139, f"{standard_name}.cas")
                             
-                            sync_url_139 = f"{STEWARD_BASE_URL}/api/sync?drive=139&path={quote(final_cloud_dir_139)}"
+                            sync_url_139 = f"{HARVEST_BASE_URL}/api/trigger_139?path={quote(final_cloud_dir_139)}"
                             
                             asyncio.create_task(bg_fetch_cas_task(
                                 cas_target_full=poll_fs_path, 
@@ -863,6 +878,7 @@ async def bg_upload_retry_task(local_path, target_dir_189, cat, folder_name, fol
                             sent = 0
                             chunk_size = 1024 * 1024 
                             while True:
+                                await GLOBAL_PAUSE_EVENT.wait()  # 🔥 拦截 189 补推
                                 chunk = f_upload.read(chunk_size)
                                 if not chunk: break
                                 sent += len(chunk)
@@ -969,6 +985,7 @@ async def bg_upload_retry_task(local_path, target_dir_189, cat, folder_name, fol
                                     sent = 0
                                     chunk_size = 1024 * 1024
                                     while True:
+                                        await GLOBAL_PAUSE_EVENT.wait()  # 🔥 拦截 139 上传
                                         chunk = f_upload.read(chunk_size)
                                         if not chunk: break
                                         sent += len(chunk)
@@ -1078,7 +1095,7 @@ async def bg_upload_retry_task(local_path, target_dir_189, cat, folder_name, fol
                             os.makedirs(local_cas_dir_139, exist_ok=True)
                             final_cas_path_139 = os.path.join(local_cas_dir_139, f"{standard_name}.cas")
                             
-                            sync_url_139 = f"{STEWARD_BASE_URL}/api/sync?drive=139&path={quote(final_cloud_dir_139)}"
+                            sync_url_139 = f"{HARVEST_BASE_URL}/api/trigger_139?path={quote(final_cloud_dir_139)}"
                             
                             asyncio.create_task(bg_fetch_cas_task(
                                 cas_target_full=poll_fs_path, 
@@ -1149,7 +1166,7 @@ async def handle_magnet_execution(client, message, magnet_link, config_text, res
             args.pop(i)
 
     STANDARD_CATS = ["华语剧", "欧美剧", "日韩剧", "短剧", "华语电影", "欧美电影", "日韩电影", "演唱会", "国漫", "日漫", "综艺", "纪录片"]
-    cat_idx = next((i for i, arg in enumerate(args) if arg in STANDARD_CATS), -1)
+    cat_idx = next((i for i, arg in enumerate(args) if any(arg.startswith(c) for c in STANDARD_CATS)), -1)
     if cat_idx == -1: 
         if message: 
             try: await message.reply_text("⚠️ 必须提供有效分类(如 国漫, 华语剧, 电影 等)。")
@@ -1468,11 +1485,27 @@ async def handle_magnet_execution(client, message, magnet_link, config_text, res
 # =================================================================
 STANDARD_CATS = ["华语剧", "欧美剧", "日韩剧", "短剧", "华语电影", "欧美电影", "日韩电影", "演唱会", "国漫", "日漫", "综艺", "纪录片"]
 
-@app.on_message(filters.chat(COMMAND_CENTER_CHAT) & filters.command(["sub", "unsub", "list", "add", "del", "go", "history", "ping", "rm", "clean", "scan", "rmh", "setdir", "cancel", "mag", "reup", "clh"]) & filters.user("me"))
+@app.on_message(filters.chat(COMMAND_CENTER_CHAT) & filters.command(["sub", "unsub", "list", "add", "del", "go", "history", "ping", "rm", "clean", "scan", "rmh", "setdir", "cancel", "mag", "reup", "clh", "pause", "resume"]) & filters.user("me"))
 async def manage_system_commands(client, message):
     global GLOBAL_STOP_SWEEP
     command = message.command[0].lower()
     config = load_listener_config()
+
+    if command == "pause":
+        GLOBAL_PAUSE_EVENT.clear() # 切成红灯，所有 TG 传输原地挂起
+        try: # 顺手把后端的 Aria2 下载也强行挂起，彻底榨干宽带留给 BT
+            async with httpx.AsyncClient(timeout=3.0) as h:
+                await h.post(ARIA2_RPC_URL, json={"jsonrpc":"2.0", "id":"tg", "method":"aria2.pauseAll", "params":[f"token:{ARIA2_RPC_SECRET}"]})
+        except: pass
+        return await message.reply_text("⏸️ **[System Paused]** 全线挂起！\nTG拉取、云端直推、Aria2底层引擎已全部急刹车，宽带已完全释放给 BT！")
+
+    if command == "resume":
+        GLOBAL_PAUSE_EVENT.set() # 切成绿灯，原地复活
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as h:
+                await h.post(ARIA2_RPC_URL, json={"jsonrpc":"2.0", "id":"tg", "method":"aria2.unpauseAll", "params":[f"token:{ARIA2_RPC_SECRET}"]})
+        except: pass
+        return await message.reply_text("▶️ **[System Resumed]** 封印解除！\n双轨传输引擎与 Aria2 磁力引擎恢复全速连轴转！")
     
     # 🔥 核心更新：批量本地遗留文件强制重推引擎
     if command == "reup":
@@ -1489,7 +1522,7 @@ async def manage_system_commands(client, message):
                 
         custom_year = next((args.pop(i) for i, arg in enumerate(args) if arg.isdigit() and len(arg) == 4 and (1900 < int(arg) < 2100)), None)
         
-        cat_idx = next((i for i, arg in enumerate(args) if arg in STANDARD_CATS), -1)
+        cat_idx = next((i for i, arg in enumerate(args) if any(arg.startswith(c) for c in STANDARD_CATS)), -1)
         category = args.pop(cat_idx) if cat_idx != -1 else (args.pop(-1) if len(args) > 1 else "未分类")
 
         kw = args[0].lower() if args else "all"
@@ -1773,7 +1806,7 @@ async def manage_system_commands(client, message):
                 enable_xm = True
                 args.pop(i)
 
-        cat_idx = next((i for i, arg in enumerate(args) if arg in STANDARD_CATS), -1)
+        cat_idx = next((i for i, arg in enumerate(args) if any(arg.startswith(c) for c in STANDARD_CATS)), -1)
         if cat_idx == -1: return await message.reply_text("⚠️ 请提供有效分类。")
         category = args.pop(cat_idx)
         
@@ -1906,7 +1939,7 @@ async def manage_system_commands(client, message):
             if args[i].lower().startswith("v="): version_suffix = args.pop(i)[2:]
             elif args[i].lower().startswith("f="): file_suffix = args.pop(i)[2:]
         custom_year = next((args.pop(i) for i, arg in enumerate(args) if arg.isdigit() and len(arg) == 4 and (1900 < int(arg) < 2100)), None)
-        cat_idx = next((i for i, arg in enumerate(args) if arg in STANDARD_CATS), -1)
+        cat_idx = next((i for i, arg in enumerate(args) if any(arg.startswith(c) for c in STANDARD_CATS)), -1)
         if cat_idx == -1:
             search_kw = " ".join(args).lower()
             matched_item = None
@@ -2075,17 +2108,51 @@ async def media_routing_gateway(client, message):
             file_size_mb = media.file_size / (1024 * 1024) if getattr(media, "file_size", 0) else 0
             if not (min_mb <= file_size_mb <= max_mb): return 
             
-            if db_file_version:
-                combined_physical_tags = db_file_version.replace('.', '.')
-                combined_history_tags = (db_file_version + "." + db_version).strip('.')
-            else:
-                auto_list = extract_media_tags(text_to_scan).split('.')
-                res_list = [t for t in auto_list if t.lower() in ["2160p", "1080p", "720p", "4k", "8k"]]
-                temp_tags = res_list + (db_version.split('.') if db_version else [])
-                combined_physical_tags = ".".join(dict.fromkeys([t for t in temp_tags if t]))
-                combined_history_tags = combined_physical_tags
+            # 🔥 统一的“上下集”识别逻辑（完美兼顾相册无字天书与批量发集数）
+            split_part_tag = extract_split_part(text_to_scan)
+            if not split_part_tag and getattr(message, 'media_group_id', None):
+                # 💎 核心大招：相册ID + 集数！批量发的正常集数不会互相累加！
+                mg_key = f"{message.media_group_id}_{ep_num}"
+                if mg_key not in GLOBAL_MEDIA_GROUPS:
+                    GLOBAL_MEDIA_GROUPS[mg_key] = {"count": 1, "msgs": {message.id: 1}}
+                elif message.id not in GLOBAL_MEDIA_GROUPS[mg_key]["msgs"]:
+                    GLOBAL_MEDIA_GROUPS[mg_key]["count"] += 1
+                    GLOBAL_MEDIA_GROUPS[mg_key]["msgs"][message.id] = GLOBAL_MEDIA_GROUPS[mg_key]["count"]
+                
+                # 🔥 绝不给正常单集强加 pt1！只有出现第2个相同的集数时，才开始打 pt2, pt3 防丢弃
+                part_count = GLOBAL_MEDIA_GROUPS[mg_key]['msgs'][message.id]
+                if part_count > 1:
+                    split_part_tag = f"pt{part_count}"
+
+            # 重新组装物理标签
+            auto_tags = extract_media_tags(text_to_scan)
+            auto_list = auto_tags.split('.') if auto_tags else []
+            f_list = db_file_version.split('.') if db_file_version else []
+            res_list = [t for t in auto_list if t.lower() in ["2160p", "1080p", "720p", "4k", "8k"]]
+            other_auto = [t for t in auto_list if t not in res_list]
+
+            raw_physical_tags = []
+            if split_part_tag: raw_physical_tags.append(split_part_tag) 
+            raw_physical_tags.extend(res_list); raw_physical_tags.extend(f_list); raw_physical_tags.extend(other_auto) 
             
+            final_physical_tags = []
+            seen_physical = set()
+            for t in raw_physical_tags:
+                if t and t.lower() not in seen_physical: final_physical_tags.append(t); seen_physical.add(t.lower())
+            combined_physical_tags = ".".join(final_physical_tags)
             ver_tag_physical = f".{combined_physical_tags}" if combined_physical_tags else ""
+
+            # 重新组装历史标签
+            raw_history_tags = []
+            if split_part_tag: raw_history_tags.append(split_part_tag)
+            raw_history_tags.extend(res_list); raw_history_tags.extend(f_list)   
+            if db_version: raw_history_tags.extend(db_version.split('.'))
+            
+            final_history_tags = []
+            seen_history = set()
+            for t in raw_history_tags:
+                if t and t.lower() not in seen_history: final_history_tags.append(t); seen_history.add(t.lower())
+            combined_history_tags = ".".join(final_history_tags)
             ver_tag_history = f".{combined_history_tags}" if combined_history_tags else ""
             
             folder_season = route_info.get("folder_season", route_info.get("file_season", 1))
@@ -2093,20 +2160,42 @@ async def media_routing_gateway(client, message):
             year = route_info.get("year")
             if not year: year, _ = await fetch_tmdb_details(search_kw)
             
+            # 🔥 补丁：前台雷达同步剧场版/特别篇判定，防止由于没提取到集数在网关处就被当成垃圾扔掉
+            if not is_movie:
+                # 💎 修复超级误杀坑：必须是独立的 ova 或 sp 单词，绝不能匹配到 supernova 或 support！
+                is_special = bool(re.search(r'剧场版|特别篇|(?<![a-zA-Z])ova(?![a-zA-Z])|(?<![a-zA-Z])sp(?![a-zA-Z])', text_to_scan, re.IGNORECASE)) or file_season == 0
+                if is_special:
+                    file_season = 0
+                    folder_season = 0
+                if ep_num is None and (split_part_tag or is_special):
+                    ep_num = 1
+            
             pure_drama_name = drama_key[:-len(f"_{db_version}")] if db_version and drama_key.endswith(f"_{db_version}") else drama_key
             folder_name = f"{pure_drama_name} ({year})" if year else pure_drama_name
             if db_version: folder_name = f"{folder_name} {db_version}"  
             
             clean_base_for_check = pure_drama_name.replace(" ", ".")
-            if check_history(clean_base_for_check, file_season, ep_num, combined_history_tags): return
+            
+            # 🔥 电影和剧集双轨防重校验与发车提示
+            if is_movie:
+                # 如果是电影，ep_num 往往是 None，不需要集数，只要标签对得上就行
+                if check_history(clean_base_for_check, file_season, 1, combined_history_tags): return
+                display_msg = f"🎯 **[Auto Scan]**\n🎬 `{search_kw}` ({db_version or '默认'})"
+            else:
+                if ep_num is None: return # 如果是剧集却提取不到集数，视为垃圾视频直接扔掉
+                if check_history(clean_base_for_check, file_season, ep_num, combined_history_tags): return
+                display_msg = f"🎯 **[Auto Scan]**\n📺 `{search_kw}` ({db_version or '默认'}) ➔ S{file_season:02d}E{ep_num:02d}"
             
             # 🔥 提取 enable_139 和 enable_xm
             enable_139 = route_info.get("enable_139", False)
             enable_xm = route_info.get("enable_xm", False)
+            
             # 把 enable_xm 加进元组 (放到第13个位置)
             override_info = (folder_name, route_info["category"], folder_season, file_season, year, ep_num, db_version, db_file_version, matched_channel, drama_key, route_info.get("end_ep", 9999), enable_139, enable_xm)
-            try: status = await client.send_message(COMMAND_CENTER_CHAT, f"🎯 **[Auto Scan]**\n📺 `{search_kw}` ➔ S{file_season:02d}E{ep_num:02d}")
-            except: status = await client.send_message("me", f"🎯 **[Auto Scan]**\n📺 `{search_kw}` ➔ S{file_season:02d}E{ep_num:02d}")
+            
+            try: status = await client.send_message(COMMAND_CENTER_CHAT, display_msg)
+            except: status = await client.send_message("me", display_msg)
+            
             asyncio.create_task(process_media_transfer(client, message, status, override_info))
             return
     except: pass
@@ -2158,7 +2247,19 @@ async def process_media_transfer(client, message, status, override_info=None):
     text_to_scan = f"{message.caption or ''} {raw_file}"
     auto_tags = extract_media_tags(text_to_scan)
     is_movie = "电影" in cat or cat in ["演唱会", "纪录片"]
-    movie_part_tag = extract_movie_part(text_to_scan) if is_movie else ""
+    
+    split_part_tag = extract_split_part(text_to_scan)
+    if not split_part_tag and getattr(message, 'media_group_id', None):
+        mg_key = f"{message.media_group_id}_{ep_num}"
+        if mg_key not in GLOBAL_MEDIA_GROUPS:
+            GLOBAL_MEDIA_GROUPS[mg_key] = {"count": 1, "msgs": {message.id: 1}}
+        elif message.id not in GLOBAL_MEDIA_GROUPS[mg_key]["msgs"]:
+            GLOBAL_MEDIA_GROUPS[mg_key]["count"] += 1
+            GLOBAL_MEDIA_GROUPS[mg_key]["msgs"][message.id] = GLOBAL_MEDIA_GROUPS[mg_key]["count"]
+            
+        part_count = GLOBAL_MEDIA_GROUPS[mg_key]['msgs'][message.id]
+        if part_count > 1:
+            split_part_tag = f"pt{part_count}"
     
     clean_base = re.sub(r'\s*\(\d{4}\)', '', folder).strip()
     if version_suffix and clean_base.endswith(version_suffix): clean_base = clean_base[:-len(version_suffix)].strip()
@@ -2170,8 +2271,9 @@ async def process_media_transfer(client, message, status, override_info=None):
     other_auto = [t for t in auto_list if t not in res_list]
 
     raw_physical_tags = []
-    if movie_part_tag: raw_physical_tags.append(movie_part_tag) 
+    if split_part_tag: raw_physical_tags.append(split_part_tag) 
     raw_physical_tags.extend(res_list); raw_physical_tags.extend(f_list); raw_physical_tags.extend(other_auto) 
+    
     final_physical_tags = []
     seen_physical = set()
     for t in raw_physical_tags:
@@ -2180,9 +2282,10 @@ async def process_media_transfer(client, message, status, override_info=None):
     ver_tag_physical = f".{combined_physical_tags}" if combined_physical_tags else ""
     
     raw_history_tags = []
-    if movie_part_tag: raw_history_tags.append(movie_part_tag)
+    if split_part_tag: raw_history_tags.append(split_part_tag)
     raw_history_tags.extend(res_list); raw_history_tags.extend(f_list)   
     if version_suffix: raw_history_tags.extend(version_suffix.split('.'))
+    
     final_history_tags = []
     seen_history = set()
     for t in raw_history_tags:
@@ -2191,6 +2294,16 @@ async def process_media_transfer(client, message, status, override_info=None):
     ver_tag_history = f".{combined_history_tags}" if combined_history_tags else ""
     
     current_mount = get_mount_root()
+    
+    if not is_movie:
+        is_special = bool(re.search(r'剧场版|特别篇|(?<![a-zA-Z])ova(?![a-zA-Z])|(?<![a-zA-Z])sp(?![a-zA-Z])', text_to_scan, re.IGNORECASE)) or file_season == 0
+        if is_special:
+            file_season = 0
+            folder_season = 0
+            ep_num = 1 
+        elif ep_num is None and split_part_tag:
+            ep_num = 1
+            
     if is_movie:
         standard_name = f"{clean_base}.{year}{ver_tag_physical}{ext}" if year else f"{clean_base}{ver_tag_physical}{ext}"
         target_dir_189 = f"{current_mount}/{cat}/{folder}"
@@ -2209,7 +2322,7 @@ async def process_media_transfer(client, message, status, override_info=None):
         ep_str = f"{ep_num:02d}"
         target_dir_189 = f"{current_mount}/{cat}/{folder}/Season {folder_season}"
         standard_name = f"{clean_base}.S{file_season:02d}E{ep_str}.{year}{ver_tag_physical}{ext}" if year else f"{clean_base}.S{file_season:02d}E{ep_str}{ver_tag_physical}{ext}"
-        
+
     task_lock_key = f"{clean_base}.S{file_season:02d}E{ep_num:02d}{ver_tag_history}" if not is_movie else f"{clean_base}{ver_tag_history}"
     if task_lock_key in GLOBAL_ACTIVE_LOCKS:
         try: await status.delete()
@@ -2226,180 +2339,237 @@ async def process_media_transfer(client, message, status, override_info=None):
         total_bytes = media.file_size
         file_size_mb = total_bytes / (1024 * 1024) if total_bytes else 0
         source_name = message.forward_from_chat.title if message.forward_from_chat and message.forward_from_chat.title else (message.chat.title if message.chat and message.chat.title else "未知来源")
+        
+        # 🔥🔥🔥 1. 极速拦截门 (Fast Track) 🔥🔥🔥
+        # 开机自检发现文件已下好（大于98%），直接洗码上传，绝不重下！
+        if os.path.exists(local_path) and os.path.getsize(local_path) >= total_bytes * 0.98:
+            try: await status.edit_text(f"🎯 **[Fast Track]** `{standard_name}`\n📁 发现本地已有完整实体文件！截断下载，直接执行洗码与云端直推...")
+            except: pass
             
+            wash_status = ""
+            if enable_xm:
+                if alter_file_hash(local_path):
+                    wash_status = "\n✨ **[Hash Wash]** 哈希特征已重置，完美躲避云盘审查！"
+                    
+            try: await status.edit_text(f"✅ **[Fast Track Finish]** `{standard_name}`\n🎉 本地断点极速组装完美结束！{wash_status}\n正在光速移交全自动上传引擎...")
+            except: pass
+            
+            bg_task_spawned = True
+            asyncio.create_task(bg_upload_retry_task(
+                local_path=local_path, target_dir_189=target_dir_189, cat=cat, 
+                folder_name=folder, folder_season=folder_season, total_bytes=os.path.getsize(local_path), 
+                clean_base=clean_base, file_season=file_season, ep_num=ep_num, 
+                is_movie=is_movie, standard_name=standard_name, history_tags=combined_history_tags, 
+                status_msg=status, enable_139=enable_139, enable_xm=enable_xm
+            ))
+            return
+
         try: await status.edit_text(f"⏳ **[TG Queue]** `{standard_name}`\n🚦 正在等待下载通道空闲...")
         except: pass
 
         async with GLOBAL_TRANSFER_LOCK:
-            await notify_steward_log(f"📥 [拉取启动] 来源: {source_name} | 大小: {file_size_mb:.2f} MB")
-            chunk_size = 1024 * 1024
-            retry_count = 0
-            max_retries = 999999  
-            last_stuck_chunks = -1
-            stuck_loop_count = 0
-            last_ui_time = time.time()
-            last_ui_bytes = 0
-            speed_text, eta_text = "0.00 MB/s", "计算中..."
+            await notify_steward_log(f"📥 [多线程引擎启动] 来源: {source_name} | 大小: {file_size_mb:.2f} MB")
             
+            # 🔥🔥🔥 独创：按文件大小动态分配下载策略 🔥🔥🔥
+            file_size_gb = total_bytes / (1024 * 1024 * 1024)
+            if file_size_gb < 1.5:
+                # 🚀 狂暴模式 (针对 < 1.5GB)
+                block_size = 300
+                semaphore_count = 4
+                step_size = 300   # 内部不微切，一口气拿完 300MB
+                strategy_name = "狂暴模式 (4线程/300M)"
+            else:
+                # 🛡️ 潜行防封模式 (针对 >= 1.5GB)
+                block_size = 20
+                semaphore_count = 3
+                step_size = 10    # 内部微切片，每次只向TG要 10MB 就主动断开
+                strategy_name = "潜行防封模式 (3线程/20M微切)"
+                
+            chunk_size = 1024 * 1024  
+            total_chunks = (total_bytes + chunk_size - 1) // chunk_size
+            
+            blocks = []
+            for i in range(0, total_chunks, block_size):
+                limit = min(block_size, total_chunks - i)
+                blocks.append((i, limit))
+                
+            temp_dir = f"{local_path}_parts"
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            block_progress = {}
+            for offset, limit in blocks:
+                p_file = os.path.join(temp_dir, f"pt_{offset}.tmp")
+                block_progress[offset] = os.path.getsize(p_file) if os.path.exists(p_file) else 0
+            
+            semaphore = asyncio.Semaphore(semaphore_count)
+            
+            last_ui_time = time.time()
+            global_last_bytes = sum(block_progress.values())
+            global_last_time = time.time()
             notified_50_dl = False
             notified_98_dl = False
-            
-            while True:
-                if retry_count >= max_retries: break
-                current_bytes = os.path.getsize(local_path) if os.path.exists(local_path) else 0
-                if current_bytes > total_bytes:
-                    try: os.remove(local_path)
-                    except: pass
-                    current_bytes = 0
-                if current_bytes == total_bytes:
-                    downloaded_bytes = current_bytes; break
-                    
-                completed_chunks = current_bytes // chunk_size
-                secure_bytes = completed_chunks * chunk_size
-                if secure_bytes > 0:
+
+            async def download_block(offset, limit):
+                nonlocal last_ui_time, global_last_bytes, global_last_time, notified_50_dl, notified_98_dl
+                part_file = os.path.join(temp_dir, f"pt_{offset}.tmp")
+                expected_size = limit * chunk_size if (offset + limit) < total_chunks else total_bytes - (offset * chunk_size)
+                
+                import random
+                retry = 0
+                consecutive_errors = 0
+                
+                while retry < 30: 
                     try:
-                        with open(local_path, "r+b") as f: f.truncate(secure_bytes)
-                    except: pass
-                    downloaded_bytes = secure_bytes
-                    open_mode = "ab"
-                else: 
-                    downloaded_bytes, completed_chunks = 0, 0
-                    open_mode = "wb"
-                    
-                try:
-                    yielded_any = False
-                    start_time = time.time()
-                    with open(local_path, open_mode) as f:
-                        async for chunk in client.stream_media(message, offset=completed_chunks):
-                            yielded_any = True
-                            if task_lock_key in GLOBAL_CANCEL_TASKS or "ALL" in GLOBAL_CANCEL_TASKS: break 
-                            f.write(chunk)
-                            downloaded_bytes += len(chunk)
-                            
-                            if total_bytes > 0:
-                                pct = int(downloaded_bytes * 100 / total_bytes)
-                                if pct >= 50 and not notified_50_dl:
-                                    asyncio.create_task(notify_steward_log(f"📥 [拉取进度] {standard_name} 进度达 50%"))
-                                    notified_50_dl = True
-                                if pct >= 98 and not notified_98_dl:
-                                    asyncio.create_task(notify_steward_log(f"📥 [拉取进度] {standard_name} 进度达 98%"))
-                                    notified_98_dl = True
-
-                            now = time.time()
-                            duration = now - last_ui_time
-                            if duration >= 8.0 or downloaded_bytes == total_bytes:
-                                bytes_diff = downloaded_bytes - last_ui_bytes
-                                speed_bps = bytes_diff / duration if duration > 0 else 0
-                                speed_mb = speed_bps / (1024 * 1024)
-                                speed_text = f"{speed_mb:.2f} MB/s"
-                                rem_bytes = total_bytes - downloaded_bytes
-                                if speed_bps > 0:
-                                    eta_sec = rem_bytes / speed_bps
-                                    eta_text = f"{int(eta_sec // 60)}分{int(eta_sec % 60)}秒" if eta_sec > 60 else f"{int(eta_sec)}秒"
-                                else: 
-                                    eta_text = "卡顿"
-                                pct = int(downloaded_bytes * 100 / total_bytes)
-                                last_ui_time = now
-                                last_ui_bytes = downloaded_bytes
-                                try:
-                                    await status.edit_text(f"🚀 **[TDownload]** `{standard_name}`\n📡 来源: **{source_name}** | ⚖️ 大小: **{file_size_mb:.2f} MB**\n📈 实时网速: **{speed_text}**\n⏳ 预计剩余: **{eta_text}**\n⚡ 涡轮进度: **{pct}%**")
-                                except: pass
-
-                    if task_lock_key in GLOBAL_CANCEL_TASKS or "ALL" in GLOBAL_CANCEL_TASKS: break 
-                    if downloaded_bytes >= total_bytes: 
-                        try: await message.delete()
-                        except: pass
-                        break
-                    else:
-                        retry_count += 1
-                        if not yielded_any:
-                            try: message = await client.get_messages(message.chat.id, message.id)
-                            except: pass
-                        if completed_chunks == last_stuck_chunks:
-                            stuck_loop_count += 1
-                            try: await status.edit_text(f"⚠️ **[Node Block]** 断点死磕中 ({retry_count})...")
-                            except: pass
-                        else: last_stuck_chunks, stuck_loop_count = completed_chunks, 0
-                        await asyncio.sleep(3.0)
+                        current_size = os.path.getsize(part_file) if os.path.exists(part_file) else 0
                         
-                except Exception as e:
-                    retry_count += 1
-                    if retry_count % 5 == 0:
-                        try: message = await client.get_messages(message.chat.id, message.id)
-                        except: pass
-                    await asyncio.sleep(3.0)
-                    
-            if downloaded_bytes < total_bytes: 
-                try:
-                    if os.path.exists(local_path): os.remove(local_path)
-                    await status.edit_text("❌ 任务已被彻底终止或残片销毁。")
-                except: pass
-                return
+                        if current_size > expected_size:
+                            os.remove(part_file)
+                            current_size = 0
+                            
+                        if current_size == expected_size:
+                            block_progress[offset] = expected_size
+                            return part_file
+                            
+                        completed_chunks = current_size // chunk_size
+                        valid_size = completed_chunks * chunk_size
+                        
+                        if current_size > valid_size:
+                            with open(part_file, "r+b") as f: f.truncate(valid_size)
+                            current_size = valid_size
+                            
+                        block_progress[offset] = current_size
+                        new_offset = offset + completed_chunks
+                        new_limit = limit - completed_chunks
 
-        try: await status.edit_text("✅ 本地落盘完成，进入云端上传排队队列...")
-        except: pass
+                        async with semaphore:
+                            await asyncio.sleep(random.uniform(0.5, 2.0)) 
+                            
+                            msg = await client.get_messages(message.chat.id, message.id)
+                            
+                            while new_limit > 0:
+                                step_limit = min(step_size, new_limit) 
+                                
+                                with open(part_file, "ab") as f:
+                                    async for chunk in client.stream_media(msg, offset=new_offset, limit=step_limit):
+                                        await GLOBAL_PAUSE_EVENT.wait()
+                                        if task_lock_key in GLOBAL_CANCEL_TASKS or "ALL" in GLOBAL_CANCEL_TASKS: return None
+                                        
+                                        f.write(chunk)
+                                        block_progress[offset] += len(chunk)
+                                        consecutive_errors = 0  
+                                        
+                                        now = time.time()
+                                        if now - last_ui_time >= 5.0:
+                                            last_ui_time = now
+                                            current_total = sum(block_progress.values())
+                                            bytes_diff = current_total - global_last_bytes
+                                            time_diff = now - global_last_time
+                                            speed_bps = bytes_diff / time_diff if time_diff > 0 else 0
+                                            speed_mb = speed_bps / (1024 * 1024)
+                                            global_last_bytes = current_total
+                                            global_last_time = now
+                                            pct = int(current_total * 100 / total_bytes)
+                                            rem_bytes = total_bytes - current_total
+                                            eta_text = f"{int(rem_bytes/speed_bps // 60)}分{int(rem_bytes/speed_bps % 60)}秒" if speed_bps > 0 else "计算中"
+                                            
+                                            if pct >= 50 and not notified_50_dl:
+                                                asyncio.create_task(notify_steward_log(f"📥 [多线程] {standard_name} 进度达 50%"))
+                                                notified_50_dl = True
+                                            if pct >= 98 and not notified_98_dl:
+                                                asyncio.create_task(notify_steward_log(f"📥 [多线程] {standard_name} 进度达 98%"))
+                                                notified_98_dl = True
+                                                    
+                                            try: await status.edit_text(f"🚀 **[Multi-Thread]** `{standard_name}`\n🛡️ **{strategy_name}**\n📡 来源: **{source_name}** | 💾 大小: **{file_size_mb:.2f} MB**\n📈 网速: **{speed_mb:.2f} MB/s**\n⏳ 真实进度: **{pct}%** | 剩余: **{eta_text}**")
+                                            except: pass
+                                
+                                new_offset += step_limit
+                                new_limit -= step_limit
+                                await asyncio.sleep(1)
 
-        # 🔥 极速洗码介入点 (包含体积重算和防截断强制睡眠)
-        if enable_xm:
-            if alter_file_hash(local_path):
-                total_bytes = os.path.getsize(local_path)  # 🌟 核心补丁：洗码后必须重新获取实际大小！
-                await asyncio.sleep(1.5)  # 🌟 救命补丁：强制停顿1.5秒，防止 TG 把洗码提示吞掉！
-                try: await status.edit_text("✨ **[Hash Wash]** 文件哈希特征已重置，反黑名单启动！")
-                except: pass
+                        actual_size = os.path.getsize(part_file)
+                        if actual_size >= expected_size: 
+                            break 
+                        else:
+                            raise Exception(f"静默断流：应下 {expected_size}，实下 {actual_size}")
+                            
+                    except Exception as e:
+                        retry += 1
+                        consecutive_errors += 1
+                        
+                        if consecutive_errors >= 3:
+                            current_size = os.path.getsize(part_file) if os.path.exists(part_file) else 0
+                            fill_size = expected_size - current_size
+                            if fill_size > 0:
+                                with open(part_file, "ab") as f:
+                                    f.write(b'\x00' * fill_size)
+                                block_progress[offset] += fill_size
+                                await notify_steward_log(f"💀 [坏块跨越] 块 {offset} 遭遇死链！已强行注入 {fill_size} 字节跳过该区域。")
+                            break 
+                            
+                        wait_time = 5
+                        await notify_steward_log(f"⚠️ [分块重试] 块 {offset} 异常，等待 {wait_time} 秒重试 ({retry}/30): {str(e)[:20]}", level="WARNING")
+                        await asyncio.sleep(wait_time)
+                        
+                        if retry == 30: raise Exception(f"分块 {offset} 续传彻底失败: {e}")
+                return part_file
 
-        if ext.lower() in [".cas", ".zip"]:
-            import zipfile
-            STAGING_DIR = "/data/data/com.termux/files/home/sharecas"
-            os.makedirs(STAGING_DIR, exist_ok=True)
-            final_cas_path = os.path.join(STAGING_DIR, standard_name.replace(ext, ".cas"))
-            try:
-                if ext.lower() == ".zip":
-                    with zipfile.ZipFile(local_path, "r") as z:
-                        cas_files = [f for f in z.namelist() if f.lower().endswith(".cas")]
-                        if cas_files:
-                            with open(final_cas_path, "wb") as f_out: f_out.write(z.read(cas_files[0]))
-                else: shutil.move(local_path, final_cas_path)
-                try: os.remove(local_path) 
-                except: pass
-                try: await status.edit_text(f"🎉 **[189 CAS Ready]**\n已存入本地 `{STAGING_DIR}`，等待接管。")
-                except: pass
-                return
-            except Exception as e: return
-        
-        asyncio.create_task(bg_upload_retry_task(
-            local_path=local_path, 
-            target_dir_189=target_dir_189, 
-            cat=cat,
-            folder_name=folder,
-            folder_season=folder_season,
-            total_bytes=total_bytes, 
-            clean_base=clean_base, 
-            file_season=file_season, 
-            ep_num=ep_num, 
-            is_movie=is_movie, 
-            standard_name=standard_name, 
-            history_tags=combined_history_tags,
-            status_msg=status,
-            enable_139=enable_139,
-            enable_xm=enable_xm
-        ))
-        bg_task_spawned = True
-        
-        if src_chat_id and src_drama_key and src_end_ep and ep_num >= src_end_ep:
-            config_end = load_listener_config()
-            if src_chat_id in config_end.get("trusted_channels", {}) and src_drama_key in config_end["trusted_channels"][src_chat_id].get("monitored_dramas", {}):
-                del config_end["trusted_channels"][src_chat_id]["monitored_dramas"][src_drama_key]
-                try:
-                    with open(TG_LISTENER_DB, "w", encoding="utf-8") as f: 
-                        json.dump(config_end, f, ensure_ascii=False, indent=4)
-                except: pass
-                try: await client.send_message(COMMAND_CENTER_CHAT, f"🎉 **[圆满杀青]** `{src_drama_key}` 已达 {src_end_ep} 集完结线，自动解除监控！")
-                except: pass
-        
+            tasks = [download_block(offset, limit) for offset, limit in blocks]
+            part_files = await asyncio.gather(*tasks)
+            
+            if None in part_files: return 
+            
+            try: await status.edit_text(f"✅ **[Merge]** `{standard_name}`\n所有并发碎片下载完毕！正在极速组装视频实体(后台合并中，请勿操作)...")
+            except: pass
+            
+            # 🔥🔥🔥 3. 后台独立线程组装实体视频 🔥🔥🔥
+            def sync_merge():
+                with open(local_path, "wb") as outfile:
+                    for part in part_files:
+                        if part and os.path.exists(part):
+                            with open(part, "rb") as infile:
+                                while True:
+                                    buf = infile.read(1024 * 1024 * 10) 
+                                    if not buf: break
+                                    outfile.write(buf)
+                            os.remove(part) 
+
+            await asyncio.to_thread(sync_merge)
+            
+            try: os.rmdir(temp_dir)
+            except: pass
+
+            # 🔥🔥🔥 4. 洗码机制 (Hash Wash) 与 闭环上传 🔥🔥🔥
+            wash_status = ""
+            if enable_xm:
+                if alter_file_hash(local_path):
+                    wash_status = "\n✨ **[Hash Wash]** 哈希特征已重置，完美躲避云盘审查！"
+
+            try: await status.edit_text(f"✅ **[Download Finish]** `{standard_name}`\n🎉 下载组装完美结束！{wash_status}\n正在光速移交全自动上传引擎...")
+            except: pass
+
+            bg_task_spawned = True
+            asyncio.create_task(bg_upload_retry_task(
+                local_path=local_path, 
+                target_dir_189=target_dir_189, 
+                cat=cat, 
+                folder_name=folder, 
+                folder_season=folder_season, 
+                total_bytes=os.path.getsize(local_path), 
+                clean_base=clean_base, 
+                file_season=file_season, 
+                ep_num=ep_num, 
+                is_movie=is_movie, 
+                standard_name=standard_name, 
+                history_tags=combined_history_tags, 
+                status_msg=status, 
+                enable_139=enable_139, 
+                enable_xm=enable_xm
+            ))
+
     finally:
         if not bg_task_spawned: GLOBAL_ACTIVE_LOCKS.discard(task_lock_key)
         GLOBAL_CANCEL_TASKS.discard(task_lock_key)
-
+        
 async def sweep_existing_history(client, chat_id, drama_key, category, folder_season, file_season, min_ep, min_mb=0, max_mb=999999, fetch_limit=200, year=None):
     try:
         chat_id_int = int(chat_id) if str(chat_id).lstrip('-').isdigit() else chat_id

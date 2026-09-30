@@ -320,6 +320,19 @@ python /data/data/com.termux/files/home/189py/qbt_delivery.py "%N" "%F" "%L" "%G
 ```
 * 点击最下方的 “保存”。
 
+1.6结束进程
+
+```
+ps aux | grep qbt_delivery.py
+```
+```
+kill -9 你的进程号
+```
+或者
+```
+pkill -f qbt_delivery.py
+```
+
 2.脚本之单天翼上传
 ```
 import os
@@ -648,17 +661,18 @@ import string
 from urllib.parse import quote
 import httpx
 import fcntl
+import datetime  # 💡 [新增] 引入日期时间处理模块
 
 # =================================================================
 # ⚙️ 核心网关与路径映射配置
 # =================================================================
 # [天翼主盘 189 专属网关]
 OLIST_URL = "http://127.0.0.1:5244"
-OLIST_TOKEN = "openlist-a87614da-32dd-4b80-9150-6447de823da8f33x53ymkrx0aPKG0HUcsFHmjFRYTKFhSADLRhoQLkXa7ogaiByhWRNEXCjpblp9"
+OLIST_TOKEN = "openlist-4ba3bee7-2112-42bd-92e7-6f3a7c67a83a7CIOwhmfYpB9Hi8HX1NYfRJUn1iWvyPnyuoOUPC5Fqn5FGxTwNuKHwRSYCT6OZC2"
 
 # [移动备盘 139 专属网关]
 OLIST_139_URL = "http://127.0.0.1:5255"
-OLIST_139_TOKEN = "openlist-f5178f57-0d47-4d4a-8031-81fdd386cdc0FRIGOBWFTT8aGBl37PJAgdbhVXpxnvI4O2bnsTvR3cL09O5h6cRqgeJhDo48kYQt"
+OLIST_139_TOKEN = "openlist-335c8982-5c97-40b4-824e-117636cfc94eBHbD3HZOWdNeMUWOiXFUxJGtWXOh0P1jxqH2jAInjHvF5umwVU4If8ifEnrIkjMl"
 
 # 天翼主盘物理归档特征码存放地
 STAGING_BASE_DIR = "/storage/emulated/0/Download/189cas"
@@ -670,8 +684,8 @@ MOBILE_STAGING_BASE_DIR = "/storage/emulated/0/Download/139cas"
 # =================================================================
 # 🔔 基础通知与推送网关
 # =================================================================
-STEWARD_BASE_URL = "http://127.0.0.1:5000" 
-RELAY_BASE_URL = "http://127.0.0.1:5555" 
+STEWARD_BASE_URL = "http://192.168.2.199:5000" 
+RELAY_BASE_URL = "http://192.168.2.199:5555" 
 TMDB_API_KEY = "9c88e18e43543c8ff195c631aaa0d2fa"
 
 TG_SETTINGS_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tg_settings.json")
@@ -815,7 +829,7 @@ async def main():
     category = sys.argv[3]
     raw_tag = sys.argv[4].strip() if len(sys.argv) > 4 else ""
 
-    # ========================================================
+# ========================================================
     # 🚦 标签精细拆解：双传指令、洗码开关、剧名覆盖、附加属性
     # ========================================================
     
@@ -825,11 +839,39 @@ async def main():
         is_double_upload = True
         raw_tag = raw_tag.replace("双传", "")
 
-    # 1.5 拦截洗码指令 (💡 新增: 洗码开关逻辑)
+    # 1.5 拦截洗码指令
     is_wash_file = False
     if "洗码" in raw_tag:
         is_wash_file = True
         raw_tag = raw_tag.replace("洗码", "")
+
+    # 💡 [新增] 1.8 拦截避峰调度指令 (延时=2 或 定时=03:00)
+    delay_seconds = 0
+    delay_reason = ""
+    
+    # 匹配: 延时=X (支持小数，如 延时=1.5)
+    delay_match = re.search(r'延时[=：:](\d+(?:\.\d+)?)', raw_tag)
+    if delay_match:
+        hours = float(delay_match.group(1))
+        delay_seconds = int(hours * 3600)
+        delay_reason = f"延时 {hours} 小时"
+        raw_tag = raw_tag.replace(delay_match.group(0), "")
+        
+    # 匹配: 定时=HH:MM (如 定时=02:30)
+    schedule_match = re.search(r'定时[=：:](\d{1,2}:\d{2})', raw_tag)
+    if schedule_match:
+        time_str = schedule_match.group(1)
+        now = datetime.datetime.now()
+        try:
+            target_time = datetime.datetime.strptime(time_str, "%H:%M").time()
+            target_dt = now.replace(hour=target_time.hour, minute=target_time.minute, second=0, microsecond=0)
+            # 如果设定的时间已经过了（比如现在晚上10点，你设了凌晨2点），就推算到明天的这个时间
+            if target_dt <= now:
+                target_dt += datetime.timedelta(days=1)
+            delay_seconds = (target_dt - now).total_seconds()
+            delay_reason = f"定时至 {time_str}"
+            raw_tag = raw_tag.replace(schedule_match.group(0), "")
+        except: pass
 
     # 2. 拦截并提取强制剧名
     custom_drama_name = ""
@@ -921,21 +963,31 @@ async def main():
         folder_name = base_folder
 
     # ========================================================
-    # 🛡️ 进程防冲突锁 (修复安卓存储不支持锁的致命Bug)
+    # ⏰ 闲时避峰：不抢占高峰通道，进入深度休眠
     # ========================================================
-    # 💡 必须将锁放在 Termux 内部原生 ext4 目录，绝对不能放 /storage 下！
-    TERMUX_LOCK_DIR = "/data/data/com.termux/files/home/.pt_locks"
-    os.makedirs(TERMUX_LOCK_DIR, exist_ok=True)
-    
-    lock_file_path = os.path.join(TERMUX_LOCK_DIR, f".lock_{folder_name}.lock")
-    lock_fd = open(lock_file_path, 'w')
+    if delay_seconds > 0:
+        sleep_hours = int(delay_seconds // 3600)
+        sleep_mins = int((delay_seconds % 3600) // 60)
+        await notify_steward_log(f"⏰ [避峰调度] `{folder_name}` 触发闲时策略 ({delay_reason})，脚本进入深度休眠，将在 {sleep_hours}小时{sleep_mins}分钟 后唤醒...")
+        await asyncio.sleep(delay_seconds)  # 💡 挂起进程，0 CPU消耗
+        await notify_steward_log(f"🌅 [调度唤醒] `{folder_name}` 休眠结束，正式加入上传队列！")
 
+    # ========================================================
+    # 🚦 全局单行道排队锁：不管什么剧，同一时间只允许传一个！
+    # ========================================================
+    global_lock_path = os.path.join(os.environ.get("PREFIX", "/data/data/com.termux/files/usr"), "tmp", "global_qbt_delivery.lock")
+    os.makedirs(os.path.dirname(global_lock_path), exist_ok=True)
+    
+    lock_fd = open(global_lock_path, "w")
     try:
+        # 尝试获取全局锁
         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except (BlockingIOError, IOError, OSError):
-        await notify_steward_log(f"⏳ [系统排队] 检测到 `{folder_name}` 前一批视频还在上传中，新触发任务进入静默等候...")
+        # 如果锁已经被别人占了，就乖乖排队
+        await notify_steward_log(f"⏳ [全局排队] 当前已有其他视频占用上传通道，新任务 `{folder_name}` 进入静默等候...")
+        # 死等，直到上一个任务传完释放锁
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
-        await notify_steward_log(f"🟢 [排队放行] `{folder_name}` 前序任务已交接完毕，新任务正式接管！")
+        await notify_steward_log(f"🟢 [排队放行] 全局通道已空闲，新任务 `{folder_name}` 正式接管上传！")
 
     # 3. 扫描捕获视频实体文件和外挂字幕
     video_tasks = []
@@ -959,7 +1011,7 @@ async def main():
     # ========================================================
     if subtitle_tasks:
         await notify_steward_log(f"📝 [字幕直通] 发现 {len(subtitle_tasks)} 个外挂字幕，正在直接提取至本地归档目录...")
-        for sub_path, sub_name in subtitle_tasks:
+        for sub_path_item, sub_name in subtitle_tasks:
             sub_name_clean = sub_name.replace("'", "")
             
             # 推算它应该进哪个目录 (复用前面的剧名季数逻辑)
@@ -976,7 +1028,7 @@ async def main():
             sub_path_189 = target_dir.replace(current_mount, "", 1)
             local_cas_dir_189 = f"{STAGING_BASE_DIR}{sub_path_189}".replace("//", "/")
             os.makedirs(local_cas_dir_189, exist_ok=True)
-            shutil.copy2(sub_path, os.path.join(local_cas_dir_189, sub_name_clean))
+            shutil.copy2(sub_path_item, os.path.join(local_cas_dir_189, sub_name_clean))
             
             # 2. 如果是双传，也拷入 139cas 的对应本地目录
             if is_double_upload:
@@ -984,7 +1036,7 @@ async def main():
                 m_sub_path = m_target_dir.replace(MOBILE_MOUNT_ROOT, "", 1).lstrip("/")
                 m_local_cas_dir_139 = f"{MOBILE_STAGING_BASE_DIR}/{m_sub_path}".replace("//", "/")
                 os.makedirs(m_local_cas_dir_139, exist_ok=True)
-                shutil.copy2(sub_path, os.path.join(m_local_cas_dir_139, sub_name_clean))
+                shutil.copy2(sub_path_item, os.path.join(m_local_cas_dir_139, sub_name_clean))
 
     if not video_tasks:
         await notify_steward_log(f"⚠️ [交接终止] 未在路径 `{save_path}` 下发现任何有效视频文件。")
@@ -1001,6 +1053,14 @@ async def main():
             continue
             
         total_bytes = os.path.getsize(actual_video_path)
+        
+        # ========================================================
+        # 🛡️ 防虚假文件过滤网：拦截 qBT 刚创建的 0 字节空壳或残次品
+        # ========================================================
+        if total_bytes < 1024 * 1024: # 如果视频文件小于 1MB (1024 * 1024 字节)
+            await notify_steward_log(f"⚠️ [空壳拦截] `{actual_video_name}` 体积极度异常 ({total_bytes} bytes)，疑似下载器预分配的空壳，跳过上传！", level="WARNING")
+            continue
+            
         ep_num = extract_pure_episode(actual_video_name, drama_anchor=pure_drama_name)
         if ep_num is None:
             ep_num = extract_pure_episode(torrent_name, drama_anchor=pure_drama_name)
@@ -1208,19 +1268,27 @@ async def main():
                                 raise Exception("139云端上传任务执行超时！")
                             continue
                             
-                        # 任务已不在进行中，核验 CAS 是否存在
-                        try:
-                            async with httpx.AsyncClient(timeout=10.0) as h:
-                                fs_resp = await h.post(poll_fs_url, json={"path": poll_fs_path}, headers={"Authorization": OLIST_139_TOKEN, "Content-Type": "application/json"})
-                                fs_data = fs_resp.json()
-                                if fs_data.get("code") == 200:
-                                    pass 
-                                else:
-                                    raise Exception("上传任务已消失，且139云端无CAS文件，判定任务彻底失败")
-                        except Exception as e:
-                            if "彻底失败" in str(e): raise e
-                            raise Exception(f"校验139云端CAS文件异常: {e}")
-                        break 
+                        # ==========================================
+                        # 🛡️ 防误判缓冲：给予139官方底层数据同步的时间
+                        # ==========================================
+                        cas_exists = False
+                        for check_idx in range(4): # 最多查4次，每次等5秒，给足20秒缓冲
+                            try:
+                                async with httpx.AsyncClient(timeout=10.0) as h:
+                                    fs_resp = await h.post(poll_fs_url, json={"path": poll_fs_path}, headers={"Authorization": OLIST_139_TOKEN, "Content-Type": "application/json"})
+                                    fs_data = fs_resp.json()
+                                    if fs_data.get("code") == 200:
+                                        cas_exists = True
+                                        break 
+                            except Exception: pass
+                            
+                            if not cas_exists and check_idx < 3:
+                                await notify_steward_log(f"🔄 [防误判等候] 任务已结束，等待云端目录数据同步中...({check_idx+1}/4)")
+                                await asyncio.sleep(5.0)
+
+                        if not cas_exists:
+                            raise Exception("上传任务已消失，且多次核验后139云端仍无CAS文件，判定任务彻底失败")
+                        break
                         
                     # 尝试清理已完成任务记录
                     try:

@@ -414,3 +414,114 @@ pkill -9 python
 网址：http://127.0.0.1:8000/emby
 请求内容类型：application/json
 勾选媒体库
+
+
+更新的refrsh.sh
+```
+#!/bin/bash
+echo "$(date '+%Y-%m-%d %H:%M:%S') - 收到刷新指令，路径: $1" >> /data/data/com.termux/files/home/refresh_log.txt
+
+# 你的真实管理员 Token
+TOKEN="openlist-a87614da-32dd-4b80-9150-6447de823da8f33x53ymkrx0aPKG0HUcsFHmjFRYTKFhSADLRhoQLkXa7ogaiByhWRNEXCjpblp9"
+
+# ==========================================
+# 🔑 双身份密钥配置区
+# ==========================================
+API_KEY_LINUX="751c095055f8493d8e63eb755369b9aa" # [首选] Linux 版密钥
+API_KEY_APP="fcf90c63fd1343cf9e6c66a62f73cfe5"  # [备选] 原 APP 版密钥
+# ==========================================
+
+if [ -z "$1" ]; then
+    echo "❌ 错误：请告诉我你要扫哪个目录！"
+    exit 1
+fi
+
+TARGET_PATH="$1"
+
+# 🌟 新增：判断路径类型
+if [[ "$TARGET_PATH" == /storage/* ]]; then
+    IS_LOCAL_PATH=true
+    echo "📁 检测到本地物理路径 (STRM/CAS)，跳过 OpenList 云端扫描..."
+else
+    IS_LOCAL_PATH=false
+    echo "☁️ 检测到云端直连路径，启动 OpenList 缓存穿透..."
+fi
+
+scan_dir() {
+    local CURRENT_PATH="$1"
+    echo "🚀 正在刷新并探测: $CURRENT_PATH"
+    
+    local JSON=$(curl -s -X POST "http://127.0.0.1:5244/api/fs/list" \
+    -H "Authorization: $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"path\":\"$CURRENT_PATH\",\"password\":\"\",\"page\":1,\"per_page\":0,\"refresh\":true}")
+    
+    local dirs=()
+    while IFS= read -r line; do
+        if [ -n "$line" ]; then
+            dirs+=("$line")
+        fi
+    done < <(echo "$JSON" | jq -r '.data.content[]? | select(.is_dir==true) | .name')
+    
+    for folder in "${dirs[@]}"; do
+        sleep 2 
+        scan_dir "$CURRENT_PATH/$folder"
+    done
+}
+
+# 🌟 智能路由：只有云端路径才走 scan_dir
+if [ "$IS_LOCAL_PATH" = false ]; then
+    echo "==================================="
+    echo "🌟 接收到调度指令，开始执行云端穿透: $TARGET_PATH"
+    scan_dir "$TARGET_PATH"
+    echo "🎉 OpenList 专项目录任务已下发完毕！"
+    
+    echo "⏳ 给本地网盘客户端 30 秒钟同步挂载时间..."
+    sleep 30
+else
+    # 物理路径 STRM 生成极快，只需要随便缓 3 秒钟防 Emby 数据库锁即可
+    echo "⏳ 本地 STRM 模式，缓冲 3 秒..."
+    sleep 3
+fi
+
+# ==========================================
+# 🌟 下发 Emby 精准刷新 (拆分时序、父子先后版)
+# ==========================================
+echo "🎬 开始下发【精准局部刷新】指令，优先呼叫 Linux 主力..."
+
+# 提取上一级父目录 (剧名层级)
+PARENT_PATH=$(dirname "$TARGET_PATH")
+
+# 1️⃣ 第一步：先唤醒 Emby 强制录入父目录 (建剧名骨架)
+echo "📂 正在推送父目录(剧名层) -> $PARENT_PATH"
+JSON_PARENT="{\"Updates\":[{\"Path\":\"$PARENT_PATH\", \"UpdateType\":\"Created\"}]}"
+STATUS_LINUX_P=$(curl -s -o /dev/null -w "%{http_code}" -H "Content-Type: application/json" -X POST -d "$JSON_PARENT" "http://127.0.0.1:8096/Library/Media/Updated?api_key=$API_KEY_LINUX")
+
+if [ "$STATUS_LINUX_P" != "204" ]; then
+    curl -s -o /dev/null -w "%{http_code}" -H "Content-Type: application/json" -X POST -d "$JSON_PARENT" "http://127.0.0.1:8096/Library/Media/Updated?api_key=$API_KEY_APP"
+fi
+
+# 关键动作：硬生生留出 2 秒钟，确保 Emby 把剧名写进数据库！
+echo "⏳ 骨架已下发，给 Emby 2秒钟建库时间..."
+sleep 2
+
+# 2️⃣ 第二步：再推送具体包含文件的子目录 (挂载剧集)
+echo "📂 正在推送子目录(剧集层) -> $TARGET_PATH"
+JSON_TARGET="{\"Updates\":[{\"Path\":\"$TARGET_PATH\", \"UpdateType\":\"Created\"}]}"
+STATUS_LINUX_T=$(curl -s -o /dev/null -w "%{http_code}" -H "Content-Type: application/json" -X POST -d "$JSON_TARGET" "http://127.0.0.1:8096/Library/Media/Updated?api_key=$API_KEY_LINUX")
+
+if [ "$STATUS_LINUX_T" == "204" ]; then
+    echo "✅ [主路由成功] 剧名与子目录已按精准时序依次触发！"
+else
+    echo "⚠️ Linux 版未响应子目录(状态码:$STATUS_LINUX_T)，降级呼叫 APP 备用版..."
+    
+    STATUS_APP_T=$(curl -s -o /dev/null -w "%{http_code}" -H "Content-Type: application/json" -X POST -d "$JSON_TARGET" "http://127.0.0.1:8096/Library/Media/Updated?api_key=$API_KEY_APP")
+    
+    if [ "$STATUS_APP_T" == "204" ]; then
+        echo "✅ [备用路由成功] 独立 APP 版 Emby 已按精准时序依次触发！"
+    else
+        echo "❌ [全线崩溃] 两个版本的 Emby 均未响应最后一击！"
+    fi
+fi
+echo "==================================="
+```
