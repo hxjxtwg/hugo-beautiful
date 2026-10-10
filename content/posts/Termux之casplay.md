@@ -34,16 +34,100 @@ cd ~/189py && pm2 start cas_server.py --name "casplay" --interpreter python
 
 2.脚本
 ```
+pip install pycdlib
+```
+```
 import base64, json, time, random, hashlib, hmac, urllib.parse, threading, uuid, os, requests, logging, subprocess, math
 import socket, re, functools
 import urllib3
 import urllib.request, urllib.error, http.cookiejar, string
 urllib3.util.connection.HAS_IPV6 = False
 from collections import deque
-from flask import Flask, request, redirect, render_template_string, jsonify
+from flask import Flask, request, redirect, render_template_string, jsonify, Response
 from Crypto.Cipher import AES, PKCS1_v1_5
 from Crypto.PublicKey import RSA
 from Crypto.Util.Padding import pad
+import io
+import pycdlib
+import requests
+
+def get_iso_main_video_offset(iso_url):
+    """
+    一次性读取 ISO 前部元数据区，精准定位 BDMV/STREAM/00000.m2ts 起始字节与大小
+    """
+    try:
+        # 1. 一次性获取前 32MB 元数据区（包含全部 UDF 目录结构表）
+        probe_headers = {'Range': 'bytes=0-33554431', 'User-Agent': 'Mozilla/5.0'}
+        r = requests.get(iso_url, headers=probe_headers, timeout=20)
+        data = r.content
+        if not data:
+            return 0, 0
+
+        # 获取整个 ISO 的总大小
+        total_size = 0
+        cr = r.headers.get('Content-Range', '')
+        if '/' in cr:
+            try: total_size = int(cr.split('/')[-1])
+            except: pass
+        if not total_size:
+            head_r = requests.head(iso_url, allow_redirects=True, timeout=10)
+            total_size = int(head_r.headers.get('content-length', 0))
+
+        # 2. 在 UDF 目录元数据中搜索 "00000.m2ts" (UTF-16BE 与 ASCII 两种形式)
+        name_patterns = [
+            b'\x000\x000\x000\x000\x000\x00.\x00m\x002\x00t\x00s',  # UTF-16BE (标准 UDF)
+            b'00000.m2ts',                                           # ASCII
+            b'00000.M2TS'
+        ]
+
+        pos = -1
+        for pat in name_patterns:
+            idx = data.find(pat)
+            if idx != -1:
+                pos = idx
+                break
+
+        if pos != -1:
+            # 在 File Identifier / File Entry 附近向前搜索 Allocation Descriptors (记录起始扇区与长度)
+            # 在 UDF 规范中，File Entry 或 ICB 通常在文件名记录前后的 2048 字节内
+            window_start = max(0, pos - 2048)
+            window_end = min(len(data), pos + 2048)
+            window = data[window_start:window_end]
+
+            # 启发式扫描：寻找指向大文件的数据块描述符 (8 字节长度 + 4 字节 LBA)
+            best_lba = 0
+            best_len = 0
+            for i in range(0, len(window) - 12, 4):
+                file_len = int.from_bytes(window[i:i+4], 'little')
+                lba = int.from_bytes(window[i+4:i+8], 'little')
+                
+                # 校验：主视频大小一般超过 500MB，扇区号在合理范围内 (大于 100 且物理位置在总文件内)
+                if 500 * 1024 * 1024 <= file_len <= total_size and 100 <= lba <= (total_size // 2048):
+                    if file_len > best_len:
+                        best_len = file_len
+                        best_lba = lba
+
+            if best_lba > 0:
+                start_byte = best_lba * 2048
+                return start_byte, best_len
+
+        # 3. 兜底策略：如果目录较深未在前 32MB 找到描述符，直接按标准扇区步进探测 M2TS 同步头
+        # 扫描前部扇区，寻找连续命中 0x47 同步字的数据起始点
+        sector_size = 2048
+        for sec in range(100, min(len(data) // sector_size, 8192)):
+            offset = sec * sector_size
+            # 检验是否为连续 M2TS 封包 (192 字节为包长，第 5 字节为 0x47)
+            if offset + 192 * 4 <= len(data):
+                if data[offset+4] == 0x47 and data[offset+196] == 0x47 and data[offset+388] == 0x47:
+                    # 找到视频流起点
+                    stream_start = offset
+                    stream_size = total_size - stream_start
+                    return stream_start, stream_size
+
+    except Exception as e:
+        logger.error(f"[ISO解析] 启发式定位失败: {e}")
+
+    return 0, 0
 
 # ==========================================
 # 🏠 局域网探针与辅助函数
@@ -174,12 +258,18 @@ DEFAULT_CONFIG = {
     "yun139_phone": "",
     "yun139_password": "",
     "yun139_token": "",
-    "yun139_mail_cookie": "",  
+    "yun139_mail_cookie": "",
+    "yun139_phone_2": "",
+    "yun139_password_2": "",
+    "yun139_token_2": "",
+    "yun139_mail_cookie_2": "",  
     "local_strm_dir_139_native": "/storage/emulated/0/Download/cas_strm_139_native",
     "yun139_control_host": "https://personal-kd-njs.yun.139.com", 
     "yun139_link_expire": 7200, 
     "delete_delay_139": 14400,  
-    "yun139_temp_folder_id": "",  
+    "yun139_temp_folder_id": "",
+    "yun139_temp_folder_id_2": "",
+    "yun139_strategy": "slot1",  # 默认优先1号卡槽  
     "pushplus_token": "",
     "tg_bot_token": "",
     "tg_chat_id": "",
@@ -205,13 +295,53 @@ os.makedirs(DB_DIR, exist_ok=True)
 def get_db_path(): return os.path.join(DB_DIR, "config.json")
 
 # ==========================================
-# 🔔 统一看板日志与推送系统
+# 🔔 统一看板日志与推送系统 (严谨双屏版)
 # ==========================================
-log_buffer = deque(maxlen=150) 
+log_buffer_sys = deque(maxlen=150)   # 上窗口：系统监控、生成、外部推送、洗码、巡逻
+log_buffer_play = deque(maxlen=150)  # 下窗口：仅 139/189 真实播放取链、劫持放行、销毁
+
+def dispatch_log(log_entry):
+    msg = log_entry.get('msg', '')
+    
+    # 1. 严格锁定【播放链路专属动作】（下窗口）
+    play_features = [
+        "链路日志",           # START / END 边框
+        "[播放放行]",         # 最终 302 节点输出
+        "[劫持放行]",         # Emby 302 劫持匹配
+        "[网络嗅探]",         # 内网播放探测
+        "请求原生直通",       # 189 模式B 触发
+        "请求无状态",         # 139 模式A 触发
+        "秒传命中",           # 189 模式A 秒传
+        "秒传成功",           # 189 模式A 秒传
+        "秒传就绪",           # 189 模式A 秒传
+        "调度] 开始处理",     # 189 矩阵调度
+        "139引擎]",           # 139 鉴权与取链过程
+        "139容灾",            # 139 卡槽自动切换
+        "139销毁",            # 139 播放后加入定时销毁
+        "执行家庭云清理",     # 189 播放后清理
+        "执行个人云清理"      # 189 播放后清理
+    ]
+    
+    # 2. 强行排除【STRM 生成与洗码操作】（防止被带进下窗口）
+    exclude_features = [
+        "生成 STRM",
+        "接口调用",
+        "洗码",
+        "投递箱",
+        "后续触发",
+        "CAS嗅探启动"
+    ]
+    
+    if any(k in msg for k in play_features) and not any(k in msg for k in exclude_features):
+        log_buffer_play.append(log_entry)
+    else:
+        log_buffer_sys.append(log_entry)
+
 class MemoryHandler(logging.Handler):
     def emit(self, record):
         msg = self.format(record)
-        log_buffer.append({'time': time.strftime("%H:%M:%S"), 'level': record.levelname, 'msg': f"● {msg}"})
+        log_entry = {'time': time.strftime("%H:%M:%S"), 'level': record.levelname, 'msg': f"● {msg}"}
+        dispatch_log(log_entry)
 
 logger = logging.getLogger('CAS_Server')
 logger.setLevel(logging.INFO)
@@ -227,7 +357,9 @@ logging.getLogger('werkzeug').setLevel(logging.ERROR)
 def receive_remote_log():
     try:
         data = request.json
-        log_buffer.append({'time': time.strftime("%H:%M:%S"), 'level': data.get('level', 'INFO'), 'msg': f"● [远程] {data.get('msg', '')}"})
+        msg_text = data.get('msg', '')
+        log_entry = {'time': time.strftime("%H:%M:%S"), 'level': data.get('level', 'INFO'), 'msg': f"● [远程] {msg_text}"}
+        dispatch_log(log_entry)
         return "OK", 200
     except: return "Error", 400
 
@@ -458,6 +590,12 @@ def update_global_config():
     cfg['mode_a_channel'] = request.form.get('mode_a_channel', 'mix_f2p')
     cfg['force_mode_b'] = request.form.get('force_mode_b', 'false') 
     cfg['tg_proxy'] = request.form.get('tg_proxy', '').strip() 
+    cfg['yun139_phone_2'] = request.form.get('yun139_phone_2', '').strip()
+    cfg['yun139_password_2'] = request.form.get('yun139_password_2', '').strip()
+    cfg['yun139_token_2'] = request.form.get('yun139_token_2', '').strip()
+    cfg['yun139_mail_cookie_2'] = request.form.get('yun139_mail_cookie_2', '').strip()
+    cfg['yun139_temp_folder_id_2'] = request.form.get('yun139_temp_folder_id_2', '').strip()  # 👈 新增保存
+    cfg['yun139_strategy'] = request.form.get('yun139_strategy', 'slot1')
     
     for k in cfg.keys():
         if k not in ['accounts', 'cloud_strategy', 'mode_a_channel', 'force_mode_b', 'tg_proxy'] and k in request.form:
@@ -531,12 +669,22 @@ ADMIN_HTML = """
             <span class="badge">SYSTEM ONLINE</span>
         </div>
         {% if msg %}<div class="status-msg">{{ msg }}</div>{% endif %}
-        <div class="mac-window">
+        <!-- ================= 上方：系统主控台 ================= -->
+        <div class="mac-window" style="margin-bottom: 20px;">
             <div class="mac-header">
                 <div class="mac-btn btn-close"></div><div class="mac-btn btn-min"></div><div class="mac-btn btn-max"></div>
-                <div class="mac-title">追剧控制台 - 实时运行日志</div>
+                <div class="mac-title">系统与心跳控制台 (常规日志)</div>
             </div>
-            <div class="console" id="logBox">Loading terminal...</div>
+            <div class="console" id="logBoxSys" style="height: 260px;">Loading system terminal...</div>
+        </div>
+
+        <!-- ================= 下方：播放分流台 ================= -->
+        <div class="mac-window" style="margin-bottom: 25px;">
+            <div class="mac-header">
+                <div class="mac-btn btn-close" style="background: #8b5cf6;"></div><div class="mac-btn btn-min" style="background: #10b981;"></div><div class="mac-btn btn-max" style="background: #0ea5e9;"></div>
+                <div class="mac-title">播放链路解析台 (专属日志)</div>
+            </div>
+            <div class="console" id="logBoxPlay" style="height: 320px;">Loading playback terminal...</div>
         </div>
         <div class="card">
             <h3>📊 核心控制 & 凭证监控</h3>
@@ -656,11 +804,9 @@ ADMIN_HTML = """
                             <label>常规媒体 本地 STRM 独立保存路径</label>
                             <input type="text" name="local_strm_dir_media" value="{{ cfg.local_strm_dir_media }}" required style="margin-bottom:0;">
                         </div>
-                    </div>
 
-                    <!-- ================= 右侧栏 ================= -->
-                    <div>
-                        <h3 style="margin-top:0; border:none;">🌐 全局基础与 API</h3>
+                        <!-- 💡 【移到左侧】全局基础与 API -->
+                        <h3 style="margin-top:20px; border:none;">🌐 全局基础与 API</h3>
                         <div class="path-box">
                             <label>基础外网域名 (Server Host)</label>
                             <input type="text" name="server_host" value="{{ cfg.server_host }}" required>
@@ -677,19 +823,24 @@ ADMIN_HTML = """
                                 <input type="number" name="link_expire" value="{{ cfg.get('link_expire', 120) }}" style="width:80px; padding:3px;">
                             </div>
                         </div>
+                    </div>
 
-                        <h3 style="margin-top:20px; border:none;">📱 消息推送</h3>
-                        <div class="path-box">
-                            <label>PushPlus Token (微信推送)</label><input type="text" name="pushplus_token" value="{{ cfg.pushplus_token }}" placeholder="留空则不推送">
-                            <label>Telegram Bot Token</label><input type="text" name="tg_bot_token" value="{{ cfg.tg_bot_token }}">
-                            <label>Telegram Chat ID</label><input type="text" name="tg_chat_id" value="{{ cfg.tg_chat_id }}">
-                            <label>Telegram 代理地址 (Nekobox / Clash 等)</label><input type="text" name="tg_proxy" value="{{ cfg.get('tg_proxy', '') }}" placeholder="例如: http://127.0.0.1:7890 (留空则直连)" style="margin-bottom:0;">
-                        </div>
-
-                        <h3 style="margin-top:20px; border:none;"><span style="color:#ea580c;">🟠</span> 139 移动云盘设置</h3>
+                    <!-- ================= 右侧栏 ================= -->
+                    <div>
+                        <!-- 💡 139 移动云盘顶到最上面 -->
+                        <h3 style="margin-top:0; border:none;"><span style="color:#ea580c;">🟠</span> 139 移动云盘设置</h3>
                         <div class="path-box" style="border-color: #f97316; background: #fff7ed;">
                             <label style="color:#2563eb;"><b>【139 独立原生直连】</b></label>
                             
+                            <!-- 👇 下面这块是新增的下拉选择框，缩进完全对齐 👇 -->
+                            <div style="margin-top: 10px; margin-bottom: 15px; padding: 10px; background: #fff; border: 1px solid #fdba74; border-radius: 6px;">
+                                <label style="color:#ea580c; font-weight:bold; margin-bottom: 6px;">🎯 139 首发账号分配策略 (失败自动滑点兜底)</label>
+                                <select name="yun139_strategy" style="border-color:#f97316; margin-bottom: 0;">
+                                    <option value="slot1" {% if cfg.get('yun139_strategy', 'slot1') == 'slot1' %}selected{% endif %}>🥇 优先【卡槽 1 主号】(报错自动切换到卡槽 2)</option>
+                                    <option value="slot2" {% if cfg.get('yun139_strategy', 'slot1') == 'slot2' %}selected{% endif %}>🥈 优先【卡槽 2 备用号】(直接测试2号 / 报错自动切回1号)</option>
+                                </select>
+                            </div>
+
                             <label>🌐 139 控制面网关域名 (用于彻底删除/清空回收站)</label>
                             <input type="text" name="yun139_control_host" value="{{ cfg.yun139_control_host }}" placeholder="例如: https://personal-kd-njs.yun.139.com" style="margin-bottom:10px; border: 1px solid #f97316;">
                             
@@ -702,20 +853,46 @@ ADMIN_HTML = """
                             <label>🛡️ 139 直链保鲜期 (秒，原生与老模式通用)</label>
                             <input type="number" name="yun139_link_expire" value="{{ cfg.get('yun139_link_expire', 7200) }}" placeholder="例如：7200" style="margin-bottom:10px; border: 1px solid #10b981;">
                             
-                            <label>📁 139 临时缓存隔离目录 ID (选填，强烈建议)</label>
-                            <span style="font-size:12px; color:#666; display:block; margin-bottom:5px;">网页登录移动云盘，点进你新建的文件夹，URL 里的 catalogID= 后面的那一长串字母数字就是它。留空则默认存放根目录。</span>
-                            <input type="text" name="yun139_temp_folder_id" value="{{ cfg.yun139_temp_folder_id }}" placeholder="例如：00019C0000000000000..." style="margin-bottom:10px; border: 1px solid #10b981;">
-                            
-                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
-                                <label style="margin-bottom: 0;">🍪 139 邮箱 Cookie (长期免维护必备)</label>
-                                <span onclick="const t = document.getElementById('cookie_textarea'); t.style.display = t.style.display === 'none' ? 'block' : 'none';" style="cursor: pointer; color: #ea580c; font-size: 12px; font-weight: bold; padding: 3px 8px; background: #ffedd5; border: 1px solid #fdba74; border-radius: 4px; transition: 0.2s;">[ 展开 / 折叠 ]</span>
+                            <!-- ================= 🥇 卡槽 1 (主号) ================= -->
+                            <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 15px; margin-bottom: 15px;">
+                                <label style="color:#10b981; font-size:14px; border-bottom:1px solid #10b981; padding-bottom:5px; margin-bottom:10px;">🥇 139 主账号 (卡槽 1)</label>
+                                
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                                    <label style="margin-bottom: 0; color: #475569;">🍪 主号邮箱 Cookie</label>
+                                    <span onclick="const t = document.getElementById('cookie_textarea_1'); t.style.display = t.style.display === 'none' ? 'block' : 'none';" style="cursor: pointer; color: #10b981; font-size: 12px; font-weight: bold; padding: 3px 8px; background: #d1fae5; border: 1px solid #6ee7b7; border-radius: 4px; transition: 0.2s;">[ 展开 / 折叠 ]</span>
+                                </div>
+                                <span style="font-size:12px; color:#666; display:block; margin-bottom:5px;">登录 mail.10086.cn 后抓取 (包含 Os_SSo_Sid 和 RMKEY)</span>
+                                <textarea id="cookie_textarea_1" name="yun139_mail_cookie" rows="3" placeholder="主号 Cookie: key1=value1;" style="width:100%; padding:10px; border: 1px solid #10b981; border-radius:6px; margin-bottom:10px; box-sizing:border-box; resize: vertical; display: {{ 'none' if cfg.yun139_mail_cookie else 'block' }};">{{ cfg.yun139_mail_cookie }}</textarea>
+                                
+                                <input type="text" name="yun139_phone" value="{{ cfg.yun139_phone }}" placeholder="主号 139 手机号" style="border-color:#10b981;">
+                                <input type="password" name="yun139_password" value="{{ cfg.yun139_password }}" placeholder="主号 139 密码" style="border-color:#10b981;">
+                                <input type="password" name="yun139_token" value="{{ cfg.yun139_token }}" placeholder="139 Base64 Token (老版授权备用，留空即可)" style="border-color:#10b981;">
+                                
+                                <!-- 👈 移到这里的专属目录 ID -->
+                                <label style="color:#10b981; font-size:12px;">📁 主号专属临时缓存隔离目录 ID</label>
+                                <input type="text" name="yun139_temp_folder_id" value="{{ cfg.yun139_temp_folder_id }}" placeholder="留空则默认存放根目录" style="border-color:#10b981; margin-bottom:0;">
                             </div>
-                            <span style="font-size:12px; color:#666; display:block; margin-bottom:5px;">登录 mail.10086.cn 后抓取 Cookie (包含 Os_SSo_Sid 和 RMKEY)。配合手机号+密码可实现永久免维护。</span>
-                            <textarea id="cookie_textarea" name="yun139_mail_cookie" rows="3" placeholder="格式如: key1=value1; key2=value2;" style="width:100%; padding:10px; border: 1px solid #f97316; border-radius:6px; margin-bottom:10px; box-sizing:border-box; resize: vertical; display: {{ 'none' if cfg.yun139_mail_cookie else 'block' }};">{{ cfg.yun139_mail_cookie }}</textarea>
+
+                            <!-- ================= 🥈 卡槽 2 (备用号) ================= -->
+                            <div style="background: #f5f3ff; border: 1px solid #ede9fe; border-radius: 8px; padding: 15px; margin-bottom: 10px;">
+                                <label style="color:#8b5cf6; font-size:14px; border-bottom:1px solid #8b5cf6; padding-bottom:5px; margin-bottom:10px;">🥈 139 备用容灾号 (卡槽 2 - 主号报错时无缝接管)</label>
+                                
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                                    <label style="margin-bottom: 0; color: #475569;">🍪 备用号邮箱 Cookie</label>
+                                    <span onclick="const t = document.getElementById('cookie_textarea_2'); t.style.display = t.style.display === 'none' ? 'block' : 'none';" style="cursor: pointer; color: #8b5cf6; font-size: 12px; font-weight: bold; padding: 3px 8px; background: #ede9fe; border: 1px solid #c4b5fd; border-radius: 4px; transition: 0.2s;">[ 展开 / 折叠 ]</span>
+                                </div>
+                                <span style="font-size:12px; color:#666; display:block; margin-bottom:5px;">如不启用容灾则直接留空即可</span>
+                                <textarea id="cookie_textarea_2" name="yun139_mail_cookie_2" rows="3" placeholder="备用号 Cookie: key1=value1;" style="width:100%; padding:10px; border: 1px solid #8b5cf6; border-radius:6px; margin-bottom:10px; box-sizing:border-box; resize: vertical; display: {{ 'none' if cfg.get('yun139_mail_cookie_2') else 'block' }};">{{ cfg.get('yun139_mail_cookie_2', '') }}</textarea>
+                                
+                                <input type="text" name="yun139_phone_2" value="{{ cfg.get('yun139_phone_2', '') }}" placeholder="备用号 139 手机号" style="border-color:#8b5cf6;">
+                                <input type="password" name="yun139_password_2" value="{{ cfg.get('yun139_password_2', '') }}" placeholder="备用号 139 密码" style="border-color:#8b5cf6;">
+                                <input type="password" name="yun139_token_2" value="{{ cfg.get('yun139_token_2', '') }}" placeholder="备用号 139 Base64 Token (备用，留空即可)" style="border-color:#8b5cf6;">
+                                
+                                <!-- 👈 备用号的专属目录 ID -->
+                                <label style="color:#8b5cf6; font-size:12px;">📁 备用号专属临时缓存隔离目录 ID</label>
+                                <input type="text" name="yun139_temp_folder_id_2" value="{{ cfg.get('yun139_temp_folder_id_2', '') }}" placeholder="留空则默认存放根目录" style="border-color:#8b5cf6; margin-bottom:0;">
+                            </div>
                             
-                            <input type="text" name="yun139_phone" value="{{ cfg.yun139_phone }}" placeholder="139 手机号">
-                            <input type="password" name="yun139_password" value="{{ cfg.yun139_password }}" placeholder="139 密码">
-                            <input type="password" name="yun139_token" value="{{ cfg.yun139_token }}" placeholder="139 Base64 Token (备用，留空即可)">
                             <label>139 原生直连本地 STRM 独立保存路径</label>
                             <input type="text" name="local_strm_dir_139_native" value="{{ cfg.local_strm_dir_139_native }}" style="margin-bottom:15px; border: 1px solid #f59e0b;">
                             
@@ -729,6 +906,15 @@ ADMIN_HTML = """
                             <input type="text" name="network_cas_path_139" value="{{ cfg.network_cas_path_139 }}">
                             <label>139 老模式本地 STRM 独立保存路径</label>
                             <input type="text" name="local_strm_dir_139" value="{{ cfg.local_strm_dir_139 }}" style="margin-bottom:0;">
+                        </div>
+
+                        <!-- 💡 【移到右侧底部】消息推送 -->
+                        <h3 style="margin-top:20px; border:none;">📱 消息推送</h3>
+                        <div class="path-box">
+                            <label>PushPlus Token (微信推送)</label><input type="text" name="pushplus_token" value="{{ cfg.pushplus_token }}" placeholder="留空则不推送">
+                            <label>Telegram Bot Token</label><input type="text" name="tg_bot_token" value="{{ cfg.tg_bot_token }}">
+                            <label>Telegram Chat ID</label><input type="text" name="tg_chat_id" value="{{ cfg.tg_chat_id }}">
+                            <label>Telegram 代理地址 (Nekobox / Clash 等)</label><input type="text" name="tg_proxy" value="{{ cfg.get('tg_proxy', '') }}" placeholder="例如: http://127.0.0.1:7890 (留空则直连)" style="margin-bottom:0;">
                         </div>
                     </div>
                 </div>
@@ -754,7 +940,13 @@ ADMIN_HTML = """
         function clearAllCache() { if(confirm('⚠️ 确定要清空吗？')) { fetch('/api/clear_all', {method: 'POST'}).then(r => alert('🚀 核弹已发射！')); } }
         function fetchLogs() {
             fetch('/admin/logs').then(r => r.json()).then(logs => {
-                const box = document.getElementById('logBox');
+                const box = document.getElementById('logBoxSys');
+                const oldScrollTop = box.scrollTop, oldScrollHeight = box.scrollHeight, clientHeight = box.clientHeight;
+                box.innerHTML = logs.map(l => `<span class="log-time">[${l.time}]</span><span class="log-msg ${l.msg.includes('✅') ? 'log-SUCCESS' : 'log-' + l.level}">${l.msg}</span><br>`).join('');
+                if (oldScrollHeight - clientHeight - oldScrollTop < 30) { box.scrollTop = box.scrollHeight; } else { box.scrollTop = oldScrollTop; }
+            });
+            fetch('/admin/logs_play').then(r => r.json()).then(logs => {
+                const box = document.getElementById('logBoxPlay');
                 const oldScrollTop = box.scrollTop, oldScrollHeight = box.scrollHeight, clientHeight = box.clientHeight;
                 box.innerHTML = logs.map(l => `<span class="log-time">[${l.time}]</span><span class="log-msg ${l.msg.includes('✅') ? 'log-SUCCESS' : 'log-' + l.level}">${l.msg}</span><br>`).join('');
                 if (oldScrollHeight - clientHeight - oldScrollTop < 30) { box.scrollTop = box.scrollHeight; } else { box.scrollTop = oldScrollTop; }
@@ -773,7 +965,10 @@ def admin_index():
     return render_template_string(ADMIN_HTML, cfg=cfg, cache_count=count, msg=request.args.get('msg'))
 
 @app_main.route('/admin/logs')
-def get_logs(): return jsonify(list(log_buffer))
+def get_logs(): return jsonify(list(log_buffer_sys))
+
+@app_main.route('/admin/logs_play')
+def get_logs_play(): return jsonify(list(log_buffer_play))
 
 # ==========================================
 # ☁️ 天翼云核心功能类 (家庭云)
@@ -1029,7 +1224,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl): return None
 
 # ==========================================
-# 🟠 移动云盘 139 原生直连引擎 (带缓存与异步延时销毁)
+# 🟠 移动云盘 139 原生直连引擎 (主备双槽容灾升级版)
 # ==========================================
 class Cloud139NativeEngine:
     KEY1 = bytes.fromhex("73634235495062495331515373756c734e7253306c673d3d")
@@ -1065,21 +1260,57 @@ class Cloud139NativeEngine:
     }
 
     def __init__(self):
-        self.TOKEN_CACHE = os.path.join(DB_DIR, ".cas139_token.json")
         self.url_cache = {}
+        # 磁盘持久化文件：记录未删除的临时文件 ID
+        self.tracking_db_file = os.path.join(DB_DIR, ".139_active_fids.json")
+    
+    def _add_active_fid(self, slot_idx, fid):
+        try:
+            data = {1: [], 2: []}
+            if os.path.exists(self.tracking_db_file):
+                with open(self.tracking_db_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            data_slot = data.get(str(slot_idx), [])
+            if str(fid) not in data_slot:
+                data_slot.append(str(fid))
+            data[str(slot_idx)] = data_slot
+            with open(self.tracking_db_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f)
+        except Exception as e:
+            logger.error(f"[139持久化] 记录 fid 失败: {e}")
+
+    def _pop_active_fids(self, slot_idx):
+        try:
+            if not os.path.exists(self.tracking_db_file):
+                return []
+            with open(self.tracking_db_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            fids = data.get(str(slot_idx), [])
+            # 取出后清空该卡槽的记录
+            data[str(slot_idx)] = []
+            with open(self.tracking_db_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f)
+            return fids
+        except:
+            return []
 
     def _md5(self, s): return hashlib.md5(s.encode()).hexdigest()
     def _sha1_hex(self, s): return hashlib.sha1(s.encode()).hexdigest()
     def sorted_json(self, obj): return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
-    def cache_token(self, auth, account):
+    # 【新增】动态获取凭证保存路径，支持多卡槽
+    def _get_token_cache_path(self, slot_idx):
+        return os.path.join(DB_DIR, f".cas139_token_{slot_idx}.json")
+
+    def cache_token(self, auth, account, slot_idx=1):
         try:
-            with open(self.TOKEN_CACHE, "w") as f: json.dump({"auth": auth, "account": account, "saved": int(time.time())}, f)
+            with open(self._get_token_cache_path(slot_idx), "w") as f: 
+                json.dump({"auth": auth, "account": account, "saved": int(time.time())}, f)
         except OSError: pass
 
-    def load_cached_token(self):
+    def load_cached_token(self, slot_idx=1):
         try:
-            d = json.load(open(self.TOKEN_CACHE))
+            d = json.load(open(self._get_token_cache_path(slot_idx)))
             auth = d["auth"]
             decoded = base64.b64decode(auth).decode()
             parts = decoded.split(":")
@@ -1091,31 +1322,28 @@ class Cloud139NativeEngine:
         except: pass
         return None
 
-    def login(self, account, password):
+    def login(self, account, password, cookie_str="", slot_idx=1):
         import requests
-        logger.info("[139引擎] 开始执行 139 SSO 鉴权流程 (1:1 复刻 OpenList 驱动逻辑)...")
+        logger.info(f"[139引擎] 开始执行 139 SSO 鉴权流程 (卡槽 {slot_idx} - 账号: {account})...")
+        
         cfg = read_config()
-        mail_cookie_str = cfg.get("yun139_mail_cookie", "").strip()
+        if not cookie_str: 
+            suffix = "" if slot_idx == 1 else "_2"
+            cookie_str = cfg.get(f"yun139_mail_cookie{suffix}", "").strip()
 
         sid = ""
         rmkey = ""
-
-        # 1. 完全复刻 AList extractFastLoginCookies 逻辑，只提取不发多余请求
-        if mail_cookie_str:
-            for part in mail_cookie_str.split(";"):
+        
+        if cookie_str:
+            for part in cookie_str.split(";"):
                 part = part.strip()
-                if part.startswith("Os_SSo_Sid="):
-                    sid = part[11:]
-                elif part.startswith("Os_SSO_Sid="):
-                    sid = part[11:]
-                elif part.startswith("RMKEY="):
-                    rmkey = part[6:]
+                if part.startswith("Os_SSo_Sid=") or part.startswith("Os_SSO_Sid="): sid = part[11:]
+                elif part.startswith("RMKEY="): rmkey = part[6:]
             if sid and rmkey:
-                logger.info(f"[139引擎] 🍪 成功从邮箱 Cookie 提取极速免签金牌 (sid: {sid[:6]}..., rmkey: {rmkey[:6]}...)")
+                logger.info(f"[139引擎] 🍪 成功从邮箱 Cookie 提取极速免签金牌...")
 
-        # 2. 密码强登逻辑 (仅在未提供完整 Cookie 时触发，极易被风控)
         if not sid or not rmkey:
-            logger.warning("[139引擎] ⚠️ 未提取到完整的 sid 或 rmkey，尝试账号密码直登 (此方式极易触发 139 滑块拦截)...")
+            logger.warning(f"[139引擎] ⚠️ 未提取到完整 Cookie，尝试账号密码直登 (此方式极易触发滑块拦截)...")
             import http.cookiejar
             jar = http.cookiejar.CookieJar()
             opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
@@ -1154,17 +1382,13 @@ class Cloud139NativeEngine:
             if not sid:
                 for c in jar:
                     if c.name in ("Os_SSo_Sid", "Os_SSO_Sid"): sid = c.value
-            if not sid:
-                raise Exception("密码登录被官方风控拦截。请必须去浏览器重新登录 mail.10086.cn，抓取最新 Cookie 填入后台！")
+            if not sid: raise Exception("密码登录被官方风控拦截。请去浏览器抓取最新 Cookie！")
             
             for c in jar:
                 if c.name == "RMKEY": rmkey = c.value
 
-        if not sid or not rmkey:
-            raise Exception("鉴权参数缺失：未获取到 sid 或 rmkey。")
+        if not sid or not rmkey: raise Exception("鉴权参数缺失：未获取到 sid 或 rmkey。")
 
-        # 3. 复刻 OpenList 兑换 artifact 的精准发包 (application/xml)
-        logger.info("[139引擎] 准备使用 sid 和 RMKEY 兑换 artifact 票据...")
         art_url = f"https://smsrebuild1.mail.10086.cn/setting/s?func={urllib.parse.quote('umc:getArtifact')}&sid={sid}&cguid={str(int(time.time() * 1000))}"
         xml_body = b"<object><int name=\"appId\">16</int><int name=\"envAuth\">1</int></object>"
 
@@ -1182,19 +1406,9 @@ class Cloud139NativeEngine:
             re.search(r'artifact\s*[:=]\s*"([^"]+)"', art_body) or \
             re.search(r'<string[^>]*name="artifact"[^>]*>\s*([^<]+)\s*</string>', art_body)
 
-        if not m:
-            if "FA_INVALID_SESSION" in art_body:
-                logger.error("[139引擎] 🚨 致命错误：官方返回会话已过期 (User Session Expired)！")
-                raise Exception("邮箱 Cookie 已过期！必须重新抓取全新的 Cookie！")
-            else:
-                logger.error(f"[139引擎] ❌ 兑换 artifact 失败，官方返回: {art_body[:200]}")
-                raise Exception("未取到 artifact，请检查日志。")
-
+        if not m: raise Exception("未取到 artifact，请检查日志。")
         artifact = m.group(1).strip()
 
-        # 5. 兑换最终 authToken (1:1 严格对齐 OpenList 源码参数)
-        logger.info("[139引擎] 拿到 artifact，正在兑换最终云盘 Authorization...")
-        
         body = {
             "clientkey_decrypt": self.CLIENT_KEY,
             "clienttype": "886",
@@ -1211,14 +1425,13 @@ class Cloud139NativeEngine:
         iv = os.urandom(16)
         payload = base64.b64encode(iv + aes_cbc_encrypt(self.sorted_json(body).encode(), self.KEY1, iv)).decode()
 
-        # 💡 核心修复：完全抄袭 OpenList util.go 里的 ssoLoginHeaders 设备指纹特征，一字不差！
         final_resp = requests.post("https://user-njs.yun.139.com/user/thirdlogin", data=payload.encode(), headers={
             "hcy-cool-flag": "1",
             "x-huawei-channelSrc": "10246600",
-            "x-sdk-channelSrc": "",                                                                       # 漏掉的
-            "x-MM-Source": "0",                                                                           # 漏掉的
-            "x-UserAgent": "android|23116PN5BC|android15|1.2.6|||1440x3200|10246600",                     # 注意：没有横杠！
-            "x-DeviceInfo": "4|127.0.0.1|5|1.2.6|Xiaomi|23116PN5BC||02-00-00-00-00-00|android 15|1440x3200|android|||", # 漏掉的最重要的设备指纹！
+            "x-sdk-channelSrc": "",                                                       
+            "x-MM-Source": "0",                                                          
+            "x-UserAgent": "android|23116PN5BC|android15|1.2.6|||1440x3200|10246600",     
+            "x-DeviceInfo": "4|127.0.0.1|5|1.2.6|Xiaomi|23116PN5BC||02-00-00-00-00-00|android 15|1440x3200|android|||", 
             "Content-Type": "text/plain;charset=UTF-8",
             "Accept-Encoding": "gzip",
             "User-Agent": "okhttp/3.12.2"
@@ -1231,9 +1444,7 @@ class Cloud139NativeEngine:
             blob = base64.b64decode(txt)
             layer1 = json.loads(aes_cbc_decrypt(blob[16:], self.KEY1, blob[:16]))
             
-        if not layer1.get("data"):
-            logger.error(f"[139引擎] ❌ 兑换 AuthToken 被官方拒绝，返回内容: {layer1}")
-            raise Exception(f"兑换最终凭证失败: {layer1.get('msg', layer1.get('message', '未知错误'))}")
+        if not layer1.get("data"): raise Exception(f"兑换凭证失败: {layer1.get('msg', layer1)}")
 
         inner = aes_ecb_decrypt(bytes.fromhex(layer1["data"]), self.KEY2)
         final_data = json.loads(inner)
@@ -1243,18 +1454,44 @@ class Cloud139NativeEngine:
 
         account_ret = final_data.get("account", account)
         auth = base64.b64encode(f"pc:{account_ret}:{auth_token}".encode()).decode()
-        self.cache_token(auth, account_ret)
-        logger.info(f"[139引擎] ✅ 鉴权圆满成功，云盘持久化通行证已生成并缓存！")
+        self.cache_token(auth, account_ret, slot_idx)
+        logger.info(f"[139引擎] ✅ 鉴权圆满成功！(卡槽 {slot_idx} 已就绪)")
         return auth
 
-    def ensure_auth(self):
+    # 100%保留你原来的函数名，外接老接口不出错
+    def ensure_auth(self, slot_idx=1):
         cfg = read_config()
-        if cfg.get("yun139_token"): return cfg["yun139_token"].strip()
-        cached = self.load_cached_token()
-        if cached: return cached
-        acc, pwd = cfg.get("yun139_phone"), cfg.get("yun139_password")
-        if not (acc and pwd): raise Exception("未配置 139 凭证")
-        return self.login(acc, pwd)
+        # 1. 优先检查手动 Token
+        if slot_idx == 1 and cfg.get("yun139_token"): return cfg["yun139_token"].strip()
+        if slot_idx == 2 and cfg.get("yun139_token_2"): return cfg["yun139_token_2"].strip()
+        
+        token_file = self._get_token_cache_path(slot_idx)
+        
+        # 2. 检查本地缓存：只要距离过期还有 10 分钟以上，直接复用！
+        if os.path.exists(token_file):
+            try:
+                with open(token_file, 'r', encoding='utf-8') as f:
+                    d = json.load(f)
+                auth = d.get("auth", "")
+                if auth:
+                    decoded = base64.b64decode(auth).decode()
+                    exp = int(decoded.split(":")[2].split("|")[3]) // 1000
+                    if exp - time.time() > 600:
+                        return auth
+            except:
+                pass
+        
+        # 3. 确实没缓存或真过期了，才发起登录
+        suffix = "" if slot_idx == 1 else "_2"
+        acc = cfg.get(f"yun139_phone{suffix}")
+        pwd = cfg.get(f"yun139_password{suffix}")
+        cookie_str = cfg.get(f"yun139_mail_cookie{suffix}")
+        
+        if not acc and not cookie_str: 
+            raise Exception(f"未配置 139 卡槽 {slot_idx}")
+            
+        logger.info(f"[139凭证] 卡槽 {slot_idx} 凭证已过期或不存在，执行登录...")
+        return self.login(acc, pwd, cookie_str, slot_idx)
 
     def cal_sign(self, body, ts, rand_str):
         enc = urllib.parse.quote(body, safe="~!*'()-._")
@@ -1286,8 +1523,7 @@ class Cloud139NativeEngine:
             raise Exception(f"HTTP {e.code}: {e.read().decode('utf-8', 'replace')[:300]}")
             
         if isinstance(resp, dict) and resp.get("success") is False:
-            msg = f"code={resp.get('code')} message={resp.get('message')}"
-            raise Exception(f"API返回失败: {msg}")
+            raise Exception(f"API返回失败: code={resp.get('code')} message={resp.get('message')}")
         return resp
 
     def get_personal_host(self, auth):
@@ -1304,7 +1540,7 @@ class Cloud139NativeEngine:
         n = (size + part_size - 1) // part_size
         return [{"partNumber": i + 1, "partSize": min(part_size, size - i * part_size), "parallelHashCtx": {"partOffset": i * part_size}} for i in range(min(n, 100))]
 
-    def _async_delete(self, file_id, delay, name):
+    def _async_delete(self, file_id, delay, name, auth=None):
         import time
         try:
             m, s = divmod(int(delay), 60)
@@ -1313,14 +1549,14 @@ class Cloud139NativeEngine:
             logger.info(f"[139销毁队列] 💣 注入成功: {name} (ID: {file_id}) 将在 {time_str} 后执行永久删除")
             time.sleep(delay)
             
-            auth = self.ensure_auth()
+            if not auth: auth = self.ensure_auth(1)
+            
             cfg = read_config()
             control_host = cfg.get("yun139_control_host", "").strip() or "https://personal-kd-njs.yun.139.com"
             delete_url = control_host.rstrip('/') + "/hcy/file/batchDelete"
             
             body = {"fileIds": [str(file_id)]}
             resp = self.cloud_request(delete_url, body, auth, self.PERSONAL_HEADERS)
-            logger.info(f"[139销毁回执] 永久删除原始响应: {resp}")
                 
             if resp.get("success") or resp.get("code") == "0":
                 logger.info(f"[139销毁成功] 💥 永久删除成功，网盘空间已即时真实释放: {name}")
@@ -1330,23 +1566,68 @@ class Cloud139NativeEngine:
             logger.error(f"[139销毁报错] {name}: {e}")
 
     def empty_recycle_bin(self):
-        try:
-            logger.info(f"[139清理] 🟠 开始执行移动云回收站一键清空任务...")
-            auth = self.ensure_auth()
-            cfg = read_config()
-            control_host = cfg.get("yun139_control_host", "").strip() or "https://personal-kd-njs.yun.139.com"
-            clear_url = control_host.rstrip('/') + "/hcy/recyclebin/clear" 
-            
-            resp = self.cloud_request(clear_url, {}, auth, self.PERSONAL_HEADERS)
-            if resp.get("success") or resp.get("code") == "0":
-                logger.info(f"[139清理成功] 💥 139 回收站已彻底清空，空间全部真实释放！")
-            else:
-                logger.warning(f"[139清理异常] 清空失败: {resp}")
-        except Exception as e:
-            logger.error(f"[139清理报错]: {e}")
+        cfg = read_config()
+        control_host = cfg.get("yun139_control_host", "").strip() or "https://personal-kd-njs.yun.139.com"
+        del_file_url = control_host.rstrip('/') + "/hcy/file/batchDelete"
+        clear_url = control_host.rstrip('/') + "/hcy/recyclebin/clear"
 
+        for slot in [1, 2]:
+            suffix = "" if slot == 1 else "_2"
+            if not cfg.get(f"yun139_phone{suffix}") and not cfg.get(f"yun139_mail_cookie{suffix}"):
+                continue
+
+            try:
+                auth = self.ensure_auth(slot)
+                
+                # 1. 从磁盘持久化文件中读取即便重启也保留的 fid 列表
+                fids = self._pop_active_fids(slot)
+                if fids:
+                    logger.info(f"[139全扫] 🧹 发现卡槽 {slot} 记录的 {len(fids)} 个临时文件(含历史跨重启文件)，正在移入回收站...")
+                    self.cloud_request(del_file_url, {"fileIds": fids}, auth, self.PERSONAL_HEADERS)
+                
+                # 2. 彻底清空回收站物理释放空间
+                logger.info(f"[139清理] 🟠 正在彻底清空卡槽 {slot} 回收站...")
+                resp = self.cloud_request(clear_url, {}, auth, self.PERSONAL_HEADERS)
+                if resp.get("success") or resp.get("code") == "0":
+                    logger.info(f"[139清理成功] 💥 卡槽 {slot} 回收站已彻底清空，空间全部真实释放！")
+                else:
+                    logger.warning(f"[139清理异常] 卡槽 {slot} 清空失败: {resp}")
+            except Exception as e:
+                logger.error(f"[139清理报错] 卡槽 {slot}: {e}")
+
+    # ==========================
+    # 🌟 核心：主备容灾切换逻辑 🌟
+    # ==========================
     def get_direct_link(self, sha256_hash, file_size, file_name, parent_id="/"):
         import threading
+        now = time.time()
+        
+        # 1. 查缓存
+        if sha256_hash in self.url_cache:
+            cached_url, exp = self.url_cache[sha256_hash]
+            if now < exp:
+                logger.info(f"[139引擎] ⚡ 命中本地内存直链缓存，免查官方 API: {file_name}")
+                return cached_url
+
+        cfg = read_config()
+        # 2. 读取后台策略：决定谁首发，谁兜底
+        strategy = cfg.get("yun139_strategy", "slot1")
+        first_slot = 2 if strategy == "slot2" else 1
+        second_slot = 1 if first_slot == 2 else 2
+
+        try:
+            # 首发尝试
+            return self._do_get_direct_link(first_slot, sha256_hash, file_size, file_name, parent_id, now)
+        except Exception as e1:
+            logger.warning(f"⚠️ [139容灾滑点] 首发账号(卡槽{first_slot})获取失败: {e1}，正在无缝切换至卡槽{second_slot}...")
+            try:
+                # 兜底尝试
+                return self._do_get_direct_link(second_slot, sha256_hash, file_size, file_name, parent_id, now)
+            except Exception as e2:
+                logger.error(f"❌ [139全线阵亡] 两个卡槽均无法承载: {e2}")
+                raise Exception(f"139所有卡槽均失效！首选({first_slot})错: {e1} | 备用({second_slot})错: {e2}")
+
+    def _do_get_direct_link(self, slot_idx, sha256_hash, file_size, file_name, parent_id, now):
         cfg = read_config()
         
         try: delay_sec = int(cfg.get('delete_delay_139', 14400))
@@ -1355,22 +1636,19 @@ class Cloud139NativeEngine:
         try: cache_ttl = int(cfg.get('yun139_link_expire', 7200))
         except: cache_ttl = 7200
         
-        custom_folder_id = cfg.get("yun139_temp_folder_id", "").strip()
+        # 👈 智能判断：如果是1号槽取原ID，2号槽取专属ID
+        folder_key = "yun139_temp_folder_id" if slot_idx == 1 else "yun139_temp_folder_id_2"
+        custom_folder_id = cfg.get(folder_key, "").strip()
         if custom_folder_id:
             parent_id = custom_folder_id
             
-        now = time.time()
-        if sha256_hash in self.url_cache:
-            cached_url, exp = self.url_cache[sha256_hash]
-            if now < exp:
-                logger.info(f"[139引擎] ⚡ 命中本地内存直链缓存，免查官方 API: {file_name}")
-                return cached_url
-
-        auth = self.ensure_auth()
+        auth = self.ensure_auth(slot_idx)
         try: host = self.get_personal_host(auth)
         except:
-            os.path.exists(self.TOKEN_CACHE) and os.remove(self.TOKEN_CACHE)
-            auth = self.ensure_auth()
+            # Token如果失效，删掉重取
+            token_file = self._get_token_cache_path(slot_idx)
+            os.path.exists(token_file) and os.remove(token_file)
+            auth = self.ensure_auth(slot_idx)
             host = self.get_personal_host(auth)
 
         body = {
@@ -1404,9 +1682,12 @@ class Cloud139NativeEngine:
         if not final_url: raise Exception("秒传成功，但无法解析下载链接")
         
         self.url_cache[sha256_hash] = (final_url, now + cache_ttl)
+        self._add_active_fid(slot_idx, str(fid))
         
+        # 将明确的 auth 传入异步销毁函数，避免它默认拿卡槽 1
         if delay_sec > 0:
-            threading.Thread(target=self._async_delete, args=(fid, delay_sec, file_name), daemon=True).start()
+            import threading
+            threading.Thread(target=self._async_delete, args=(fid, delay_sec, file_name, auth), daemon=True).start()
 
         return final_url
 
@@ -1781,7 +2062,20 @@ def play():
                 logger.info(f"✅ [2] 完美触发！拿到 139 官方脱壳直链！")
                 logger.info(f"[播放放行] 节点: {urllib.parse.urlparse(dl_url).netloc} | 地址: {truncate_url(dl_url)}")
                 logger.info(f"========== 🕵️‍♂️ 139 原生直连链路日志 END ==========\n")
-                return redirect(dl_url)
+
+                # 💡 判断：如果是普通视频（.mkv / .mp4），保持原样秒级 302 直通
+                if not file_name.lower().endswith('.iso'):
+                    return redirect(dl_url)
+
+                # 💡 针对 .iso 文件：解析内嵌 BDMV/STREAM 主正片扇区，转交虚拟切片代理
+                logger.info(f"💿 [ISO播放接管] 目标为蓝光光盘镜像，正在定位内嵌主视频流: {file_name}")
+                start_byte, v_size = get_iso_main_video_offset(dl_url)
+                logger.info(f"💿 [ISO定位成功] 主正片起始偏移: {start_byte} 字节 | 视频大小: {format_size(v_size)}")
+                
+                # 引导 Emby / 播放器接入你已写好的 iso_stream_proxy 流端点
+                proxy_route = f"/stream/iso_proxy?url={urllib.parse.quote(dl_url)}&offset={start_byte}&size={v_size}"
+                return redirect(proxy_route)
+
             else:
                 logger.error("❌ 139 直连获取直链异常，链接为空")
                 return "获取直链异常", 500
@@ -2420,6 +2714,49 @@ def local_cas_sync_worker():
 def api_sync_local():
     threading.Thread(target=local_cas_sync_worker, daemon=True).start()
     return "✅ 本地扫描指令下发成功", 200
+
+@app_main.route('/stream/iso_proxy', methods=['GET'])
+def iso_stream_proxy():
+    target_url = request.args.get('url')
+    start_offset = int(request.args.get('offset', 0))
+    video_size = int(request.args.get('size', 0))
+
+    range_header = request.headers.get('Range', None)
+    if not range_header:
+        # 无 Range 请求默认提供前 1MB
+        req_start = 0
+        req_end = min(1024 * 1024 - 1, video_size - 1)
+        status_code = 200
+    else:
+        # 解析客户端 Range: bytes=start-end
+        byte_range = range_header.replace('bytes=', '').split('-')
+        req_start = int(byte_range[0])
+        req_end = int(byte_range[1]) if byte_range[1] else video_size - 1
+        status_code = 206
+
+    # 将客户端针对视频的 Range 映射到 ISO 镜像内的绝对物理字节位置
+    real_start = start_offset + req_start
+    real_end = start_offset + req_end
+
+    upstream_resp = requests.get(
+        target_url,
+        headers={'Range': f'bytes={real_start}-{real_end}'},
+        stream=True,
+        timeout=20
+    )
+
+    def generate():
+        for chunk in upstream_resp.iter_content(chunk_size=64 * 1024):
+            if chunk:
+                yield chunk
+
+    response_headers = {
+        'Content-Type': 'video/mp2t',
+        'Accept-Ranges': 'bytes',
+        'Content-Range': f'bytes {req_start}-{req_end}/{video_size}',
+        'Content-Length': str(req_end - req_start + 1),
+    }
+    return Response(generate(), status=status_code, headers=response_headers)
 
 @app_main.route('/api/make_strm', methods=['POST'])
 def api_make_strm():
