@@ -57,16 +57,16 @@ async function searchAnimeBody(url, preferAnimeId = null, preferSource = null, d
 
 Emby 播放器自动加载弹幕时，走的是底层的 Match 接口。
 
-* 在文件里使用 Ctrl + F 搜索 function normalizeMatchTitle（大概在代码的第 1437 行左右）。
+* 在文件里使用 Ctrl + F 搜索 function normalizeMatchTitle（大概在代码的第 1437 行左右）。更新后，搜索function prepareQueryTitle。
 
 * 找到 let normalized 赋值的地方。
 
 * 在其下方插入正则替换，修改后如下：
 
 ```
-function normalizeMatchTitle(title) {
+function prepareQueryTitle(title) {
   let normalized = String(title || '').trim();
-
+  
   // 【在此处插入这1行】过滤自定义后缀，提纯剧名给 API
   normalized = normalized.replace(/\(DV\)|\(HQ\)|\(HHQ\)|\(HDR\)|\(HHDR\)|\(HFR\)|\(ISO\)|\(SDR\)|\(IQ\)|\(4K\)|\(2K\)/gi, '').trim();
 
