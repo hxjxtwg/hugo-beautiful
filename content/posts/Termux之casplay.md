@@ -51,83 +51,44 @@ import io
 import pycdlib
 import requests
 
-def get_iso_main_video_offset(iso_url):
-    """
-    一次性读取 ISO 前部元数据区，精准定位 BDMV/STREAM/00000.m2ts 起始字节与大小
-    """
+def get_iso_main_video_offset(iso_url, known_total_size=0):
+    """军用级 X 光透视：只在 2048 扇区边界扫描，彻底杜绝假阳性偏移"""
     try:
-        # 1. 一次性获取前 32MB 元数据区（包含全部 UDF 目录结构表）
-        probe_headers = {'Range': 'bytes=0-33554431', 'User-Agent': 'Mozilla/5.0'}
-        r = requests.get(iso_url, headers=probe_headers, timeout=20)
-        data = r.content
-        if not data:
-            return 0, 0
-
-        # 获取整个 ISO 的总大小
-        total_size = 0
-        cr = r.headers.get('Content-Range', '')
-        if '/' in cr:
-            try: total_size = int(cr.split('/')[-1])
-            except: pass
-        if not total_size:
+        total_size = int(known_total_size)
+        if total_size <= 0:
             head_r = requests.head(iso_url, allow_redirects=True, timeout=10)
             total_size = int(head_r.headers.get('content-length', 0))
 
-        # 2. 在 UDF 目录元数据中搜索 "00000.m2ts" (UTF-16BE 与 ASCII 两种形式)
-        name_patterns = [
-            b'\x000\x000\x000\x000\x000\x00.\x00m\x002\x00t\x00s',  # UTF-16BE (标准 UDF)
-            b'00000.m2ts',                                           # ASCII
-            b'00000.M2TS'
-        ]
+        # 拉取前 16MB 目录区进行 X光透视
+        r = requests.get(iso_url, headers={'Range': 'bytes=0-16777215', 'User-Agent': 'Mozilla/5.0'}, timeout=20)
+        data = r.content
+        if not data: return 0, total_size, "unknown"
 
-        pos = -1
-        for pat in name_patterns:
-            idx = data.find(pat)
-            if idx != -1:
-                pos = idx
-                break
-
-        if pos != -1:
-            # 在 File Identifier / File Entry 附近向前搜索 Allocation Descriptors (记录起始扇区与长度)
-            # 在 UDF 规范中，File Entry 或 ICB 通常在文件名记录前后的 2048 字节内
-            window_start = max(0, pos - 2048)
-            window_end = min(len(data), pos + 2048)
-            window = data[window_start:window_end]
-
-            # 启发式扫描：寻找指向大文件的数据块描述符 (8 字节长度 + 4 字节 LBA)
-            best_lba = 0
-            best_len = 0
-            for i in range(0, len(window) - 12, 4):
-                file_len = int.from_bytes(window[i:i+4], 'little')
-                lba = int.from_bytes(window[i+4:i+8], 'little')
-                
-                # 校验：主视频大小一般超过 500MB，扇区号在合理范围内 (大于 100 且物理位置在总文件内)
-                if 500 * 1024 * 1024 <= file_len <= total_size and 100 <= lba <= (total_size // 2048):
-                    if file_len > best_len:
-                        best_len = file_len
-                        best_lba = lba
-
-            if best_lba > 0:
-                start_byte = best_lba * 2048
-                return start_byte, best_len
-
-        # 3. 兜底策略：如果目录较深未在前 32MB 找到描述符，直接按标准扇区步进探测 M2TS 同步头
-        # 扫描前部扇区，寻找连续命中 0x47 同步字的数据起始点
         sector_size = 2048
-        for sec in range(100, min(len(data) // sector_size, 8192)):
-            offset = sec * sector_size
-            # 检验是否为连续 M2TS 封包 (192 字节为包长，第 5 字节为 0x47)
-            if offset + 192 * 4 <= len(data):
-                if data[offset+4] == 0x47 and data[offset+196] == 0x47 and data[offset+388] == 0x47:
-                    # 找到视频流起点
-                    stream_start = offset
-                    stream_size = total_size - stream_start
-                    return stream_start, stream_size
+        max_sectors = len(data) // sector_size
 
+        for s in range(0, max_sectors):
+            base = s * sector_size
+            
+            # 🔍 1. 严格在扇区起始处探测 MKV 签名 (杜绝 Invalid data 乱码碰撞)
+            if data[base:base+4] == b'\x1A\x45\xDF\xA3':
+                return base, total_size - base, "mkv"
+                
+            # 🔍 2. 严格在扇区起始处探测 MP4 签名 (ftyp)
+            if base + 8 <= len(data) and data[base+4:base+8] == b'ftyp':
+                return base, total_size - base, "mp4"
+                
+            # 🔍 3. 探测真正的蓝光 M2TS (0x47 间隔 192)
+            # 光盘头部不可能小于 100KB，跳过前 50 个扇区防碰撞
+            if s >= 50 and base + 960 <= len(data):
+                if (data[base + 4] == 0x47 and data[base + 196] == 0x47 and 
+                    data[base + 388] == 0x47 and data[base + 580] == 0x47):
+                    return base, total_size - base, "m2ts"
+
+        return 0, total_size, "unknown"
     except Exception as e:
-        logger.error(f"[ISO解析] 启发式定位失败: {e}")
-
-    return 0, 0
+        logger.error(f"[ISO解析] 异常: {e}")
+        return 0, known_total_size, "unknown"
 
 # ==========================================
 # 🏠 局域网探针与辅助函数
@@ -171,7 +132,7 @@ def parse_cas_content(cas_str):
         
         # 🚨 终极拦截：如果内容其实是个 HTML 报错网页（当初生成文件时网盘就死机了）
         if cas_str.startswith('<'):
-            logger.error(f"❌ [CAS 引擎拦截]: 发现死胎文件！这不是数据，而是一张网页报错单！截取: {cas_str[:80]}...")
+            logger.error(f"❌ [数据拦截]: 发现死胎文件！这不是数据，而是一张网页报错单！截取: {cas_str[:80]}...")
             return {}
             
         # 第二步：【绝对真理判定】别管长啥样，先试着当 JSON 解码
@@ -196,7 +157,7 @@ def parse_cas_content(cas_str):
             
     except Exception as e:
         # 加上 repr()，让任何隐形导致崩溃的字符(如 \n, \r, \xe0)在日志里现出原形！
-        logger.error(f"❌ [CAS 引擎解析失败]: {e} | 异常数据原形: {repr(cas_str[:80])}")
+        logger.error(f"❌ [数据解析]: {e} | 异常数据原形: {repr(cas_str[:80])}")
         return {}
 # ==========================================
 # 🛡️ 智能防刷墙 (严格并发锁)
@@ -285,6 +246,9 @@ app_302 = Flask('nginx_302_5001')
 
 upload_cache = {}
 native_link_cache = {}
+iso_meta_cache = {}     
+iso_scan_locks = {}     
+media_resolve_locks = {}  
 cache_lock = threading.Lock()
 print_throttle_cache = {} 
 
@@ -302,26 +266,44 @@ log_buffer_play = deque(maxlen=150)  # 下窗口：仅 139/189 真实播放取�
 
 def dispatch_log(log_entry):
     msg = log_entry.get('msg', '')
-    
+
     # 1. 严格锁定【播放链路专属动作】（下窗口）
     play_features = [
-        "链路日志",           # START / END 边框
-        "[播放放行]",         # 最终 302 节点输出
-        "[劫持放行]",         # Emby 302 劫持匹配
-        "[网络嗅探]",         # 内网播放探测
-        "请求原生直通",       # 189 模式B 触发
-        "请求无状态",         # 139 模式A 触发
-        "秒传命中",           # 189 模式A 秒传
-        "秒传成功",           # 189 模式A 秒传
-        "秒传就绪",           # 189 模式A 秒传
-        "调度] 开始处理",     # 189 矩阵调度
-        "139引擎]",           # 139 鉴权与取链过程
-        "139容灾",            # 139 卡槽自动切换
-        "139销毁",            # 139 播放后加入定时销毁
-        "执行家庭云清理",     # 189 播放后清理
-        "执行个人云清理"      # 189 播放后清理
+        "链路日志",
+        "[播放放行]",
+        "[劫持放行]",
+        "[网络嗅探]",
+        "[原生直通]",
+        "[状态请求]",
+        "秒传命中]",
+        "秒传成功]",
+        "秒传就绪]",
+        "开始调度]",
+        "版权拦截]",
+        "凭证失效]",
+        "遭遇拦截]",
+        "重试依然失败]",
+        "[获取底层]",
+        "嗅探完成]",
+        "嗅探警告]",
+        "[虚空造物]",
+        "[云盘容灾]",
+        "[阵亡警报]",
+        "清理预约]",
+        "移入纸篓]",
+        "空间释放]",
+        "[脱壳直链]",
+        "[防和谐扫]",
+        "[透视成功]",
+        "[伪装放行]",
+        "[ISO",
+        "[直链缓存]",
+        "[自愈成功]",
+        "[自愈启动]",
+        "[自愈失败]",
+        "[票据过期]"
     ]
-    
+
     # 2. 强行排除【STRM 生成与洗码操作】（防止被带进下窗口）
     exclude_features = [
         "生成 STRM",
@@ -331,7 +313,7 @@ def dispatch_log(log_entry):
         "后续触发",
         "CAS嗅探启动"
     ]
-    
+
     if any(k in msg for k in play_features) and not any(k in msg for k in exclude_features):
         log_buffer_play.append(log_entry)
     else:
@@ -480,22 +462,22 @@ def refresh_account_logic(slot_idx, cfg):
         user, pwd = acc.get('username'), acc.get('password')
 
         if slot_idx == 3 and not pwd:
-            logger.info("[凭证获取] 卡槽 4 尝试从外部 cookies.json 读取最高权限...")
+            logger.info("[自愈启动] 卡槽 4 尝试从外部读取...")
             sk, cookie = get_auto189_credentials()
             if sk and cookie:
                 acc['session_key'] = sk
                 acc['cookie'] = cookie
                 save_config(cfg)
-                logger.info("[自愈成功] 卡槽 4 从外部读取 Cookie 满血复活！")
+                logger.info("[自愈成功] 卡槽 4 满血复活！")
                 send_push("✅ 大号自愈成功", "卡槽 4 成功从外部读取到最新 Cookie 凭证！")
                 return sk, cookie
             else:
-                logger.error("[凭证失败] 卡槽 4 外部 Cookie 提取失败或已过期！")
+                logger.error("[自愈失败] 卡槽 4 提取失败！")
                 send_push("❌ 大号自愈失败", "卡槽 4 外部 Cookie 提取失败或已过期！")
                 return None, None
 
         if user and pwd:
-            logger.info(f"[自愈启动] 统一卡槽 {slot_idx+1} 开始账号密码重登...")
+            logger.info(f"[自愈启动] 卡槽 {slot_idx+1} 开始账号重登...")
             send_push("🔄 双轨自愈启动", f"检测到卡槽 {slot_idx+1} 凭证失效，正在执行自动重登...")
             try:
                 auth = Cloud189AuthEngine()
@@ -504,7 +486,7 @@ def refresh_account_logic(slot_idx, cfg):
                     acc['session_key'] = sk
                     acc['cookie'] = cookie
                     save_config(cfg)
-                    logger.info(f"[自愈成功] 统一卡槽 {slot_idx+1} 满血复活！")
+                    logger.info(f"[自愈成功] 卡槽 {slot_idx+1} 满血复活！")
                     send_push("✅ 自愈成功", f"统一卡槽 {slot_idx+1} 账号重登成功，双轨满血复活！")
                     return sk, cookie
             except Exception as e:
@@ -1428,8 +1410,8 @@ class Cloud139NativeEngine:
         final_resp = requests.post("https://user-njs.yun.139.com/user/thirdlogin", data=payload.encode(), headers={
             "hcy-cool-flag": "1",
             "x-huawei-channelSrc": "10246600",
-            "x-sdk-channelSrc": "",                                                       
-            "x-MM-Source": "0",                                                          
+            "x-sdk-channelSrc": "",                                               
+            "x-MM-Source": "0",                                                  
             "x-UserAgent": "android|23116PN5BC|android15|1.2.6|||1440x3200|10246600",     
             "x-DeviceInfo": "4|127.0.0.1|5|1.2.6|Xiaomi|23116PN5BC||02-00-00-00-00-00|android 15|1440x3200|android|||", 
             "Content-Type": "text/plain;charset=UTF-8",
@@ -1544,9 +1526,9 @@ class Cloud139NativeEngine:
         import time
         try:
             m, s = divmod(int(delay), 60)
-            time_str = f"{m} 分 {s} 秒" if m > 0 else f"{s} 秒"
+            time_str = f"{m}分{s}秒" if m > 0 else f"{s}秒"
             
-            logger.info(f"[139销毁队列] 💣 注入成功: {name} (ID: {file_id}) 将在 {time_str} 后执行永久删除")
+            logger.info(f"[清理预约] 139云盘：{name} 将在 {time_str}后 永久销毁")
             time.sleep(delay)
             
             if not auth: auth = self.ensure_auth(1)
@@ -1559,11 +1541,11 @@ class Cloud139NativeEngine:
             resp = self.cloud_request(delete_url, body, auth, self.PERSONAL_HEADERS)
                 
             if resp.get("success") or resp.get("code") == "0":
-                logger.info(f"[139销毁成功] 💥 永久删除成功，网盘空间已即时真实释放: {name}")
+                logger.info(f"[空间释放] 💥 139云盘：{name} 已永久销毁，物理空间即时释放！")
             else:
-                logger.warning(f"[139销毁异常] {name} 销毁失败: {resp}")
+                logger.warning(f"[销毁异常] 139云盘：{name} 失败: {resp}")
         except Exception as e:
-            logger.error(f"[139销毁报错] {name}: {e}")
+            logger.error(f"[销毁报错] 139云盘：{name}: {e}")
 
     def empty_recycle_bin(self):
         cfg = read_config()
@@ -1586,14 +1568,14 @@ class Cloud139NativeEngine:
                     self.cloud_request(del_file_url, {"fileIds": fids}, auth, self.PERSONAL_HEADERS)
                 
                 # 2. 彻底清空回收站物理释放空间
-                logger.info(f"[139清理] 🟠 正在彻底清空卡槽 {slot} 回收站...")
+                logger.info(f"[清理个人] 🟠 正在彻底清空卡槽 {slot} 回收站...")
                 resp = self.cloud_request(clear_url, {}, auth, self.PERSONAL_HEADERS)
                 if resp.get("success") or resp.get("code") == "0":
-                    logger.info(f"[139清理成功] 💥 卡槽 {slot} 回收站已彻底清空，空间全部真实释放！")
+                    logger.info(f"[清理个人] 💥 卡槽 {slot} 回收站已彻底清空，空间全部真实释放！")
                 else:
-                    logger.warning(f"[139清理异常] 卡槽 {slot} 清空失败: {resp}")
+                    logger.warning(f"[清理异常] 卡槽 {slot} 清空失败: {resp}")
             except Exception as e:
-                logger.error(f"[139清理报错] 卡槽 {slot}: {e}")
+                logger.error(f"[清理报错] 卡槽 {slot}: {e}")
 
     # ==========================
     # 🌟 核心：主备容灾切换逻辑 🌟
@@ -1606,7 +1588,7 @@ class Cloud139NativeEngine:
         if sha256_hash in self.url_cache:
             cached_url, exp = self.url_cache[sha256_hash]
             if now < exp:
-                logger.info(f"[139引擎] ⚡ 命中本地内存直链缓存，免查官方 API: {file_name}")
+                logger.info(f"[直链缓存] ⚡ 命中本地内存直链缓存，免查官方 API: {file_name}")
                 return cached_url
 
         cfg = read_config()
@@ -1619,12 +1601,12 @@ class Cloud139NativeEngine:
             # 首发尝试
             return self._do_get_direct_link(first_slot, sha256_hash, file_size, file_name, parent_id, now)
         except Exception as e1:
-            logger.warning(f"⚠️ [139容灾滑点] 首发账号(卡槽{first_slot})获取失败: {e1}，正在无缝切换至卡槽{second_slot}...")
+            logger.warning(f"⚠️ [云盘容灾] 首发账号(卡槽{first_slot})获取失败: {e1}，正在无缝切换至卡槽{second_slot}...")
             try:
                 # 兜底尝试
                 return self._do_get_direct_link(second_slot, sha256_hash, file_size, file_name, parent_id, now)
             except Exception as e2:
-                logger.error(f"❌ [139全线阵亡] 两个卡槽均无法承载: {e2}")
+                logger.error(f"❌ [阵亡警报] 两个卡槽均无法承载: {e2}")
                 raise Exception(f"139所有卡槽均失效！首选({first_slot})错: {e1} | 备用({second_slot})错: {e2}")
 
     def _do_get_direct_link(self, slot_idx, sha256_hash, file_size, file_name, parent_id, now):
@@ -1859,7 +1841,7 @@ def cleanup_worker(name, f_md5, fam_id, fold_id, session_key):
         expire_time = upload_cache[f_md5]['expire']
         
     expire_str = time.strftime("%H:%M:%S", time.localtime(expire_time))
-    logger.info(f"[定时销毁] 预定于 {expire_str} 执行家庭云清理任务。")
+    logger.info(f"[清理预约] 🕰️ 家庭云：预定于 {expire_str} 执行【{name}】清理任务。")
     
     while True:
         with cache_lock:
@@ -1876,9 +1858,10 @@ def cleanup_worker(name, f_md5, fam_id, fold_id, session_key):
         real_fid = next((i['fileId'] for i in items if f_md5 in i['fileName'] or i['fileName'] == name), None)
         
         if real_fid and family_client.delete_item(fam_id, real_fid, session_key):
+            logger.info(f"[移入纸篓] 🗑️ 家庭云：【{name}】已成功移入回收站。")
             time.sleep(2) 
             if family_client.empty_family_recycle(fam_id, session_key):
-                logger.info(f"[执行销毁] 家庭云文件已清除。")
+                logger.info(f"[空间释放] ♻️ 家庭云：回收站已清空，物理空间真实释放！")
     except: pass
         
     with cache_lock:
@@ -1890,7 +1873,7 @@ def personal_cleanup_worker(file_id, session_key, cookie, f_md5):
         expire_time = upload_cache[f_md5]['expire']
     
     expire_str = time.strftime("%H:%M:%S", time.localtime(expire_time))
-    logger.info(f"[定时销毁] 预定于 {expire_str} 执行个人云清理任务。")
+    logger.info(f"[清理预约] 🕰️ 个人云：预定于 {expire_str} 执行文件销毁任务。")
     
     while True:
         with cache_lock:
@@ -1903,15 +1886,124 @@ def personal_cleanup_worker(file_id, session_key, cookie, f_md5):
         
     try:
         if personal_client.delete_item(file_id, cookie):
+            logger.info(f"[移入纸篓] 🗑️ 个人云：文件已成功移入回收站。")
             time.sleep(2)
-            if personal_client.empty_personal_recycle(session_key, cookie): logger.info(f"[执行销毁] 个人云文件已清除。")
+            if personal_client.empty_personal_recycle(session_key, cookie): 
+                logger.info(f"[空间释放] ♻️ 个人云：回收站已清空，物理空间真实释放！")
     except: pass
     
     with cache_lock:
         if f_md5 in upload_cache: del upload_cache[f_md5]
 
+@app_main.route('/smart_proxy/<path:filename>', methods=['GET', 'HEAD'])
+@app_302.route('/smart_proxy/<path:filename>', methods=['GET', 'HEAD'])
+def smart_proxy(filename=""):
+    """智能流代理：真蓝光底层清洗防花屏，假蓝光(MKV)原样透传防报错"""
+    target_url = request.args.get('url')
+    start_offset = int(request.args.get('offset', 0))
+    raw_size = int(request.args.get('size', 0))
+    vid_type = request.args.get('type', 'm2ts')
+
+    if not target_url: return "Missing URL", 400
+
+    is_m2ts = (vid_type == 'm2ts')
+    if is_m2ts:
+        ts_total_size = (raw_size // 192) * 188
+        content_type = 'video/mp2t'
+    else:
+        ts_total_size = raw_size
+        content_type = 'video/x-matroska' if vid_type == 'mkv' else 'video/mp4'
+
+    range_header = request.headers.get('Range', None)
+    if not range_header:
+        req_start, req_end = 0, ts_total_size - 1
+        status_code = 200
+    else:
+        byte_range = range_header.replace('bytes=', '').split('-')
+        req_start = int(byte_range[0])
+        req_end = int(byte_range[1]) if len(byte_range) > 1 and byte_range[1] else ts_total_size - 1
+        status_code = 206
+
+    req_start = max(0, min(req_start, ts_total_size - 1))
+    req_end = max(req_start, min(req_end, ts_total_size - 1))
+    content_len = req_end - req_start + 1
+
+    if is_m2ts:
+        aligned_req_start = (req_start // 188) * 188
+        packet_start_idx = aligned_req_start // 188
+        packet_end_idx = req_end // 188
+        upstream_start = start_offset + packet_start_idx * 192
+        upstream_end = start_offset + (packet_end_idx + 1) * 192 - 1
+        skip_bytes = req_start - aligned_req_start
+    else:
+        upstream_start = start_offset + req_start
+        upstream_end = start_offset + req_end
+        skip_bytes = 0
+
+    upstream_resp = requests.get(
+        target_url, 
+        headers={'Range': f'bytes={upstream_start}-{upstream_end}', 'User-Agent': request.headers.get('User-Agent', 'Mozilla/5.0')}, 
+        stream=True, timeout=25
+    )
+
+    def generate():
+        bytes_sent = 0
+        if is_m2ts:
+            leftover = b""
+            nonlocal skip_bytes
+            for chunk in upstream_resp.iter_content(chunk_size=192 * 4096):
+                if not chunk: continue
+                chunk = leftover + chunk
+                num_packets = len(chunk) // 192
+                if num_packets > 0:
+                    valid_len = num_packets * 192
+                    block_data = chunk[:valid_len]
+                    leftover = chunk[valid_len:]
+                    
+                    # 🚀 C 语言底层极速洗流：剥除 4 字节时间戳
+                    out_bytes = b"".join(block_data[i+4:i+192] for i in range(0, valid_len, 192))
+                    
+                    if skip_bytes > 0:
+                        if len(out_bytes) > skip_bytes:
+                            out_bytes = out_bytes[skip_bytes:]
+                            skip_bytes = 0
+                        else:
+                            skip_bytes -= len(out_bytes)
+                            continue
+                    
+                    remaining = content_len - bytes_sent
+                    if len(out_bytes) > remaining: out_bytes = out_bytes[:remaining]
+                    if out_bytes:
+                        bytes_sent += len(out_bytes)
+                        yield out_bytes
+                    if bytes_sent >= content_len: break
+                else:
+                    leftover = chunk
+        else:
+            # 🚀 假 ISO（真 MKV/MP4）：绝对原样透传
+            for chunk in upstream_resp.iter_content(chunk_size=1024 * 1024):
+                if not chunk: continue
+                remaining = content_len - bytes_sent
+                if len(chunk) > remaining: chunk = chunk[:remaining]
+                if chunk:
+                    bytes_sent += len(chunk)
+                    yield chunk
+                if bytes_sent >= content_len: break
+
+    resp_headers = {
+        'Content-Type': content_type,
+        'Accept-Ranges': 'bytes',
+        'Content-Range': f'bytes {req_start}-{req_end}/{ts_total_size}',
+        'Content-Length': str(content_len),
+    }
+    return Response(generate(), status=status_code, headers=resp_headers)
+
 @app_main.route('/play', methods=['GET', 'HEAD'])
 def play():
+    global iso_meta_cache
+    global iso_scan_locks
+    global media_resolve_locks
+
     cas = request.args.get('cas')
     drive_type = request.args.get('drive', '189').strip()
     file_path_param = request.args.get('path', '').strip()
@@ -1953,87 +2045,99 @@ def play():
             cas_payload = base64.b64encode(json.dumps(j, ensure_ascii=False).encode('utf-8')).decode('utf-8')
             
             with cache_lock:
-                if f_md5 in native_link_cache:
-                    cached_url, expire_time = native_link_cache[f_md5]
-                    if time.time() < expire_time: return redirect(cached_url)
-                    else: del native_link_cache[f_md5] 
-            
-            logger.info(f"========== 🕵️‍♂️ 189原生直连(模式B) 链路日志 START ==========")
-            logger.info(f"▶️ [1] 请求原生直通: {safe_name}")
+                if f_md5 not in media_resolve_locks:
+                    media_resolve_locks[f_md5] = threading.Lock()
+                file_lock = media_resolve_locks[f_md5]
 
-            target_dir = cfg.get('network_cas_path_native', '/177/177-原生直连').rstrip('/')
-            temp_file_name = f"temp_play_{f_md5}.cas"
-            target_path = f"{target_dir}/{temp_file_name}"
+            # 🚀 并发门卫：只放第一个请求进去造物，其余的在门外乖乖等直链！
+            with file_lock:
+                with cache_lock:
+                    if f_md5 in native_link_cache:
+                        cached_url, expire_time = native_link_cache[f_md5]
+                        if time.time() < expire_time: 
+                            now_t = time.time()
+                            if now_t - print_throttle_cache.get(f"hit_{f_md5}", 0) > 10:
+                                logger.info(f"⚡ [直链缓存] 极速下发 189_native 播放地址")
+                                print_throttle_cache[f"hit_{f_md5}"] = now_t
+                            return redirect(cached_url)
+                        else: del native_link_cache[f_md5] 
             
-            put_headers = headers.copy()
-            put_headers.update({"File-Path": urllib.parse.quote(target_path, safe='/'), "Content-Length": str(len(cas_payload.encode('utf-8'))), "Content-Type": "application/octet-stream"})
-            
-            logger.info(f"☁️ [2] 虚空造物：正在向云端动态写入临时伪装凭证...")
-            put_res = requests.put(f"{ol_host}/api/fs/put", data=cas_payload.encode('utf-8'), headers=put_headers, timeout=10)
-            if put_res.status_code != 200:
-                logger.error(f"❌ [致命错误] OpenList 写入临时文件失败! 状态码: {put_res.status_code}, 响应: {put_res.text}")
-                return "写入OpenList失败", 500
-            
-            get_res = requests.post(f"{ol_host}/api/fs/get", json={"path": target_path, "password": ""}, headers=headers, timeout=10).json()
-            data_obj = get_res.get('data')
-            raw_url = data_obj.get('raw_url') if isinstance(data_obj, dict) else None
-            
-            if not raw_url:
-                logger.error(f"❌ OpenList 获取直链失败, 响应: {get_res}")
-                return "无 raw_url", 500
-            
-            logger.info(f"📥 [3] 成功获取底层 raw_url, 启动防风控嗅探...")
-            unwrap_headers = {k: v for k, v in request.headers if k.lower() not in ['host', 'accept-encoding', 'authorization']}
-            unwrap_headers['Accept-Encoding'] = 'identity'
-            if ol_token: unwrap_headers["Authorization"] = ol_token
-            if not any(k.lower() == 'range' for k in unwrap_headers): unwrap_headers["Range"] = "bytes=0-"
-            
-            try:
-                unwrap_res = requests.get(raw_url, headers=unwrap_headers, allow_redirects=False, timeout=15, stream=True)
-                status_code = unwrap_res.status_code
-                headers_dict = dict(unwrap_res.headers)
-                unwrap_res.close()
+                logger.info(f"========== 🕵️‍♂️ 189原生直连(模式B) 链路日志 START ==========")
+                logger.info(f"[原生直通] 请求原生直通: {safe_name}")
 
-                if status_code == 500:
-                    logger.warning(f"⚠️ [警告] 嗅探遇 500，去 Range 破冰...")
-                    range_key = next((k for k in unwrap_headers if k.lower() == 'range'), None)
-                    if range_key: del unwrap_headers[range_key]
+                target_dir = cfg.get('network_cas_path_native', '/177/177-原生直连').rstrip('/')
+                temp_file_name = f"temp_play_{f_md5}.cas"
+                target_path = f"{target_dir}/{temp_file_name}"
+                
+                put_headers = headers.copy()
+                put_headers.update({"File-Path": urllib.parse.quote(target_path, safe='/'), "Content-Length": str(len(cas_payload.encode('utf-8'))), "Content-Type": "application/octet-stream"})
+                
+                logger.info(f"[虚空造物] 正在向云端动态写入临时伪装凭证...")
+                put_res = requests.put(f"{ol_host}/api/fs/put", data=cas_payload.encode('utf-8'), headers=put_headers, timeout=10)
+                if put_res.status_code != 200:
+                    logger.error(f"❌ [致命错误] OpenList 写入临时文件失败! 状态码: {put_res.status_code}, 响应: {put_res.text}")
+                    return "写入OpenList失败", 500
+                
+                get_res = requests.post(f"{ol_host}/api/fs/get", json={"path": target_path, "password": ""}, headers=headers, timeout=10).json()
+                data_obj = get_res.get('data')
+                raw_url = data_obj.get('raw_url') if isinstance(data_obj, dict) else None
+                
+                if not raw_url:
+                    logger.error(f"❌ OpenList 获取直链失败, 响应: {get_res}")
+                    return "无 raw_url", 500
+                
+                logger.info(f"[获取底层] 成功获取底层 raw_url, 启动防风控嗅探...")
+                unwrap_headers = {k: v for k, v in request.headers if k.lower() not in ['host', 'accept-encoding', 'authorization']}
+                unwrap_headers['Accept-Encoding'] = 'identity'
+                if ol_token: unwrap_headers["Authorization"] = ol_token
+                if not any(k.lower() == 'range' for k in unwrap_headers): unwrap_headers["Range"] = "bytes=0-"
+                
+                try:
                     unwrap_res = requests.get(raw_url, headers=unwrap_headers, allow_redirects=False, timeout=15, stream=True)
                     status_code = unwrap_res.status_code
                     headers_dict = dict(unwrap_res.headers)
                     unwrap_res.close()
 
-                logger.info(f"🔍 [4] 嗅探完成！状态码: {status_code}")
+                    if status_code == 500:
+                        logger.warning(f"[嗅探警告] 嗅探遇 500，去 Range 破冰...")
+                        range_key = next((k for k in unwrap_headers if k.lower() == 'range'), None)
+                        if range_key: del unwrap_headers[range_key]
+                        unwrap_res = requests.get(raw_url, headers=unwrap_headers, allow_redirects=False, timeout=15, stream=True)
+                        status_code = unwrap_res.status_code
+                        headers_dict = dict(unwrap_res.headers)
+                        unwrap_res.close()
 
-                if not hasattr(delayed_delete_openlist_file, "last_trigger"): delayed_delete_openlist_file.last_trigger = {}
-                now_time = time.time()
-                if now_time - delayed_delete_openlist_file.last_trigger.get(temp_file_name, 0) > 120:
-                    delayed_delete_openlist_file.last_trigger[temp_file_name] = now_time
-                    threading.Thread(target=delayed_delete_openlist_file, args=(ol_host, ol_token, target_dir, temp_file_name, 120), daemon=True).start()
+                    logger.info(f"[嗅探完成] 状态码: {status_code}")
 
-                final_return_url = None
-                if status_code in [301, 302, 303, 307, 308]: final_return_url = headers_dict.get('Location')
-                elif status_code in [200, 206]: final_return_url = raw_url
-                    
-                if final_return_url:
-                    with cache_lock: native_link_cache[f_md5] = (final_return_url, time.time() + 7200)
-                    logger.info(f"✅ [5] 完美触发！拿到 189 官方直链！")
-                    logger.info(f"[播放放行] 节点: {urllib.parse.urlparse(final_return_url).netloc} | 地址: {truncate_url(final_return_url)}")
-                    logger.info(f"========== 🕵️‍♂️ 189原生直连(模式B) 链路日志 END ==========\n")
-                    return redirect(final_return_url)
-                else: 
-                    logger.error("❌ 原生直连获取直链异常，未找到有效的重定向地址")
+                    if not hasattr(delayed_delete_openlist_file, "last_trigger"): delayed_delete_openlist_file.last_trigger = {}
+                    now_time = time.time()
+                    if now_time - delayed_delete_openlist_file.last_trigger.get(temp_file_name, 0) > 120:
+                        delayed_delete_openlist_file.last_trigger[temp_file_name] = now_time
+                        threading.Thread(target=delayed_delete_openlist_file, args=(ol_host, ol_token, target_dir, temp_file_name, 120), daemon=True).start()
+
+                    final_return_url = None
+                    if status_code in [301, 302, 303, 307, 308]: final_return_url = headers_dict.get('Location')
+                    elif status_code in [200, 206]: final_return_url = raw_url
+                        
+                    if final_return_url:
+                        with cache_lock: native_link_cache[f_md5] = (final_return_url, time.time() + 7200)
+                        logger.info(f"[脱壳直链] 拿到 189 官方直链！")
+                        logger.info(f"[播放放行] 节点: {urllib.parse.urlparse(final_return_url).netloc} | 地址: {truncate_url(final_return_url)}")
+                        logger.info(f"========== 🕵️‍♂️ 189原生直连(模式B) 链路日志 END ==========\n")
+                        return redirect(final_return_url)
+                    else: 
+                        logger.error("❌ 原生直连获取直链异常，未找到有效的重定向地址")
+                        return "获取直链异常", 500
+
+                except Exception as unwrap_e: 
+                    logger.error(f"❌ 原生直连嗅探异常: {unwrap_e}")
                     return "获取直链异常", 500
-
-            except Exception as unwrap_e: 
-                logger.error(f"❌ 原生直连嗅探异常: {unwrap_e}")
-                return "获取直链异常", 500
         except Exception as e: 
             logger.error(f"❌ 模式B 处理全局异常: {e}")
             return "处理异常", 500
-
+            
     # ==========================================
-    # 🟠 新增：139 原生直连解析 (参数化，彻底脱离 cas 文件)
+    # 🟠 139 原生直连解析 (终极防断流 & 完美并发锁版)
     # ==========================================
     if drive_type == '139_native':
         sha256_hash = request.args.get('sha256')
@@ -2046,42 +2150,87 @@ def play():
         file_size = int(file_size)
         file_name = urllib.parse.unquote(file_name) if file_name else f"unknown_{sha256_hash[:8]}.mp4"
 
+        # 💡 针对普通视频：MKV / MP4 保持极速 302 原生直连
+        is_iso = file_name.lower().endswith('.iso')
+
+        # 🚀 1. 终极并发锁：确保针对同一个特征码的并发请求，只有一个能去执行取链和扫描！
         with cache_lock:
+            if sha256_hash not in iso_scan_locks:
+                iso_scan_locks[sha256_hash] = threading.Lock()
+            file_scan_lock = iso_scan_locks[sha256_hash]
+
+        with file_scan_lock:
+            # 🚀 2. 先查缓存（直链是否过期 + ISO偏移是否已算）
+            cached_url = None
             if sha256_hash in native_link_cache:
-                cached_url, expire_time = native_link_cache[sha256_hash]
-                if time.time() < expire_time: return redirect(cached_url)
-                else: del native_link_cache[sha256_hash]
+                url, expire_time = native_link_cache[sha256_hash]
+                if time.time() < expire_time:
+                    cached_url = url
+                else:
+                    del native_link_cache[sha256_hash]
 
-        logger.info(f"========== 🕵️‍♂️ 139 原生直连链路日志 START ==========")
-        logger.info(f"▶️ [1] 请求无状态 139 原生直通: {file_name}")
+            # 🚨 3. 活体探测 (防断流 403)
+            if cached_url:
+                try:
+                    test_r = requests.get(cached_url, headers={'Range': 'bytes=0-1', 'User-Agent': 'Mozilla/5.0'}, timeout=3)
+                    if test_r.status_code in [401, 403, 404, 400]:
+                        logger.warning(f"⚠️ [直链过期] 139 CDN 链接已失效(403)，正在重新提取新链接...")
+                        cached_url = None
+                        if sha256_hash in native_link_cache: del native_link_cache[sha256_hash]
+                        # 既然链接断了，ISO 缓存的偏移可能也会因新链接变动，一并清空
+                        if is_iso and sha256_hash in iso_meta_cache: del iso_meta_cache[sha256_hash]
+                except:
+                    cached_url = None
 
-        try:
-            dl_url = cloud139_native.get_direct_link(sha256_hash, file_size, file_name)
-            if dl_url:
-                with cache_lock: native_link_cache[sha256_hash] = (dl_url, time.time() + 7200)
-                logger.info(f"✅ [2] 完美触发！拿到 139 官方脱壳直链！")
-                logger.info(f"[播放放行] 节点: {urllib.parse.urlparse(dl_url).netloc} | 地址: {truncate_url(dl_url)}")
-                logger.info(f"========== 🕵️‍♂️ 139 原生直连链路日志 END ==========\n")
-
-                # 💡 判断：如果是普通视频（.mkv / .mp4），保持原样秒级 302 直通
-                if not file_name.lower().endswith('.iso'):
-                    return redirect(dl_url)
-
-                # 💡 针对 .iso 文件：解析内嵌 BDMV/STREAM 主正片扇区，转交虚拟切片代理
-                logger.info(f"💿 [ISO播放接管] 目标为蓝光光盘镜像，正在定位内嵌主视频流: {file_name}")
-                start_byte, v_size = get_iso_main_video_offset(dl_url)
-                logger.info(f"💿 [ISO定位成功] 主正片起始偏移: {start_byte} 字节 | 视频大小: {format_size(v_size)}")
+            # 🚀 4. 执行取链与扫盘 (仅限拿到锁的第一个请求，后面的请求全都是直接拿缓存！)
+            if not cached_url:
+                logger.info(f"=== 🕵️‍♂️ 139 连链路日志 START ===")
+                logger.info(f"[状态请求] 139 原生直通: {file_name}")
                 
-                # 引导 Emby / 播放器接入你已写好的 iso_stream_proxy 流端点
-                proxy_route = f"/stream/iso_proxy?url={urllib.parse.quote(dl_url)}&offset={start_byte}&size={v_size}"
-                return redirect(proxy_route)
+                try:
+                    dl_url = cloud139_native.get_direct_link(sha256_hash, file_size, file_name)
+                    if dl_url:
+                        native_link_cache[sha256_hash] = (dl_url, time.time() + 7200)
+                        cached_url = dl_url
+                        logger.info(f"[脱壳直链] 拿到全新 139 官方脱壳直链！")
+                        logger.info(f"[播放放行] 节点: {urllib.parse.urlparse(cached_url).netloc} | 地址: {truncate_url(cached_url)}")
+                        logger.info(f"=== 🕵️‍♂️ 139链路日志 END ===\n")
+                    else:
+                        logger.error("❌ 139 直连获取直链异常，链接为空")
+                        return "获取直链异常", 500
+                except Exception as e:
+                    logger.error(f"❌ 139 原生直连异常: {e}")
+                    return str(e), 500
+            
+            # --- 以下是 ISO 专属处理 ---
+            if is_iso:
+                if sha256_hash in iso_meta_cache:
+                    start_byte, v_size, vid_type = iso_meta_cache[sha256_hash]
+                    now_t = time.time()
+                    if now_t - print_throttle_cache.get(f"iso_cache_{sha256_hash}", 0) > 10:
+                        logger.info(f"[ISO缓存] 极速提取内嵌类型: {vid_type} | 偏移: {start_byte}")
+                        print_throttle_cache[f"iso_cache_{sha256_hash}"] = now_t
+                else:
+                    logger.info(f"[防和谐扫] 正在透视 ISO 内部真实文件结构: {file_name}")
+                    start_byte, v_size, vid_type = get_iso_main_video_offset(cached_url, file_size)
+                    if v_size > 0:
+                        iso_meta_cache[sha256_hash] = (start_byte, v_size, vid_type)
+                    logger.info(f"[透视成功] 偏移位置: {start_byte} | 视频大小: {format_size(v_size)} | 内部类型: {vid_type}")
 
-            else:
-                logger.error("❌ 139 直连获取直链异常，链接为空")
-                return "获取直链异常", 500
-        except Exception as e:
-            logger.error(f"❌ 139 原生直连异常: {e}")
-            return str(e), 500
+        # === 离开锁区域，各自放行 ===
+        if not is_iso:
+            return redirect(cached_url, code=302)
+
+        if vid_type == "unknown":
+            logger.warning(f"[伪装放行] 无法识别 ISO 内嵌格式，尝试强制原生直链放行...")
+            return redirect(cached_url, code=302)
+
+        lan_ip = get_lan_server_ip(request)
+        host_prefix = f"http://{lan_ip}:5001" if lan_ip else cfg.get('server_host', '').rstrip('/')
+        
+        ext = ".ts" if vid_type == "m2ts" else f".{vid_type}"
+        proxy_route = f"{host_prefix}/smart_proxy/play{ext}?url={urllib.parse.quote(cached_url)}&offset={start_byte}&size={v_size}&type={vid_type}"
+        return redirect(proxy_route, code=302)
 
     # ==========================================
     # 🎬 常规媒体直通 / 🟠 移动云 139 通用跳转 (老模式)
@@ -2090,86 +2239,98 @@ def play():
         if not file_path_param: return "❌ 请求缺少 path 参数", 400
 
         with cache_lock:
-            if file_path_param in native_link_cache:
-                cached_url, expire_time = native_link_cache[file_path_param]
-                if time.time() < expire_time: return redirect(cached_url)
-                else: del native_link_cache[file_path_param] 
+            if file_path_param not in media_resolve_locks:
+                media_resolve_locks[file_path_param] = threading.Lock()
+            file_lock = media_resolve_locks[file_path_param]
 
-        is_139 = (drive_type == '139')
-        ol_host = cfg.get('openlist_host_139' if is_139 else 'openlist_host', 'http://127.0.0.1:5244').rstrip('/')
-        ol_token = cfg.get('openlist_token_139' if is_139 else 'openlist_token', '')
-        headers = {"Authorization": ol_token} if ol_token else {}
-        
-        log_tag = "139云盘" if is_139 else "常规真视频"
-        logger.info(f"========== 🕵️‍♂️ {log_tag} 链路日志 START ==========")
-        logger.info(f"▶️ [1] 触发请求: {file_path_param}")
+        # 🚀 并发门卫：让第一个请求去 OpenList 走流程，其余的直接白嫖！
+        with file_lock:
+            with cache_lock:
+                if file_path_param in native_link_cache:
+                    cached_url, expire_time = native_link_cache[file_path_param]
+                    if time.time() < expire_time: 
+                        now_t = time.time()
+                        if now_t - print_throttle_cache.get(f"hit_{file_path_param}", 0) > 10:
+                            logger.info(f"[直链缓存] 极速下发常规媒体播放地址")
+                            print_throttle_cache[f"hit_{file_path_param}"] = now_t
+                        return redirect(cached_url)
+                    else: del native_link_cache[file_path_param] 
 
-        try:
-            get_res = requests.post(f"{ol_host}/api/fs/get", json={"path": file_path_param, "password": ""}, headers=headers, timeout=15)
-            if get_res.status_code == 200:
-                data_obj = get_res.json().get('data')
-                raw_url = data_obj.get('raw_url') if isinstance(data_obj, dict) else None
-                if raw_url:
-                    logger.info(f"📥 [2] 成功获取底层 raw_url...")
-                    
-                    unwrap_headers = {
-                        "User-Agent": request.headers.get('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'),
-                        "Accept-Encoding": "identity"
-                    }
-                    if ol_token and ol_host in raw_url:
-                        unwrap_headers["Authorization"] = ol_token
+            is_139 = (drive_type == '139')
+            ol_host = cfg.get('openlist_host_139' if is_139 else 'openlist_host', 'http://127.0.0.1:5244').rstrip('/')
+            ol_token = cfg.get('openlist_token_139' if is_139 else 'openlist_token', '')
+            headers = {"Authorization": ol_token} if ol_token else {}
+            
+            log_tag = "139云盘" if is_139 else "常规真视频"
+            logger.info(f"========== 🕵️‍♂️ {log_tag} 链路日志 START ==========")
+            logger.info(f"[状态请求] 触发请求: {file_path_param}")
+
+            try:
+                get_res = requests.post(f"{ol_host}/api/fs/get", json={"path": file_path_param, "password": ""}, headers=headers, timeout=15)
+                if get_res.status_code == 200:
+                    data_obj = get_res.json().get('data')
+                    raw_url = data_obj.get('raw_url') if isinstance(data_obj, dict) else None
+                    if raw_url:
+                        logger.info(f"[获取底层] 成功获取底层 raw_url...")
                         
-                    client_range = request.headers.get('Range')
-                    unwrap_headers["Range"] = client_range if client_range else "bytes=0-"
-                    
-                    try:
-                        unwrap_res = requests.get(raw_url, headers=unwrap_headers, allow_redirects=False, timeout=15, stream=True)
-                        status_code = unwrap_res.status_code
-                        headers_dict = dict(unwrap_res.headers)
-                        unwrap_res.close()
-
-                        if status_code == 500:
-                            range_key = next((k for k in unwrap_headers if k.lower() == 'range'), None)
-                            if range_key: del unwrap_headers[range_key]
+                        unwrap_headers = {
+                            "User-Agent": request.headers.get('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'),
+                            "Accept-Encoding": "identity"
+                        }
+                        if ol_token and ol_host in raw_url:
+                            unwrap_headers["Authorization"] = ol_token
+                            
+                        client_range = request.headers.get('Range')
+                        unwrap_headers["Range"] = client_range if client_range else "bytes=0-"
+                        
+                        try:
                             unwrap_res = requests.get(raw_url, headers=unwrap_headers, allow_redirects=False, timeout=15, stream=True)
                             status_code = unwrap_res.status_code
                             headers_dict = dict(unwrap_res.headers)
                             unwrap_res.close()
-                        
-                        logger.info(f"🔍 [3] 嗅探完成！状态码: {status_code}")
-                        
-                        if status_code in [301, 302, 303, 307, 308]:
-                            final_cdn_url = headers_dict.get('Location')
-                            if final_cdn_url:
+
+                            if status_code == 500:
+                                range_key = next((k for k in unwrap_headers if k.lower() == 'range'), None)
+                                if range_key: del unwrap_headers[range_key]
+                                unwrap_res = requests.get(raw_url, headers=unwrap_headers, allow_redirects=False, timeout=15, stream=True)
+                                status_code = unwrap_res.status_code
+                                headers_dict = dict(unwrap_res.headers)
+                                unwrap_res.close()
+                            
+                            logger.info(f"[嗅探完成] 状态码: {status_code}")
+                            
+                            if status_code in [301, 302, 303, 307, 308]:
+                                final_cdn_url = headers_dict.get('Location')
+                                if final_cdn_url:
+                                    expire_sec = int(cfg.get('yun139_link_expire', 7200)) if is_139 else int(cfg.get('link_expire', 120))
+                                    with cache_lock: native_link_cache[file_path_param] = (final_cdn_url, time.time() + expire_sec)
+                                    logger.info(f"[播放放行] 节点: {urllib.parse.urlparse(final_cdn_url).netloc} | 地址: {truncate_url(final_cdn_url)}")
+                                    logger.info(f"========== 🕵️‍♂️ {log_tag} 链路日志 END ==========\n")
+                                    return redirect(final_cdn_url)
+                                else: 
+                                    logger.error(f"❌ {log_tag} 缺失直链跳转地址")
+                                    return "缺失直链", 500
+                            elif status_code in [200, 206]:
                                 expire_sec = int(cfg.get('yun139_link_expire', 7200)) if is_139 else int(cfg.get('link_expire', 120))
-                                with cache_lock: native_link_cache[file_path_param] = (final_cdn_url, time.time() + expire_sec)
-                                logger.info(f"[播放放行] 节点: {urllib.parse.urlparse(final_cdn_url).netloc} | 地址: {truncate_url(final_cdn_url)}")
+                                with cache_lock: native_link_cache[file_path_param] = (raw_url, time.time() + expire_sec)
+                                logger.info(f"[播放放行] 节点: {urllib.parse.urlparse(raw_url).netloc} | 地址: {truncate_url(raw_url)}")
                                 logger.info(f"========== 🕵️‍♂️ {log_tag} 链路日志 END ==========\n")
-                                return redirect(final_cdn_url)
+                                return redirect(raw_url)
                             else: 
-                                logger.error(f"❌ {log_tag} 缺失直链跳转地址")
-                                return "缺失直链", 500
-                        elif status_code in [200, 206]:
-                            expire_sec = int(cfg.get('yun139_link_expire', 7200)) if is_139 else int(cfg.get('link_expire', 120))
-                            with cache_lock: native_link_cache[file_path_param] = (raw_url, time.time() + expire_sec)
-                            logger.info(f"[播放放行] 节点: {urllib.parse.urlparse(raw_url).netloc} | 地址: {truncate_url(raw_url)}")
-                            logger.info(f"========== 🕵️‍♂️ {log_tag} 链路日志 END ==========\n")
-                            return redirect(raw_url)
-                        else: 
-                            logger.error(f"❌ {log_tag} 状态码异常: {status_code}")
-                            return "状态码异常", 500
-                    except Exception as unwrap_e: 
-                        logger.error(f"❌ {log_tag} 获取直链嗅探异常: {unwrap_e}")
-                        return "获取直链异常", 500
+                                logger.error(f"❌ {log_tag} 状态码异常: {status_code}")
+                                return "状态码异常", 500
+                        except Exception as unwrap_e: 
+                            logger.error(f"❌ {log_tag} 获取直链嗅探异常: {unwrap_e}")
+                            return "获取直链异常", 500
+                    else: 
+                        logger.error(f"❌ {log_tag} 接口返回数据中没有 raw_url")
+                        return "无 raw_url", 500
                 else: 
-                    logger.error(f"❌ {log_tag} 接口返回数据中没有 raw_url")
-                    return "无 raw_url", 500
-            else: 
-                logger.error(f"❌ {log_tag} 接口破冰失败，状态码: {get_res.status_code}")
-                return f"破冰失败", 500
-        except Exception as e: 
-            logger.error(f"❌ {log_tag} 接口通信全局异常: {e}")
-            return "接口通信异常", 500
+                    logger.error(f"❌ {log_tag} 接口破冰失败，状态码: {get_res.status_code}")
+                    return f"破冰失败", 500
+            except Exception as e: 
+                logger.error(f"❌ {log_tag} 接口通信全局异常: {e}")
+                return "接口通信异常", 500
 
     # ==========================================
     # 🔵 模式 A：四核统一矩阵攻击队列 (容灾滑点)
@@ -2323,7 +2484,7 @@ def play():
                         if not target_sk: continue
 
                     log_tag = f"卡槽{s_idx+1}({'个人' if c_type=='personal' else '家庭'})"
-                    logger.info(f"[{log_tag}调度] 开始处理: {safe_name}")
+                    logger.info(f"[{log_tag}开始调度] 开始处理: {safe_name}")
 
                     try:
                         if c_type == 'personal':
@@ -2349,7 +2510,6 @@ def play():
                                 upload_cache[f_md5]['download_url'] = download_url
                                 upload_cache[f_md5]['url_time'] = current_time
                                 upload_cache[f_md5]['is_personal'] = (c_type == 'personal')
-
                             if c_type == 'personal': threading.Thread(target=personal_cleanup_worker, args=(real_fid, target_sk, target_cookie, f_md5), daemon=True).start()
                             else: threading.Thread(target=cleanup_worker, args=(safe_name, f_md5, fam_id, fam_fd, target_sk), daemon=True).start()
                             break
@@ -2537,8 +2697,9 @@ def generate_strm_from_openlist_to_local(target_path=None, drive_type='189', fil
                     os.makedirs(target_dir_b, exist_ok=True)
                     strm_path_b = os.path.join(target_dir_b, f"{base_name}-139B.strm")
                     if not os.path.exists(strm_path_b):
-                        strm_data_b = f"{cfg['server_host']}/play?drive=139&path={urllib.parse.quote(full_path)}&show={urllib.parse.quote(show_name)}"
-                        with open(strm_path_b, "w", encoding="utf-8") as f: f.write(strm_data_b)
+                        fake_net_path = f"{net_cas_path_139}/{rel_path}".replace('\\', '/')
+                        with open(strm_path_b, "w", encoding="utf-8") as f_old:
+                            f_old.write(f"{cfg['server_host']}/play?drive=139&path={urllib.parse.quote(fake_net_path)}&show={urllib.parse.quote(show_name)}")
                         count += 1
                         
                 # 🎯 【139 模式 A】: 官方原生直连 -> -139A.strm
@@ -2715,49 +2876,6 @@ def api_sync_local():
     threading.Thread(target=local_cas_sync_worker, daemon=True).start()
     return "✅ 本地扫描指令下发成功", 200
 
-@app_main.route('/stream/iso_proxy', methods=['GET'])
-def iso_stream_proxy():
-    target_url = request.args.get('url')
-    start_offset = int(request.args.get('offset', 0))
-    video_size = int(request.args.get('size', 0))
-
-    range_header = request.headers.get('Range', None)
-    if not range_header:
-        # 无 Range 请求默认提供前 1MB
-        req_start = 0
-        req_end = min(1024 * 1024 - 1, video_size - 1)
-        status_code = 200
-    else:
-        # 解析客户端 Range: bytes=start-end
-        byte_range = range_header.replace('bytes=', '').split('-')
-        req_start = int(byte_range[0])
-        req_end = int(byte_range[1]) if byte_range[1] else video_size - 1
-        status_code = 206
-
-    # 将客户端针对视频的 Range 映射到 ISO 镜像内的绝对物理字节位置
-    real_start = start_offset + req_start
-    real_end = start_offset + req_end
-
-    upstream_resp = requests.get(
-        target_url,
-        headers={'Range': f'bytes={real_start}-{real_end}'},
-        stream=True,
-        timeout=20
-    )
-
-    def generate():
-        for chunk in upstream_resp.iter_content(chunk_size=64 * 1024):
-            if chunk:
-                yield chunk
-
-    response_headers = {
-        'Content-Type': 'video/mp2t',
-        'Accept-Ranges': 'bytes',
-        'Content-Range': f'bytes {req_start}-{req_end}/{video_size}',
-        'Content-Length': str(req_end - req_start + 1),
-    }
-    return Response(generate(), status=status_code, headers=response_headers)
-
 @app_main.route('/api/make_strm', methods=['POST'])
 def api_make_strm():
     try:
@@ -2786,12 +2904,6 @@ def api_make_strm():
 
         # =======================================================
         # 👑 绝对统一：生成文件后缀标准
-        # 外部明确传参(单模式) -> 绝对服从 strm_name (一字不改！)
-        # 外部批量生成(both双轨) -> 按统一标准附加后缀以防冲突：
-        #   - 189 模式 A (官方直传) -> {base_name}.strm
-        #   - 189 模式 B (代理中转) -> {base_name}-189B.strm
-        #   - 139 模式 A (官方直通) -> {base_name}-139A.strm
-        #   - 139 模式 B (代理中转) -> {base_name}-139B.strm
         # =======================================================
 
         # 🎯 【139 模式 A】: 官方原生直连 (139_native)
@@ -2801,7 +2913,6 @@ def api_make_strm():
             c_name = cas_data.get('name') or cas_data.get('fileName') or base_name
             
             if c_sha and str(c_size):
-                # 只有传 both 才会加后缀，否则绝对服从外部传来的 strm_name
                 out_name = f"{base_name}-139A.strm" if 'both' in mode else strm_name
                 strm_path = os.path.join(target_local_dir, out_name)
                 strm_data = f"{cfg['server_host']}/play?drive=139_native&sha256={c_sha}&size={c_size}&name={urllib.parse.quote(c_name)}&show={urllib.parse.quote(show_name)}"
@@ -2834,9 +2945,7 @@ def api_make_strm():
             strm_data = f"{cfg['server_host']}/play?drive=189_native&cas={urllib.parse.quote(cas_content)}&show={urllib.parse.quote(show_name)}"
             with open(strm_path, "w", encoding="utf-8") as f: f.write(strm_data)
 
-        # 👇 只需要在这里增加这一行打印代码 👇
         logger.info(f"[接口调用] 成功生成 STRM: {strm_name} (策略: {mode})")
-
         return jsonify({"code": 200, "msg": "success"}), 200
         
     except Exception as e: 
@@ -2874,6 +2983,13 @@ def get_emby_item_path(item_id, media_source_id=None):
 @app_302.route('/', defaults={'path': ''}, methods=['GET', 'HEAD', 'POST', 'OPTIONS'])
 @app_302.route('/<path:full_path>', methods=['GET', 'HEAD', 'POST', 'OPTIONS'])
 def catch_all_for_emby(full_path):
+    # 🚨 终极死锁切断：交给新的 smart_proxy，绝不串台死循环！
+    if request.path.startswith('/smart_proxy/'):
+        filename = request.path.split('/smart_proxy/')[-1]
+        return smart_proxy(filename)
+    if request.path.startswith('/play'):
+        return play()
+
     match = re.search(r'/(?:videos|Items)/(\d+)/(?:stream|original|Download)', request.path, re.IGNORECASE)
     if not match: return redirect(f"{EMBY_HOST}{request.full_path}", code=302)
     
@@ -2916,10 +3032,9 @@ def catch_all_for_emby(full_path):
                 if lan_ip: strm_url = f"http://{lan_ip}:5000{path_str}?{new_query}"
                 else: strm_url = f"{parsed_url.scheme}://{parsed_url.netloc}{path_str}?{new_query}"
             
-            if lan_ip: logger.info(f"[网络嗅探] 识别为内网播放，下发路由重定向")
-            
             now_t = time.time()
             if now_t - print_throttle_cache.get(f"hijack_{item_id}", 0) > 15:
+                if lan_ip: logger.info(f"[网络嗅探] 识别为内网播放，下发路由重定向")
                 logger.info(f"[劫持放行] {version} -> {file_name}")
                 print_throttle_cache[f"hijack_{item_id}"] = now_t
                 

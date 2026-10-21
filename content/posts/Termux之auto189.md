@@ -1200,8 +1200,10 @@ def process_139_pipeline():
         logger.info(f"💥 [139加工] 流水线闭环，销毁源视频: {orig_name}")
         requests.post(f"{API_5255_URL}/api/fs/remove", json={"dir": src_dir, "names": [orig_name]}, headers=headers_139).close()
 
-    try: requests.post(f"{API_5255_URL}/api/task/copy/clear_done", headers={"Authorization": headers_139["Authorization"]}, timeout=5).close()
-    except: pass
+    logger.info("🧹 [139加工] 正在彻底清理 OpenList 后台已完成的任务缓存...")
+    for t_type in ["copy", "move"]:
+        try: requests.post(f"{API_5255_URL}/api/task/{t_type}/clear_done", headers={"Authorization": headers_139["Authorization"]}, timeout=5).close()
+        except: pass
     
     if strm_dirs_to_refresh:
         try:
@@ -1516,6 +1518,12 @@ def process_cas_via_olist_api(specific_dir=None):
                             strm_ledger_changed = True
                         else:
                             if not is_exists: updated_paths.add(base_notify_path)
+
+    # 💥 核心修复：每次收割完，强制清空 OpenList 后台堆积的复制和移动任务，释放内存！
+    logger.info("🧹 [系统] 正在清理 189/5244 后台已完成的搬运任务缓存...")
+    for t_type in ["copy", "move"]:
+        try: requests.post(f"{API_5244_URL}/api/task/{t_type}/clear_done", headers=headers, timeout=5).close()
+        except: pass
 
     if strm_ledger_changed:
         save_json(strm_ledger_file, strm_ledger)

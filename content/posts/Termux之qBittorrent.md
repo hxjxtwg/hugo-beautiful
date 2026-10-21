@@ -203,6 +203,22 @@ pm2 env 5
 
 * 如果里面依然找不到，说明刚才的注入没生效。你就把刚才那三步（先 export，再 pm2 restart auto189 --update-env，最后 pm2 save）连着敲一遍，接着再用 pm2 env 5 就能亲眼看到它了。
 
+### 更新脚本为超流切换帐号或家庭云
+
+1. 查看账本里写了啥：
+在底部的终端里输入并回车：
+```
+cat $PREFIX/tmp/189_mount_status.json
+```
+如果今天发生过超限切换，它会打印出类似 {"date": "2026-10-15", "index": 1} 这样的内容。如果跨天被清空了或者今天还没爆过，可能就提示找不到文件。
+
+2. 强制撕毁账本（手动重置回主号）：
+如果你改了天翼的密码，或者想强行测试主号，直接输入这行命令把它删掉就行：
+```
+rm $PREFIX/tmp/189_mount_status.json
+```
+所以别慌，它是在后台的系统目录里默默运转的“幽灵账本”，不跟你日常的代码文件抢地盘！
+
 ### 三、qbt_delivery.py
 
 ```
@@ -668,13 +684,20 @@ import datetime  # 💡 [新增] 引入日期时间处理模块
 # =================================================================
 # [天翼主盘 189 专属网关]
 OLIST_URL = "http://127.0.0.1:5244"
-OLIST_TOKEN = "openlist-4ba3bee7-2112-42bd-92e7-6f3a7c67a83a7CIOwhmfYpB9Hi8HX1NYfRJUn1iWvyPnyuoOUPC5Fqn5FGxTwNuKHwRSYCT6OZC2"
+OLIST_TOKEN = "openlist-143ed2f6-2c06-493b-8d80-8a8635e961f1RoiLWps29GzW7HgsoabUTbFxXPQOU6yLJegmOSSYYTpo9blJfOCWHEs7PagUNyFP"
+
+# 💡 [新增] 天翼备用挂载点阵列 (如果TG主目录超限，依次无缝切换到这些目录)
+# 你可以在这里填入无限个家庭云、其他个人云的挂载名
+FALLBACK_MOUNTS = [
+    "/f135/189cas",  # 备胎 1 号通道 (家庭云或其他号)
+    "/177/189cas"  # 如果有更多备胎，可以取消注释继续往下加
+]
 
 # [移动备盘 139 专属网关]
 OLIST_139_URL = "http://127.0.0.1:5255"
-OLIST_139_TOKEN = "openlist-335c8982-5c97-40b4-824e-117636cfc94eBHbD3HZOWdNeMUWOiXFUxJGtWXOh0P1jxqH2jAInjHvF5umwVU4If8ifEnrIkjMl"
+OLIST_139_TOKEN = "openlist-61cf4ec0-9597-4c64-8cb2-21370d6d8584xInQYVvb0IaH4tIDe12R0AsHavCBSfBRuGHLNKLD64uYt1TxIPKvPy1NF3otDFsA"
 
-# 天翼主盘物理归档特征码存放地
+# 天翼主盘物理归档特征码存放地 (不管云端切到哪个备胎，本地特征码永远统一存这里防重复！)
 STAGING_BASE_DIR = "/storage/emulated/0/Download/189cas"
 
 # 移动备盘物理归档特征码存放地
@@ -769,7 +792,7 @@ def extract_pure_episode(text, drama_anchor=None):
 
 async def fetch_tmdb_year(title):
     if not TMDB_API_KEY: return time.strftime("%Y")
-    clean_q = re.sub(r'S\d+$|\s+\d+$', '', title).strip()
+    clean_q = re.sub(r'S\d+$\vert{}\s+\d+$', '', title).strip()
     url = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&language=zh-CN&query={quote(clean_q)}&page=1"
     try:
         async with httpx.AsyncClient(timeout=5.0, proxy=PROXY_URL if PROXY_URL else None) as client:
@@ -845,11 +868,10 @@ async def main():
         is_wash_file = True
         raw_tag = raw_tag.replace("洗码", "")
 
-    # 💡 [新增] 1.8 拦截避峰调度指令 (延时=2 或 定时=03:00)
+    # 1.8 拦截避峰调度指令
     delay_seconds = 0
     delay_reason = ""
     
-    # 匹配: 延时=X (支持小数，如 延时=1.5)
     delay_match = re.search(r'延时[=：:](\d+(?:\.\d+)?)', raw_tag)
     if delay_match:
         hours = float(delay_match.group(1))
@@ -857,7 +879,6 @@ async def main():
         delay_reason = f"延时 {hours} 小时"
         raw_tag = raw_tag.replace(delay_match.group(0), "")
         
-    # 匹配: 定时=HH:MM (如 定时=02:30)
     schedule_match = re.search(r'定时[=：:](\d{1,2}:\d{2})', raw_tag)
     if schedule_match:
         time_str = schedule_match.group(1)
@@ -865,7 +886,6 @@ async def main():
         try:
             target_time = datetime.datetime.strptime(time_str, "%H:%M").time()
             target_dt = now.replace(hour=target_time.hour, minute=target_time.minute, second=0, microsecond=0)
-            # 如果设定的时间已经过了（比如现在晚上10点，你设了凌晨2点），就推算到明天的这个时间
             if target_dt <= now:
                 target_dt += datetime.timedelta(days=1)
             delay_seconds = (target_dt - now).total_seconds()
@@ -880,7 +900,7 @@ async def main():
         custom_drama_name = name_match.group(1).strip()
         raw_tag = raw_tag.replace(name_match.group(0), "")
 
-    # 💡 [新增] 2.5 拦截并提取强制年份 (支持 年份=2024)
+    # 2.5 拦截并提取强制年份
     custom_year = ""
     year_match_tag = re.search(r'(?:年份|年)[=：:](19\d{2}|20\d{2})', raw_tag)
     if year_match_tag:
@@ -916,7 +936,7 @@ async def main():
     if custom_drama_name:
         pure_drama_name = custom_drama_name
     else:
-        cleaned_search = re.sub(r'\[剧集\]|【剧集】|\[更新\]|【更新】|\[高清.*?\]|【高清制作.*?】', '', torrent_name)
+        cleaned_search = re.sub(r'[剧集]|【剧集】|[更新]|【更新】|\[高清.*?\]|【高清制作.*?】', '', torrent_name)
         cn_match = re.search(r'([\u4e00-\u9fa5][\u4e00-\u9fa50-9：·！，—、\s]*)', cleaned_search)
         
         if cn_match and cn_match.group(1).strip():
@@ -931,10 +951,9 @@ async def main():
     folder_season = int(m_season.group(1)) if m_season else 1
     
     # ========================================================
-    # 🎯 年份提取：强制标签 > 正则提取 > TMDB 瞎猜
+    # 🎯 年份提取与挂载点矩阵切换计算
     # ========================================================
     if custom_year:
-        # 【神级截胡】如果你在标签写了 年份=2024，直接无视其他所有规则！
         year = custom_year
     else:
         year_match = re.search(r'\b(19\d{2}|20\d{2})\b', torrent_name)
@@ -943,8 +962,32 @@ async def main():
         else:
             year = await fetch_tmdb_year(pure_drama_name)
         
-    current_mount = get_mount_root()
     is_movie = "电影" in category or category in ["演唱会", "纪录片", "综艺"]
+
+    # 💡 [新增] 挂载点矩阵系统 (动态合并 TG 首选配置 + 备用阵列)
+    tg_primary_mount = get_mount_root()
+    CLOUD_MOUNTS = [tg_primary_mount] + FALLBACK_MOUNTS
+    
+    current_mount_index = 0
+    today_str = datetime.date.today().isoformat()
+    status_file = os.path.join(os.environ.get("PREFIX", "/data/data/com.termux/files/usr"), "tmp", "189_mount_status.json")
+
+    # 跨天记忆恢复：检查今天是否已经切过备胎了
+    if os.path.exists(status_file):
+        try:
+            with open(status_file, 'r') as f:
+                status = json.load(f)
+                if status.get("date") == today_str:
+                    current_mount_index = status.get("index", 0)
+        except: pass
+
+    # 防御性收缩越界
+    if current_mount_index >= len(CLOUD_MOUNTS):
+        current_mount_index = 0
+
+    current_mount = CLOUD_MOUNTS[current_mount_index]
+    if current_mount_index > 0:
+        await notify_steward_log(f"🔄 [矩阵调度] 前置通道今日已满，本任务直接继承路由至备用通道: {current_mount}")
 
     # ========================================================
     # 📁 剧名文件夹标准化决策 (完美拼接)
@@ -956,7 +999,6 @@ async def main():
         
     base_folder = f"{clean_base} ({year})" if year else clean_base
     
-    # 拼装最终文件夹名：如果除了指令和剧名，还有剩下的标签 (比如 HDR)，追加在最后面！
     if remaining_tags:
         folder_name = f"{base_folder} {remaining_tags}"
     else:
@@ -969,7 +1011,7 @@ async def main():
         sleep_hours = int(delay_seconds // 3600)
         sleep_mins = int((delay_seconds % 3600) // 60)
         await notify_steward_log(f"⏰ [避峰调度] `{folder_name}` 触发闲时策略 ({delay_reason})，脚本进入深度休眠，将在 {sleep_hours}小时{sleep_mins}分钟 后唤醒...")
-        await asyncio.sleep(delay_seconds)  # 💡 挂起进程，0 CPU消耗
+        await asyncio.sleep(delay_seconds) 
         await notify_steward_log(f"🌅 [调度唤醒] `{folder_name}` 休眠结束，正式加入上传队列！")
 
     # ========================================================
@@ -980,18 +1022,45 @@ async def main():
     
     lock_fd = open(global_lock_path, "w")
     try:
-        # 尝试获取全局锁
         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except (BlockingIOError, IOError, OSError):
-        # 如果锁已经被别人占了，就乖乖排队
         await notify_steward_log(f"⏳ [全局排队] 当前已有其他视频占用上传通道，新任务 `{folder_name}` 进入静默等候...")
-        # 死等，直到上一个任务传完释放锁
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
         await notify_steward_log(f"🟢 [排队放行] 全局通道已空闲，新任务 `{folder_name}` 正式接管上传！")
 
+    # ========================================================
+    # 💡💡💡 核心修改：拿到锁之后，才开始获取真实的日期和网关！ 💡💡💡
+    # ========================================================
+    tg_primary_mount = get_mount_root()
+    CLOUD_MOUNTS = [tg_primary_mount] + FALLBACK_MOUNTS
+    
+    current_mount_index = 0
+    # ⚠️ 这里获取到的 today_str，是拿到排队锁这一秒的真实时间！绝不会发生跨天错乱！
+    today_str = datetime.date.today().isoformat()
+    status_file = os.path.join(os.environ.get("PREFIX", "/data/data/com.termux/files/usr"), "tmp", "189_mount_status.json")
+
+    # 跨天记忆恢复：检查今天是否已经切过备胎了
+    if os.path.exists(status_file):
+        try:
+            with open(status_file, 'r') as f:
+                status = json.load(f)
+                if status.get("date") == today_str:
+                    current_mount_index = status.get("index", 0)
+        except: pass
+
+    # 防御性收缩越界
+    if current_mount_index >= len(CLOUD_MOUNTS):
+        current_mount_index = 0
+
+    current_mount = CLOUD_MOUNTS[current_mount_index]
+    if current_mount_index > 0:
+        await notify_steward_log(f"🔄 [矩阵调度] 经实时核验前置通道已满，本任务直接路由至备用通道: {current_mount}")
+
+    # ========================================================
     # 3. 扫描捕获视频实体文件和外挂字幕
+    # ========================================================
     video_tasks = []
-    subtitle_tasks = [] # 💡 新增：字幕捕获队列
+    subtitle_tasks = [] 
     
     if os.path.isdir(save_path):
         for root, dirs, files in os.walk(save_path):
@@ -999,7 +1068,7 @@ async def main():
                 ext = f.lower()
                 if ext.endswith(('.mp4', '.mkv', '.ts', '.flv')):
                     video_tasks.append((os.path.join(root, f), f))
-                elif ext.endswith(('.srt', '.ass', '.ssa', '.sup', '.vtt')): # 💡 捕获主流字幕格式
+                elif ext.endswith(('.srt', '.ass', '.ssa', '.sup', '.vtt')): 
                     subtitle_tasks.append((os.path.join(root, f), f))
         video_tasks.sort(key=lambda x: x[1])
     else:
@@ -1014,7 +1083,6 @@ async def main():
         for sub_path_item, sub_name in subtitle_tasks:
             sub_name_clean = sub_name.replace("'", "")
             
-            # 推算它应该进哪个目录 (复用前面的剧名季数逻辑)
             ep_num = extract_pure_episode(sub_name_clean, drama_anchor=pure_drama_name)
             if ep_num is None:
                 ep_num = extract_pure_episode(torrent_name, drama_anchor=pure_drama_name)
@@ -1024,13 +1092,11 @@ async def main():
             else:
                 target_dir = f"{current_mount}/{category}/{folder_name}/Season {folder_season}"
                 
-            # 1. 拷入 189cas 的对应本地目录
             sub_path_189 = target_dir.replace(current_mount, "", 1)
             local_cas_dir_189 = f"{STAGING_BASE_DIR}{sub_path_189}".replace("//", "/")
             os.makedirs(local_cas_dir_189, exist_ok=True)
             shutil.copy2(sub_path_item, os.path.join(local_cas_dir_189, sub_name_clean))
             
-            # 2. 如果是双传，也拷入 139cas 的对应本地目录
             if is_double_upload:
                 m_target_dir = f"{MOBILE_MOUNT_ROOT}/{category}/{folder_name}" if is_movie else f"{MOBILE_MOUNT_ROOT}/{category}/{folder_name}/Season {folder_season}"
                 m_sub_path = m_target_dir.replace(MOBILE_MOUNT_ROOT, "", 1).lstrip("/")
@@ -1055,9 +1121,9 @@ async def main():
         total_bytes = os.path.getsize(actual_video_path)
         
         # ========================================================
-        # 🛡️ 防虚假文件过滤网：拦截 qBT 刚创建的 0 字节空壳或残次品
+        # 🛡️ 防虚假文件过滤网
         # ========================================================
-        if total_bytes < 1024 * 1024: # 如果视频文件小于 1MB (1024 * 1024 字节)
+        if total_bytes < 1024 * 1024: 
             await notify_steward_log(f"⚠️ [空壳拦截] `{actual_video_name}` 体积极度异常 ({total_bytes} bytes)，疑似下载器预分配的空壳，跳过上传！", level="WARNING")
             continue
             
@@ -1087,7 +1153,6 @@ async def main():
             await trigger_189_local_script(final_cas_path) 
             continue
 
-        # 💡 [新增：189 洗码引擎]
         if is_wash_file:
             junk_data = ''.join(random.choices(string.ascii_letters + string.digits, k=16)).encode('utf-8')
             target_total_bytes = total_bytes + len(junk_data)
@@ -1095,13 +1160,13 @@ async def main():
         else:
             junk_data = b''
             target_total_bytes = total_bytes
-            await notify_steward_log(f"🚚 [主盘流转] 正在原样运送: `{actual_video_name}` ➔ 天翼云端 (5244)")
+            await notify_steward_log(f"🚚 [主盘流转] 正在原样运送: `{actual_video_name}` ➔ {current_mount}")
         
         put_url = f"{OLIST_URL}/api/fs/put"
         headers = {
             "Authorization": OLIST_TOKEN,
             "File-Path": quote(target_full),
-            "Content-Length": str(target_total_bytes), # ⚠️ 动态发送伪造体积
+            "Content-Length": str(target_total_bytes), 
             "Content-Type": "application/octet-stream"
         }
 
@@ -1115,7 +1180,6 @@ async def main():
                         while True:
                             chunk = f_in.read(2 * 1024 * 1024)
                             if not chunk: 
-                                # 💡 如果开启洗码，读完真实文件后强行追加乱码尾巴
                                 if is_wash_file:
                                     yield junk_data
                                 break
@@ -1137,7 +1201,47 @@ async def main():
                     
                     break 
                 else:
-                    err_json = resp.json().get('message')
+                    err_json = resp.json().get('message', '')
+                    
+                    # 💡 [新增：全局熔断切换核心机制]
+                    if err_json and "UserDayFlowOverLimited" in str(err_json):
+                        await notify_steward_log(f"🚨 [额度熔断] 当前通道 ({current_mount}) 200G流量已耗尽！", level="WARNING")
+                        
+                        current_mount_index += 1
+                        
+                        if current_mount_index >= len(CLOUD_MOUNTS):
+                            await notify_steward_log(f"💀 [彻底断粮] 矩阵内所有 {len(CLOUD_MOUNTS)} 个通道今日额度全灭！进入强制休眠...", level="ERROR")
+                            try:
+                                with open(status_file, 'w') as f:
+                                    json.dump({"date": today_str, "index": current_mount_index}, f)
+                            except: pass
+                            break # 所有通道死绝，跳出循环放弃重试
+                            
+                        # 切轨：更新全局挂载点
+                        current_mount = CLOUD_MOUNTS[current_mount_index]
+                        await notify_steward_log(f"🚀 [主从倒换] 已无缝切换至下一个通道: {current_mount}，准备重新发车！", level="INFO")
+                        
+                        # 记录到本地小本本，造福后续排队的视频
+                        try:
+                            with open(status_file, 'w') as f:
+                                json.dump({"date": today_str, "index": current_mount_index}, f)
+                        except: pass
+                            
+                        # 重新计算针对新通道的云端路径
+                        if is_movie:
+                            target_dir = f"{current_mount}/{category}/{folder_name}"
+                        else:
+                            target_dir = f"{current_mount}/{category}/{folder_name}/Season {folder_season}"
+                            
+                        target_full = f"{target_dir}/{actual_video_name}".replace("//", "/")
+                        cas_target_full = f"{target_full}.cas"
+                        
+                        # 把 HTTP 请求头里的目标路径掉包
+                        headers["File-Path"] = quote(target_full)
+                        
+                        await asyncio.sleep(2)
+                        continue # 直接触发下一次 attempt 重新上传！
+                    
                     await notify_steward_log(f"⚠️ [天翼遭拒] `{actual_video_name}` 第 {attempt+1} 次失败: {err_json}", level="WARNING")
                     
             except Exception as e:
@@ -1198,7 +1302,6 @@ async def main():
 
                     # 2. 不在列表中则提交上传任务
                     if not already_queued:
-                        # 💡 [新增：139 洗码引擎]
                         if is_wash_file:
                             junk_data_139 = ''.join(random.choices(string.ascii_letters + string.digits, k=16)).encode('utf-8')
                             target_total_bytes_139 = total_bytes + len(junk_data_139)
@@ -1212,7 +1315,7 @@ async def main():
                         headers = {
                             "Authorization": OLIST_139_TOKEN, 
                             "File-Path": quote(m_target_full), 
-                            "Content-Length": str(target_total_bytes_139), # ⚠️ 动态发送伪造体积
+                            "Content-Length": str(target_total_bytes_139), 
                             "Content-Type": "application/octet-stream",
                             "As-Task": "true" 
                         }
@@ -1223,7 +1326,6 @@ async def main():
                                 while True:
                                     chunk = f_upload.read(chunk_size)
                                     if not chunk: 
-                                        # 💡 追加干扰码突变 MD5
                                         if is_wash_file:
                                             yield junk_data_139
                                         break
@@ -1268,11 +1370,8 @@ async def main():
                                 raise Exception("139云端上传任务执行超时！")
                             continue
                             
-                        # ==========================================
-                        # 🛡️ 防误判缓冲：给予139官方底层数据同步的时间
-                        # ==========================================
                         cas_exists = False
-                        for check_idx in range(4): # 最多查4次，每次等5秒，给足20秒缓冲
+                        for check_idx in range(4): 
                             try:
                                 async with httpx.AsyncClient(timeout=10.0) as h:
                                     fs_resp = await h.post(poll_fs_url, json={"path": poll_fs_path}, headers={"Authorization": OLIST_139_TOKEN, "Content-Type": "application/json"})
@@ -1299,7 +1398,6 @@ async def main():
                     # 4. 下载特征码并通知管家
                     os.makedirs(m_local_cas_dir, exist_ok=True)
                     
-                    # 💡 [修复] 将 TG 推送提前！传完瞬间立刻推送，绝不被拉取特征码卡脖子
                     success_msg_139 = f"<b>{video_name}</b><br>成功传至移动 139 备盘云端！"
                     asyncio.create_task(send_push_notification("✅ 139备盘入库成功", success_msg_139))
                     
@@ -1324,7 +1422,6 @@ async def main():
                     await notify_steward_log(f"⚠️ [139上传重试] `{video_name}` 报错: {str(e)[:100]}, 等待 {delay}s ({retry_count}/5)", level="WARNING")
                     
                     if retry_count >= 5:
-                        # 💡 [新增：139 上传彻底失败 TG 推送，镜像189逻辑]
                         err_msg_139 = f"<b>{video_name}</b><br>139备盘经过 5 次重试依旧崩溃！"
                         await notify_steward_log(f"❌ [139彻底挂起] {err_msg_139}", level="ERROR")
                         asyncio.create_task(send_push_notification("🚨 139备盘入库彻底失败", err_msg_139))
